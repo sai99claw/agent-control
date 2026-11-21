@@ -12760,6 +12760,28 @@ class GitRules(GitIsolatedCase):
         self.assertEqual(git(tmp, "status", "--porcelain"), "?? cache.pyc")
 
 
+class NotifyUnits(LoopCase):
+    def test_absent_notify_never_spawns(self):
+        from unittest import mock
+        from core.config import Config, pool_for
+        pool = pool_for(Config(self.proj)).init()
+        with mock.patch("core.osx.spawn") as spawn:
+            pool.report("decision", "5", "first\nsecond")
+        spawn.assert_not_called()
+
+    def test_notify_must_be_null_or_a_non_empty_string(self):
+        from core import osx
+        from core.config import Config
+        for bad in (5, "", ["x"]):
+            self.config(notify=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                Config(self.proj)
+            self.assertIn("devloop.notify", str(ctx.exception))
+        for good in (None, "true"):
+            self.config(notify=good)
+            Config(self.proj)
+
+
 class HardBlockOwnChange(LoopCase):
     def _issuer_for(self, from_main, own_file, own_text, patterns=None):
         import ticket_issuer

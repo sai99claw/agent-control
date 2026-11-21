@@ -62,6 +62,15 @@ regression and without a fix round. A move that touches anything else is merged 
 (#72, below) and the merged branch is verified again without a fix round; only a conflict or any
 other merge failure costs a fix round: auto_fixer merges main, then the regression runs again.
 
+`devloop.notify` (default `null`): a shell command started once, detached, for every new `decision`,
+`env` or `idle` page (not `created`, `landed` or `cancelled`), right after the page file is written.
+It runs in the project root with the variables `DEVLOOP_PAGE_KIND`, `DEVLOOP_PAGE_SUBJECT` (the
+ticket or other ref), `DEVLOOP_PAGE_TEXT` (the page's first line) and `DEVLOOP_PAGE` (absolute path
+of the page file) added to the environment. Nothing waits for it: its output is appended to
+`<worktrees>/runs/notify.log` and a failure is ignored. macOS notification:
+`"notify": "osascript -e 'display notification (system attribute \"DEVLOOP_PAGE_TEXT\") with title (system attribute \"DEVLOOP_PAGE_KIND\")'"`;
+phone push with ntfy.sh: `"notify": "curl -s -H \"Title: $DEVLOOP_PAGE_KIND $DEVLOOP_PAGE_SUBJECT\" -d \"$DEVLOOP_PAGE_TEXT\" ntfy.sh/my-topic"`.
+
 The controller follows main itself (#72): before a group's next regression, every integration
 branch whose group is not landed, cancelled or verified, has no job running and exists gets main
 merged in - moved straight to main when it has no commits of its own, otherwise a `--no-ff` merge

@@ -287,6 +287,10 @@ def doctor_rows(root):
     if not loop.get("release"):
         rows.append(("error", "devloop.release missing - actl run refuses to start without the "
                      "project's release command", "edit board/config.json"))
+    notify = loop.get("notify", None)
+    if notify is not None and not (isinstance(notify, str) and notify):
+        rows.append(("error", "devloop.notify must be null or a shell command (a non-empty "
+                     "string), not %r" % (notify,), "edit board/config.json"))
     hard_block = conf.get("hard_block") if isinstance(conf.get("hard_block"), dict) else {}
     if hard_block.get("dirs"):
         rows.append(("warning", "hard_block.dirs is not read by devloop - a directory inside the "

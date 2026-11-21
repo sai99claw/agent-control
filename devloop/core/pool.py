@@ -38,13 +38,14 @@ class PoolError(osx.OSFailure):
 
 
 class Pool:
-    def __init__(self, path, branch="main", remote="origin", tries=8):
+    def __init__(self, path, branch="main", remote="origin", tries=8, notify=None):
         self.path = os.path.abspath(path)
         self.branch = branch
         self.remote_name = remote
         self.tries = tries
         self.git = Git(self.path, timeout=120)
         self._remote = None
+        self.notify = notify  # (shell command, cwd, log path) or None
 
     # ------------------------------------------------------------ setup
 
@@ -193,7 +194,20 @@ class Pool:
             row.update(extra)
             tx.write("inbox/%s.json" % name, row)
         self.update(change, "inbox: %s %s" % (kind, ref))
+        if self.notify and kind in ("decision", "env", "idle"):
+            self._notify(kind, ref, text, names[0])
         return names[0]
+
+    def _notify(self, kind, ref, text, name):
+        command, cwd, log_path = self.notify
+        try:
+            osx.makedirs(os.path.dirname(log_path))
+            env = dict(os.environ, DEVLOOP_PAGE_KIND=str(kind), DEVLOOP_PAGE_SUBJECT=str(ref),
+                       DEVLOOP_PAGE_TEXT=str(text).split("\n", 1)[0],
+                       DEVLOOP_PAGE=os.path.join(self.path, "inbox", name + ".json"))
+            osx.spawn(["sh", "-c", command], cwd=cwd, env=env, log_path=log_path)
+        except (osx.OSFailure, OSError):
+            pass
 
 
 class Tx:

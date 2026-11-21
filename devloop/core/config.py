@@ -53,6 +53,7 @@ DEFAULTS = {
     "poll_seconds": 10,
     "release": None,                 # required: shell command run at the landed sha
     "release_timeout_seconds": 3600, # time limit of the release command at landing
+    "notify": None,                  # shell command run (detached) for every new decision, env or idle page
     "worktree_setup": None,          # D-091 item 10: shell command run in every new worktree devloop
                                      # makes (cwd = the worktree, AC_ROOT = the project); null = nothing
     "base_tests": None,              # D-073 ①: ids of the ~1 minute base set; default tests.unittest.base
@@ -105,6 +106,10 @@ class Config:
         if setup is not None and not (isinstance(setup, str) and setup):
             raise osx.OSFailure("board/config.json devloop.worktree_setup must be null or a shell "
                                 "command (a non-empty string), not %r" % (setup,))
+        notify = self.values.get("notify")
+        if notify is not None and not (isinstance(notify, str) and notify):
+            raise osx.OSFailure("board/config.json devloop.notify must be null or a shell "
+                                "command (a non-empty string), not %r" % (notify,))
         prices = self.values.get("prices")
         if prices is not None:
             if not isinstance(prices, dict):
@@ -237,4 +242,7 @@ def project_root():
 
 def pool_for(cfg):
     from .pool import Pool
-    return Pool(cfg.pool_path, branch=cfg.pool_branch, remote=cfg.pool_remote)
+    notify = cfg.values.get("notify")
+    return Pool(cfg.pool_path, branch=cfg.pool_branch, remote=cfg.pool_remote,
+                notify=(notify, cfg.root, os.path.join(cfg.worktree_root, "runs", "notify.log"))
+                if notify else None)
