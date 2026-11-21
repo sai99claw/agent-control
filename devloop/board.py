@@ -2223,6 +2223,8 @@ def act_problem(action, subject, page, text, option=""):
         return "%s is for a group g<N>" % action
     if action == "ack" and not page:
         return "ack needs a page"
+    if action == "ack" and text:
+        return "知道了 does not take words: use 照我的話改 or 帶著我的話重驗 to send them"
     if action == "revise" and not text:
         return "write how the ticket should change"
     return None
