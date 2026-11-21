@@ -11385,7 +11385,7 @@ class T57Acceptance(LoopCase):
         self.assertEqual(snap.inbox["pg2"].get("acked_by"), self.by)
 
     def check_ack(self):
-        self.press("3", "p3", "ack", "ignored text")
+        self.press("3", "p3", "ack")
         snap = self.wait_for(lambda s: s.inbox["p3"].get("acked"), "p3 acked")
         self.assertEqual(snap.inbox["p3"].get("acked_by"), self.by)
         ev = [e for e in self.events(snap.ticket("3"), "page acknowledged") if e.get("page") == "p3"]
