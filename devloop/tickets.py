@@ -307,7 +307,7 @@ def cmd_release(pool, cfg, args):
         print("group %s released" % gid)
         return 0
     pool.report("decision", gid, "group %s (%s): the re-run release failed - not retried, not "
-                "rolled back (release log: %s):\n%s" % (gid, sha[:12], rel_log, text),
+                "rolled back (release log: %s):\n%s" % (gid, sha[:12], rel_log, release.failure_text(rel_log, text)),
                 **pages.ask(
                     "%s is in %s (%s) but its release failed: leave it for now, or run the release again?" % (
                         gid, cfg.main_branch, sha[:12]),

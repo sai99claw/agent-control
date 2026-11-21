@@ -17592,6 +17592,69 @@ class ReleaseKeptOutput(unittest.TestCase):
         self.assertEqual(env["DEVLOOP_RELEASE_DIR"], "/x/runs/release/g1")
 
 
+class LogtailUnits(unittest.TestCase):
+    """core.logtail: lines / tail / stage, and the board aliases on top of them."""
+
+    def log(self, text):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "x.log")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def test_missing_and_none_paths(self):
+        from core import logtail
+        for path in (None, "", "/nonexistent/none.log"):
+            self.assertIsNone(logtail.lines(path))
+            self.assertEqual(logtail.tail(path, 5), "")
+            self.assertIsNone(logtail.stage(path))
+
+    def test_empty_and_short_log(self):
+        from core import logtail
+        self.assertEqual(logtail.tail(self.log(""), 3), "")
+        self.assertIsNone(logtail.stage(self.log("")))
+        path = self.log("a\nb\nc\n")
+        self.assertEqual(logtail.tail(path, 2), "b\nc")
+        self.assertEqual(logtail.tail(path, 10), "a\nb\nc")
+
+    def test_stage_is_the_last_marked_line(self):
+        from core import logtail
+        mark = "devloop-" + "stage:"
+        path = self.log("%s build\nx\n  %s no\n%s  upload \ny\n" % (mark, mark, mark))
+        self.assertEqual(logtail.stage(path), "upload")
+
+    def test_big_log_reads_only_the_end(self):
+        from core import logtail
+        body = "".join("line%07d\n" % i for i in range(150000))
+        self.assertGreater(len(body), 1 << 20)
+        path = self.log(body)
+        got = logtail.lines(path)
+        self.assertLess(len(got), 150000)
+        self.assertEqual(got[-1], "line0149999")
+        self.assertTrue(got[0].startswith("line"))
+        self.assertEqual(len(got[0]), 11)           # the cut first line is dropped
+        self.assertEqual(logtail.tail(path, 2), "line0149998\nline0149999")
+
+    def test_board_aliases(self):
+        import board
+        mark = "devloop-" + "stage:"
+        path = self.log("".join("r%d\n" % i for i in range(30)) + mark + " go\n")
+        self.assertEqual(board.live_log_lines(path)[-1], mark + " go")
+        self.assertEqual(board.live_tail(path).split("\n")[0], "r11")
+        self.assertEqual(len(board.live_tail(path).split("\n")), 20)
+        self.assertEqual(board.live_release_step(path), "go")
+        self.assertEqual(board.live_tail(None), "")
+
+    def test_failure_text_block(self):
+        from core import release
+        path = self.log("".join("L%02d\n" % i for i in range(1, 31)))
+        out = release.failure_text(path, "rc 3\nmore")
+        lines = out.split("\n")
+        self.assertEqual(lines[:3], ["rc 3", "last step: (none printed)", "last 15 lines of the release log:"])
+        self.assertEqual(lines[3:], ["L%02d" % i for i in range(16, 31)])
+
+
 class LiveRecordUnits(unittest.TestCase):
     """The pieces behind the regression and release live records."""
 

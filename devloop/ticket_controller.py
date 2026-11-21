@@ -604,7 +604,7 @@ class Controller:
         else:
             self.pool.report("decision", gid, "group %s is in %s (%s) but the release failed - "
                              "not retried, not rolled back (release log: %s):\n%s" % (
-                                 gid, main, sha[:12], rel_log, rel_text), **release_ask(gid, main, sha[:12]))
+                                 gid, main, sha[:12], rel_log, release.failure_text(rel_log, rel_text)), **release_ask(gid, main, sha[:12]))
 
     def main_moved_files(self, sha, main_sha):
         """Files main changed since it parted from the verified sha, or None if git cannot say."""
