@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a ticket moves code wholesale, give the mapping and mechanical checks in the ticket (a listing diff, a byte-identical comparison of each moved unit, a lost-lines count) and tell the reviewer to run them rather than read the moved bodies; the checks prove more for a fraction of the tokens.",
+  "source": "request (opener)",
+  "at": "2026-11-21T01:57:56Z"
+}
