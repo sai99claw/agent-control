@@ -319,3 +319,18 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 - 使用者給一篇 Claude Code 團隊談驗證的文章,主線直接寫進記憶:verifier 三條(端對端優先、性質測試、不靠 sleep)、
   worker / fixer 各一條(flaky 不能跳過、加 sleep 或重試)、reviewer 兩條(問題分級含既有問題、後一輪從前一輪接著看)、
   consolidator 兩條(什麼值得記、每次整理都要刪)、project 一條(判定改動的設定從專案根讀,不從被測分支讀)。
+
+## 2026-11-20〜21 票庫重建、T 的 13 項、拆大測試檔
+
+- 新容器沒有舊的 A 票庫(#1–#86 遺失)。重建 `pools/agent-control`,`dag.json` 設 `first_ticket_id: 100`(f50b578 讓
+  `next_ticket_id` 讀這個下限),票庫推到 A 遠端的 `pool/agent-control` 分支(`devloop.pool_branch`),容器再重建也不會丟。
+- T 的 13 項:多數已做過;要做的開成 g1(#100–#106,約 13.7 美元,main = 261eb16):合併衝突與改票作廢測試的輪不算輪(上限 2 倍)、
+  `devloop.notify`(decision / env / idle 頁跑使用者指定的指令)、認得 `usage_limit_reached`、開題者撞額度只試一次並直說、
+  依賴已落地時組要先含最新 main 才能加入、「知道了」框裡有字就擋、發版失敗頁寫停在哪一步並附 log 最後 15 行。
+- 使用者問「很多票往同一個測試檔尾巴加測試對嗎」,說「直接改」:verifier 記憶加三條(測試放功能自己的檔或新檔、共用設定放
+  helper 模組;每個 case 獨立;每個 case 要快),creator 一條(測試計畫不寫「加到某檔尾巴」)。
+- 「A 的大測試檔也開票拆掉」:#107(g2,單獨驗)把 19,446 行的 `test_devloop.py` 拆成 17 個 `test_<領域>.py`,共用的放
+  `loop_harness.py`。實測:拆前拆後 989 個 class.method 完全相同。regression 期間 auto_fixer 另修了一個真 bug(0b5330f):
+  平行的 `git worktree add/prune` 互相破壞,現在用 flock 串起來。main = 5e3d09b。
+- 雲端發版照舊卡在推 tag 403,g1、g2 的頁都已 ack。
+- 未定:UserPromptSubmit hook(答覆自動回到對話裡);驗證文章衍生的票(觀察模式閘門、覆核者評估、依 diff 觸發的清單)。
