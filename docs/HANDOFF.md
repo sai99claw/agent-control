@@ -332,5 +332,6 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 - 「A 的大測試檔也開票拆掉」:#107(g2,單獨驗)把 19,446 行的 `test_devloop.py` 拆成 17 個 `test_<領域>.py`,共用的放
   `loop_harness.py`。實測:拆前拆後 989 個 class.method 完全相同。regression 期間 auto_fixer 另修了一個真 bug(0b5330f):
   平行的 `git worktree add/prune` 互相破壞,現在用 flock 串起來。main = 5e3d09b。
+  實測:17 個檔各自單獨跑都 OK,共約 13 分鐘;最慢 test_live 158s、test_regression_fixer 109s、test_machine 106s。
 - 雲端發版照舊卡在推 tag 403,g1、g2 的頁都已 ack。
 - 未定:UserPromptSubmit hook(答覆自動回到對話裡);驗證文章衍生的票(觀察模式閘門、覆核者評估、依 diff 觸發的清單)。
