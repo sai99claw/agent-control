@@ -52,5 +52,24 @@
   "last_regression": "1 failing:\n- test_groups.GroupSizeUnits.test_loop_with_cap_2_keeps_every_group_at_two AssertionError ",
   "fix_report": "/home/user/agent-control-devloop/runs/regression/g2/result-1795228240.json",
   "fix_agent_round": 1,
-  "fix_start_sha": "29e346fbe04426c08663a2218ab4c987db8ae36c"
+  "fix_start_sha": "29e346fbe04426c08663a2218ab4c987db8ae36c",
+  "cost": [
+    {
+      "role": "fixer",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": null,
+      "seconds": 2985.6,
+      "at": "2026-11-21T03:25:55Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/fix/g2/r1",
+      "input_tokens": 128,
+      "output_tokens": 36264,
+      "cache_read_tokens": 5975601,
+      "cache_write_tokens": 104179,
+      "usd": 2.7543441999999994,
+      "session_id": "254416e1-b74c-4c1f-b485-a8c8a9046bdd"
+    }
+  ]
 }
