@@ -14,16 +14,7 @@
     "106"
   ],
   "fix_round": 1,
-  "job": {
-    "kind": "regression",
-    "stamp": {
-      "pid": 30655,
-      "host": "vm",
-      "boot": "1b727631-675c-43fe-989d-a56c8e17cec9",
-      "started": "2026-11-21T02:12:33Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g1/result-1795227153.json"
-  },
+  "job": null,
   "created": "2026-11-21T01:41:41Z",
   "history": [
     {
@@ -65,10 +56,14 @@
     {
       "at": "2026-11-21T02:12:33Z",
       "event": "regression started"
+    },
+    {
+      "at": "2026-11-21T02:25:22Z",
+      "event": "regression green"
     }
   ],
   "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b",
-  "last_regression": "2 failing:\n- test_devloop.T57Acceptance.test_item4_key_ack AssertionError \n- test_devloop.T57Acceptance.test_item4_trusted_ack AssertionError ",
+  "last_regression": "green",
   "fix_report": "/home/user/agent-control-devloop/runs/regression/g1/result-1795226253.json",
   "fix_agent_round": 1,
   "fix_start_sha": "5b6a3f01f228ced195bb8ae1297ddbd0c080f118",
