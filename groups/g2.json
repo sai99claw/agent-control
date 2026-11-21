@@ -2,7 +2,7 @@
   "id": "g2",
   "branch": "int/g2",
   "base": "261eb162bd567621d600b7211148a39f460bd8b9",
-  "state": "open",
+  "state": "pr",
   "alone": true,
   "members": [
     "107"
@@ -14,6 +14,10 @@
     {
       "at": "2026-11-21T02:25:37Z",
       "event": "opened from main 261eb162bd56"
+    },
+    {
+      "at": "2026-11-21T02:30:27Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ]
 }
