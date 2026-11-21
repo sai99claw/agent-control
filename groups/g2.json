@@ -62,6 +62,12 @@
     {
       "at": "2026-11-21T03:31:07Z",
       "event": "landed (release failed)"
+    },
+    {
+      "at": "2026-11-21T03:31:22Z",
+      "event": "page acknowledged",
+      "page": "20261121T033108Z-decision-g2",
+      "by": "main-session"
     }
   ],
   "last_regression": "green",
