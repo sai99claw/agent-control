@@ -40,6 +40,11 @@
       "at": "2026-11-21T19:06:10Z",
       "event": "dispatched",
       "target": "int/g3"
+    },
+    {
+      "at": "2026-11-21T19:06:12Z",
+      "event": "issuer started",
+      "target": "int/g3"
     }
   ],
   "cost": [
@@ -67,6 +72,11 @@
   ],
   "group": "g3",
   "target": "int/g3",
-  "run": null,
+  "run": {
+    "pid": 2933,
+    "host": "vm",
+    "boot": "a22658bd-dca2-4f49-a981-a148c352d3e7",
+    "started": "2026-11-21T19:06:12Z"
+  },
   "claimed_at": "2026-11-21T19:06:10Z"
 }
