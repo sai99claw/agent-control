@@ -72,6 +72,12 @@
     {
       "at": "2026-11-21T02:25:32Z",
       "event": "landed (release failed)"
+    },
+    {
+      "at": "2026-11-21T02:25:52Z",
+      "event": "page acknowledged",
+      "page": "20261121T022534Z-decision-g1",
+      "by": "main-session"
     }
   ],
   "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b",
