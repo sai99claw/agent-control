@@ -34,6 +34,7 @@ import glob
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -290,6 +291,22 @@ def _open_tickets(cfg, pool, request, via, by):
         hand = agents.run(cfg, "creator", prompt, cfg.root, run_dir, cfg.agent_timeout_seconds)
         if hand.cost:
             rows.append(hand.cost)
+        if (hand.cost or {}).get("outcome") == "out of quota":
+            seen, at = agents._log_tail(hand.log)
+            reset = agents.quota_reset(seen, at)
+            if reset is not None:
+                when = ("the limit resets at %s: send the request again after that time with "
+                        "`actl new --request`" % time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(reset)))
+            else:
+                when = ("the reset time could not be read from the message: send the request again "
+                        "once the limit has reset, with `actl new --request`")
+            text = "the opener is out of quota; nothing was opened:\n%s\n%s" % (agents._excerpt(seen), when)
+            pool.report("decision", "request", text, request=request[:2000], cost=rows, **pages.ask(
+                "the opener is out of quota: send the request again after the limit resets?",
+                [pages.option("ack", "nothing was opened; send the request again with `actl new --request` after the limit resets")],
+                "the opener ran once and was out of quota; the text above says when it resets"))
+            print(text)
+            return 1
         memory.collect(pool, hand, "request (opener)")
         if hand.problem():
             errors = [hand.problem()]

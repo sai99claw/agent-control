@@ -6364,6 +6364,28 @@ class AgentChains(LoopCase):
             agents.with_effort(["claude"], "huge")
 
 
+class OpenerOtherFailureRetries(LoopCase):
+    def test_a_non_quota_failure_still_gets_the_second_attempt(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.plan(creator={"*": ["nothing"]})
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 2)
+        self.assertNotIn("out of quota", res.stdout)
+
+    def test_quota_stops_after_one_attempt(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.plan(creator={"*": ["quota"]})
+        self.env["FAKE_QUOTA_TEXT"] = "Claude AI usage limit reached|1900000000"
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+        for want in ("out of quota", "Claude AI usage limit reached|1900000000", "2030-03-17T17:46:40Z"):
+            self.assertIn(want, res.stdout)
+
+
 class T31Acceptance(LoopCase):
     """#31: a quota hit at the end of the command chain makes the issuer wait for the reset.
     Expected values come from the ticket's acceptance items, not from the code."""
