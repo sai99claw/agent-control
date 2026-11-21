@@ -14,7 +14,16 @@
     "106"
   ],
   "fix_round": 1,
-  "job": null,
+  "job": {
+    "kind": "fixer",
+    "stamp": {
+      "pid": 24686,
+      "host": "vm",
+      "boot": "1b727631-675c-43fe-989d-a56c8e17cec9",
+      "started": "2026-11-21T02:10:34Z"
+    },
+    "out": "/home/user/agent-control-devloop/runs/regression/g1/result-1795226253.json"
+  },
   "created": "2026-11-21T01:41:41Z",
   "history": [
     {
@@ -40,6 +49,10 @@
     {
       "at": "2026-11-21T02:10:33Z",
       "event": "fix round 1"
+    },
+    {
+      "at": "2026-11-21T02:10:34Z",
+      "event": "fixer started"
     }
   ],
   "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b",
