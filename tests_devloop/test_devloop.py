@@ -9574,6 +9574,89 @@ class GroupSizeUnits(LoopCase):
         self.assertEqual(sum(len(g["members"]) for g in groups.values()), 8)
 
 
+class T104Acceptance(LoopCase):
+    """#104 acceptance 4-5: a ready ticket with a landed dependency does not join an open group
+    whose branch lacks main. Helpers copied from FollowMainUnits (not subclassed)."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def commit_on(self, branch, files):
+        if branch == "main":
+            for rel, text in files.items():
+                with open(os.path.join(self.proj, rel), "w") as fh:
+                    fh.write(text)
+            git(self.proj, "add", "--", *files)
+            git(self.proj, "commit", "-q", "-m", "m")
+            return git(self.proj, "rev-parse", "HEAD")
+        tree = os.path.join(self.tmp, "side")
+        git(self.proj, "worktree", "add", "-q", "--detach", tree, branch)
+        for rel, text in files.items():
+            with open(os.path.join(tree, rel), "w") as fh:
+                fh.write(text)
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", "c")
+        sha = git(tree, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", tree)
+        git(self.proj, "update-ref", "refs/heads/" + branch, sha)
+        return sha
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.started = []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        return c
+
+    def layout(self, third_state):
+        self.add(1, state="landed")
+        self.add(2, deps=[1])
+        self.add(3, state=third_state, group="g1", target="int/g1")
+        git(self.proj, "branch", "int/g1", "main")
+        g = {"id": "g1", "branch": "int/g1", "state": "open", "alone": False, "members": ["3"],
+             "fix_round": 0, "job": None}
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
+        self.commit_on("int/g1", {"shared.txt": "group\n"})
+        self.commit_on("main", {"shared.txt": "main\n"})
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        return c
+
+    def test_landed_dep_does_not_join_a_group_lacking_main(self):
+        """Item 4."""
+        c = self.layout("running")
+        snap = self.snap()
+        g1 = snap.groups["g1"]
+        # the layout is the one the ticket describes: main's merge conflicted, g1 still open
+        self.assertEqual(g1["state"], "open")
+        self.assertTrue(g1.get("main_tried"), g1)
+        self.assertFalse(c.repo.is_ancestor("main", "refs/heads/int/g1"))
+        self.assertIs(c.joinable(snap, "2", g1), False)
+
+    def test_group_for_picks_no_group_lacking_main(self):
+        """Item 4 (group_for half): joins none, opens none."""
+        c = self.layout("running")
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["state"], "open")
+        self.assertFalse(c.repo.is_ancestor("main", "refs/heads/int/g1"))
+        self.assertIsNone(c.group_for(snap, "2"))
+        self.assertEqual(sorted(self.snap().groups), ["g1"])
+
+    def test_merged_member_lets_the_group_move_to_pr(self):
+        """Item 5."""
+        c = self.layout("merged")
+        self.assertEqual(self.snap().groups["g1"]["state"], "pr")
+
+
 class NoReverifyPaths(LoopCase):
     """#29 / D-090: main moved only in devloop.no_reverify_paths -> the controller merges it in."""
 
