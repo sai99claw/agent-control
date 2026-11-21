@@ -9873,6 +9873,96 @@ class FollowMainUnits(LoopCase):
         self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
 
 
+class MainAncestorJoinUnits(LoopCase):
+    """#104: a ticket with a landed dependency joins only a group whose branch has main."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def commit_on(self, branch, files):
+        if branch == "main":                 # main is checked out in the project; keep its config edits
+            for rel, text in files.items():
+                with open(os.path.join(self.proj, rel), "w") as fh:
+                    fh.write(text)
+            git(self.proj, "add", "--", *files)
+            git(self.proj, "commit", "-q", "-m", "m")
+            return git(self.proj, "rev-parse", "HEAD")
+        tree = os.path.join(self.tmp, "side")
+        git(self.proj, "worktree", "add", "-q", "--detach", tree, branch)
+        for rel, text in files.items():
+            with open(os.path.join(tree, rel), "w") as fh:
+                fh.write(text)
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", "c")
+        sha = git(tree, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", tree)
+        git(self.proj, "update-ref", "refs/heads/" + branch, sha)
+        return sha
+
+    def group(self, gid="g1", branch=True, **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": "open", "alone": False, "members": ["1"],
+             "fix_round": 0, "job": None}
+        g.update(fields)
+        if branch:
+            git(self.proj, "branch", "int/" + gid, "main")
+
+        def change(tx):
+            tx.put_group(g)
+        self.pool.update(change, "test: group %s" % gid)
+
+    def ctl(self, forever=False):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = forever
+        c.started = []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        return c
+
+    def build(self, main_files):
+        self.add(1, state="landed")
+        self.add(2, deps=[1])
+        self.add(3, state="running", group="g1", target="int/g1")
+        self.group("g1", members=["3"])
+        self.commit_on("int/g1", {"shared.txt": "group\n"})
+        self.commit_on("main", main_files)
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        return c
+
+    def test_main_not_ancestor_waits(self):
+        c = self.build({"shared.txt": "main\n"})
+        snap = self.snap()
+        self.assertFalse(c.has_main(snap.groups["g1"]))
+        self.assertFalse(c.joinable(snap, "2", snap.groups["g1"]))
+        self.assertIsNone(c.group_for(snap, "2"))
+
+    def test_member_and_no_landed_dep_make_no_git_call(self):
+        c = self.build({"shared.txt": "main\n"})
+        snap = self.snap()
+        calls = []
+        c.repo.is_ancestor = lambda *a: calls.append(a) or False
+        self.assertTrue(c.joinable(snap, "3", snap.groups["g1"]))
+        self.add(4)
+        snap = self.snap()
+        self.assertTrue(c.joinable(snap, "4", snap.groups["g1"]))
+        self.assertEqual(calls, [])
+
+    def test_clean_merge_joins(self):
+        c = self.build({"NOTES.md": "n\n"})
+        snap = self.snap()
+        self.assertTrue(c.has_main(snap.groups["g1"]))
+        self.assertTrue(c.joinable(snap, "2", snap.groups["g1"]))
+        self.assertEqual(c.group_for(snap, "2"), "g1")
+
+
 class NoReverifyRule(unittest.TestCase):
     def test_path_rule(self):
         import ticket_controller as tc
