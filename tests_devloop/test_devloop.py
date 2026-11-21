@@ -9068,6 +9068,61 @@ class QuotaResetCodexUnits(unittest.TestCase):
         self.assertEqual(agents.quota_reset("try again in 3d", self.AT), self.AT + 3 * 86400)
 
 
+class UnderscoredQuotaUnits(LoopCase):
+    """#102: usage_limit_reached and rate_limit_error read as out of quota; the excerpt keeps the CLI's words."""
+
+    USAGE = 'API Error: 429 {"type":"error","error":{"type":"usage_limit_reached","message":"x"}}'
+    RATE = '{"type":"error","error":{"type":"rate_limit_error","message":"x"}}'
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def logged(self, text):
+        path = os.path.join(self.tmp, "x.log")
+        with open(path, "w") as fh:
+            fh.write("noise\n" + text + "\nbye\n")
+        return path
+
+    def test_underscored_signs_say_quota(self):
+        from core import agents
+        self.assertTrue(agents._says_quota(self.logged(self.USAGE)))
+        self.assertTrue(agents._says_quota(self.logged(self.RATE)))
+
+    def test_excerpt_keeps_the_line_as_written(self):
+        from core import agents
+        self.assertEqual(agents._excerpt("noise\nAPI Error: 429 usage_limit_reached\nbye\n"),
+                         "API Error: 429 usage_limit_reached")
+        self.assertEqual(agents._excerpt('noise\n{"type":"rate_limit_error"}\nbye\n'),
+                         '{"type":"rate_limit_error"}')
+
+    def test_a_bare_429_is_not_quota(self):
+        from core import agents
+        self.assertFalse(agents._says_quota(self.logged("HTTP 429")))
+        self.assertFalse(agents._says_quota(self.logged("status 429, retrying")))
+
+    def test_a_run_printing_the_line_is_out_of_quota(self):
+        from core import agents
+        from core.config import Config
+        said = os.path.join(self.tmp, "said.txt")
+        with open(said, "w") as fh:
+            fh.write(self.USAGE + "\n")
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        argv = ["sh", "-c", "cat >/dev/null; cat %s; exit 1" % said]
+        self.config(agents=dict(agents_cfg, worker=argv))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj,
+                            os.path.join(self.tmp, "run"), 30).finish()
+        self.assertEqual(hand.cost["outcome"], "out of quota")
+
+
 class T73Acceptance(LoopCase):
     """#73: a fix round in which no fixer agent ran costs no round and no regression; the group is
     paused with one page and the rerun starts the fixer again. Expected values come from the
