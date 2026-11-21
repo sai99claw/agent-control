@@ -9,7 +9,16 @@
     "109"
   ],
   "fix_round": 1,
-  "job": null,
+  "job": {
+    "kind": "fixer",
+    "stamp": {
+      "pid": 19933,
+      "host": "vm",
+      "boot": "a22658bd-dca2-4f49-a981-a148c352d3e7",
+      "started": "2026-11-21T19:22:40Z"
+    },
+    "out": "/home/user/agent-control-devloop/runs/regression/g3/result-1795288619.json"
+  },
   "created": "2026-11-21T19:06:08Z",
   "history": [
     {
@@ -31,6 +40,10 @@
     {
       "at": "2026-11-21T19:22:39Z",
       "event": "fix round 1"
+    },
+    {
+      "at": "2026-11-21T19:22:41Z",
+      "event": "fixer started"
     }
   ],
   "last_regression": "1 failing:\n- test_regression_fixer.QuickStageUnits.test_undeclared_quick_leaves_the_regression_as_before AssertionError ",
