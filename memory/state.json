@@ -1,13 +1,5 @@
 {
-  "job": {
-    "path": "memory/project.md",
-    "stamp": {
-      "pid": 361,
-      "host": "vm",
-      "boot": "1b727631-675c-43fe-989d-a56c8e17cec9",
-      "started": "2026-11-21T01:50:15Z"
-    }
-  },
+  "job": null,
   "last": {
     "memory/project.md": "2026-11-21T01:50:47Z"
   },
