@@ -11,7 +11,9 @@ ticket_controller.py (no LLM, the only driver)
   starts ticket_issuer.py --id N --target int/<group> (parallelism decided here)
 ticket_issuer.py
   worker + verifier -> (reviewer) -> verifier's cases -> worker's branch merged into int/<group>
-  failing step = feedback for the next round (max 3 rounds, 3 hours)
+  failing step = feedback for the next round (max 3 rounds, 3 hours; a round that ended on a
+  merge conflict with the group or on a revision that threw out the cases does not count, at most
+  2 x max_rounds rounds in all)
   worker thinks the ticket is wrong -> it runs ticket_creator.py --revise itself
 group complete (= one PR, a local mark) -> regression.py (preflight + full suite)
   red -> auto_fixer.py on the integration branch (max 3 rounds) -> regression again

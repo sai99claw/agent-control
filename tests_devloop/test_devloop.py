@@ -3227,6 +3227,59 @@ class ApplyUnapplied(LoopCase):
         self.assertEqual(ev[0]["run"], name)
 
 
+class FreeRounds(LoopCase):
+    """Rounds that ended on a merge conflict with the group or a cases_wrong revision are free."""
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+
+    def run_one(self, **plan):
+        self.add(1, **plan.pop("extra", {}))
+        self.plan(**plan)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap().ticket("1")
+
+    @staticmethod
+    def of(t, name):
+        return [h for h in t["history"] if h["event"] == name]
+
+    def test_a_red_of_the_cases_is_not_free_and_round_starts_carry_their_number(self):
+        t = self.run_one(worker={"1": ["wrong", "ok"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+        self.assertEqual([h.get("round") for h in self.of(t, "round start")], [1, 2])
+        fed = self.of(t, "feedback")
+        self.assertEqual(len(fed), 1)
+        self.assertNotIn("free", fed[0])
+
+    def test_a_review_failure_is_not_free(self):
+        t = self.run_one(extra={"complexity": "complex"}, reviewer={"1": ["fail", "pass"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+        self.assertNotIn("free", self.of(t, "feedback")[0])
+
+    def test_only_free_rounds_stop_at_twice_max_rounds(self):
+        self.config(max_rounds=1)
+        t = self.run_one(worker={"1": ["revise"]}, creator={"1": ["revised"]})
+        self.assertEqual((t["state"], t["stuck"]["reason"], t["round"]), ("stuck", "rounds", 2))
+        self.assertEqual([h.get("free") for h in self.of(t, "feedback")], ["revision", "revision"])
+        self.assertIn("2 rounds used and still not passing (0 real red, 2 free: 0 merge conflict, "
+                      "2 revision); last feedback:\nround 2: the ticket was revised", t["stuck"]["text"])
+
+    def test_the_rounds_text_splits_real_and_free(self):
+        import ticket_issuer
+        t = {"round": 4, "feedback": ["round 3: x", "round 4: last"],
+             "history": [{"event": "round start", "round": 1},
+                         {"event": "feedback", "round": 1, "free": "merge"},
+                         {"event": "feedback", "round": 2},
+                         {"event": "feedback", "round": 3, "free": "revision"},
+                         {"event": "feedback", "round": 4, "free": "merge"}]}
+        self.assertEqual(ticket_issuer.rounds_text(t),
+                         "4 rounds used and still not passing (1 real red, 3 free: 2 merge "
+                         "conflict, 1 revision); last feedback:\nround 4: last")
+
+
 class T11Acceptance(LoopCase):
     """Ticket #11: a revision the opener finished reaches the pool even when the worker is stopped."""
 
