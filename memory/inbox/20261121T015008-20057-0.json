@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "Inbox pages written within the same second share 'at', so sorting by 'at' does not find the newest page; snapshot the inbox keys before the action and take the keys that are new.",
-  "source": "#106 r1 verifier",
-  "at": "2026-11-21T01:50:08Z"
-}

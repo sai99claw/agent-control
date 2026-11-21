@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "In agent-control the unittest roots are tests/ and tests_devloop/, so run_tests.py ids carry no package prefix: test_devloop.T<id>Acceptance, not tests_devloop.test_devloop...; the prefixed form errors as ImportError.",
-  "source": "#101 r1 verifier",
-  "at": "2026-11-21T01:44:08Z"
-}

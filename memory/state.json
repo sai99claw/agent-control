@@ -7,5 +7,35 @@
       "boot": "1b727631-675c-43fe-989d-a56c8e17cec9",
       "started": "2026-11-21T01:50:15Z"
     }
-  }
+  },
+  "last": {
+    "memory/project.md": "2026-11-21T01:50:47Z"
+  },
+  "runs": [
+    {
+      "path": "memory/project.md",
+      "at": "2026-11-21T01:50:47Z",
+      "ok": true,
+      "lessons": 5,
+      "cost": [
+        {
+          "role": "consolidator",
+          "model": "fable",
+          "effort": "medium",
+          "command": "claude",
+          "round": null,
+          "seconds": 25.1,
+          "at": "2026-11-21T01:50:45Z",
+          "outcome": "memory",
+          "run_dir": "/home/user/agent-control-devloop/runs/memory/project-project-2026-11-21T015019Z",
+          "input_tokens": 4,
+          "output_tokens": 2848,
+          "cache_read_tokens": 46351,
+          "cache_write_tokens": 49013,
+          "usd": 0.9074302000000001,
+          "session_id": "7783a775-a61f-4bb8-a77b-888d3be531c5"
+        }
+      ]
+    }
+  ]
 }

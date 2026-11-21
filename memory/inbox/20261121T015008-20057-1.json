@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "run_tests.py takes ids relative to tests_devloop (e.g. test_devloop.T106Acceptance), not tests_devloop.test_devloop.*.",
-  "source": "#106 r1 verifier",
-  "at": "2026-11-21T01:50:08Z"
-}
