@@ -2,7 +2,7 @@
   "id": "g1",
   "branch": "int/g1",
   "base": "f50b5782e57a34ed2c86915ccaed050855dae074",
-  "state": "pr",
+  "state": "fixing",
   "alone": false,
   "members": [
     "100",
@@ -13,7 +13,7 @@
     "105",
     "106"
   ],
-  "fix_round": 0,
+  "fix_round": 1,
   "job": null,
   "created": "2026-11-21T01:41:41Z",
   "history": [
@@ -36,8 +36,13 @@
     {
       "at": "2026-11-21T02:10:31Z",
       "event": "regression red"
+    },
+    {
+      "at": "2026-11-21T02:10:33Z",
+      "event": "fix round 1"
     }
   ],
   "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b",
-  "last_regression": "2 failing:\n- test_devloop.T57Acceptance.test_item4_key_ack AssertionError \n- test_devloop.T57Acceptance.test_item4_trusted_ack AssertionError "
+  "last_regression": "2 failing:\n- test_devloop.T57Acceptance.test_item4_key_ack AssertionError \n- test_devloop.T57Acceptance.test_item4_trusted_ack AssertionError ",
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g1/result-1795226253.json"
 }
