@@ -48,7 +48,7 @@ Run them from the project (or set `AC_ROOT` to it).
 ## Project settings (`board/config.json`, key `devloop`)
 
 `release` is required (every project ships a release script; the controller only calls it, with
-`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS`, `DEVLOOP_RELEASE_DIR` set; it runs in a throwaway checkout that is removed afterwards, so anything it produces goes to `$DEVLOOP_RELEASE_DIR` = `<worktrees>/runs/release/<group>/`, which devloop never empties; its whole output is kept in `<worktrees>/runs/release/<group>.log`, named on the group as `release_log` and in the page) and is stopped after `release_timeout_seconds` (default 3600). Everything else has a default:
+`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS`, `DEVLOOP_RELEASE_DIR` set; it runs in a throwaway checkout that is removed afterwards, so anything it produces goes to `$DEVLOOP_RELEASE_DIR` = `<worktrees>/runs/release/<group>/`, which devloop never empties; its whole output is kept in `<worktrees>/runs/release/<group>.log`, named on the group as `release_log` and in the page) and is stopped after `release_timeout_seconds` (default 3600). A release that exits 1 at landing (the product failed a check) has the opener open a fix ticket for it (`ticket_creator.py --by controller --origin '{"kind": "release", "group": ..., "sha": ...}'`; none while a ticket opened this way is still open, its number goes on the page instead) and then runs once more on the same sha; the controller waits for that opener run (minutes) and the rerun decides the group's `release` and page; it changes nothing on main or in the release. Every other outcome runs once (see **Release exit codes**). Everything else has a default:
 `pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_group_size` 10 (a `together` ticket opens a new integration branch once the open one has this many members; no ticket that is not yet a member joins a group that is full, whichever path chose it), `max_rounds` 3,
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
@@ -453,6 +453,10 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
 - **OS failures** (missing program, permission, disk full, broken JSON, git errors, timeouts) are
   caught in one place (`core/osx.py`, `core/gitx.py`) and end as a page or an exit code with one
   sentence, never a silent hang. Timed-out commands are stopped with their whole process group.
+- **Release exit codes**: 0 released · 1 the product failed a check (at landing: one fix ticket from
+  the opener, then one rerun on the same sha, issue #1) · 86 the environment (one decision page). Any
+  other code and a timeout count as 86: one decision page, no ticket, no rerun. `tickets.py release gN`
+  always runs once.
 - **A merged or landed ticket is frozen**: nobody revises or reopens it (`ticket_creator.py
   --revise` from any caller and `tickets.py ready` refuse with one line, D-089); overturning one takes a
   new ticket through `actl new --request "..."`, which may revert it.

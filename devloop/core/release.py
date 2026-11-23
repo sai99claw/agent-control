@@ -57,6 +57,12 @@ def failure_text(log, first):
                       logtail.tail(log, FAILURE_TAIL_LINES)])
 
 
+def product_failed(text):
+    """True when run()'s failure text says the release exited 1 (the product failed a check):
+    its first line is exactly 'rc 1' - not a timeout, not an OSFailure, not another code."""
+    return (text or "").split("\n")[0] == "rc 1"
+
+
 def run(cfg, group, sha):
     """Run devloop.release for `group` at `sha` once. Returns (ok, text): the output tail, or on
     failure 'rc N[ (timeout)]' followed by it. Never retries, never rolls back."""
