@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "The controller's idle detection (tick() 'busy') counts groups by state: any new condition that makes a group wait (a gate, a chain, a member that cannot start) must be left out of 'busy', or a controller without --forever never ends.",
+  "source": "request (opener)",
+  "at": "2026-11-23T04:42:11Z"
+}
