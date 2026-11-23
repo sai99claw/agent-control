@@ -347,3 +347,15 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
   - #109 quick 或 full 紅 1–5 個時,同一個 worktree 把那幾個重跑一次;重跑過的記為 flaky,不算紅,列在 result.json、
     group 事件與落地 / 發版失敗 / 修不好的頁上。6 個以上不重跑。
 - 給 T 的說明重寫成一份(scratchpad 的 T-update-2026-11-21.md),之前那版沒交出去。
+
+## 2026-11-23 GitHub issue #1–#7(T 開的)
+
+- 使用者要主線看 GitHub issue,修好的回覆 commit 並關閉。T 從它的 A-todo 開了 #1–#7。使用者:「1245 這些聽起來都好解決先處理掉,
+  6 跟7 蠻重要的 想一下該怎麼改」;主線提設計(#7 開題者不拿名額、#6 群組排成鏈),使用者回「Ok」。
+- g4(#110–#115,一輪)修 #1(發版 rc 1 = 產品失敗 → 自動開修復票並重跑一次;rc 86 = 環境;A 的 release.sh 推 tag 失敗回 86)、
+  #2(偶發測試自動開修復票)、#4(blocked 一定發頁;列出的失敗測試由 devloop 跑,過了就重做且不算輪)、#5(`--from main --decision` 生效)。
+- g5(#116–#120,fix 一輪,main = b32e898)修 #7(開題者與整理者不拿機器名額;run_tests.py 在名額外不等,機器忙就回 2)
+  與 #6(群組由開題者在開票時決定,依建立順序成鏈,後一組的 regression 等前一組落地;拿掉 max_group_size 與 verify alone/together)。
+- #1、#2、#4、#5、#6、#7 已留言(含 commit)並關閉。#3(花費用每週額度百分比)使用者未決定,還開著。
+- T 要配合:發版腳本產品失敗回 1、環境回 86;拉 A 時丟掉本機的 af32012(`devloop.serial_groups`)。
+- 雲端發版照舊推 tag 403(現在回 86,不開票),g4、g5 頁已 ack。`actl run --forever` 在背景跑著。
