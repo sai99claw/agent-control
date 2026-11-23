@@ -143,17 +143,25 @@ class T51Acceptance(LoopCase):
         g = self.snap().groups["g1"]
         self.assertEqual(len(self.events(g, "regression started")), started, g.get("history"))
         self.assertIsNone(self.proc.poll(), "the --forever controller stopped")
-        # item 3
+        # item 3; #117: a paused group holds the later groups, so g2 gets #2 merged and then
+        # waits for g1 (no regression) until g1 is rerun and lands
         self.env_bad(False)
         self.add(2)
-        snap = self.wait("#2 landed", lambda s: s.ticket("2").get("state") == "landed")
+        snap = self.wait("#2 merged", lambda s: s.ticket("2").get("state") == "merged")
         g2 = [x for x in snap.groups.values() if "2" in (x.get("members") or [])]
         self.assertEqual(len(g2), 1, snap.groups)
-        self.assertNotEqual(g2[0]["id"], "g1")
+        g2id = g2[0]["id"]
+        self.assertNotEqual(g2id, "g1")
+        time.sleep(3)
+        snap = self.snap()
+        self.assertEqual(self.events(snap.groups[g2id], "regression started"), [],
+                         snap.groups[g2id].get("history"))
+        self.assertEqual(snap.ticket("2").get("state"), "merged")
         g = snap.groups["g1"]
         self.assertEqual(g["state"], "pr", g)
         self.assertTrue(self.paused(snap, "g1", "env"), g)
         self.assertEqual(len(self.events(g, "regression started")), started, g.get("history"))
+        self.assertIsNone(self.proc.poll(), "the --forever controller stopped")
         # item 4
         page = list(envs)[0]
         res = self.run_py("tickets.py", "rerun", "g1", "--why", "fixed", "--by", "a@x.com", "--page", page)
@@ -170,6 +178,11 @@ class T51Acceptance(LoopCase):
         snap = self.wait("g1 landed", lambda s: s.groups["g1"].get("state") == "landed", timeout=90)
         self.assertNotIn("paused", snap.groups["g1"])
         self.assertEqual(self.state(1), "landed")
+        snap = self.wait("#2 landed", lambda s: s.ticket("2").get("state") == "landed", timeout=90)
+        landed = self.events(snap.groups["g1"], "landed")[0]["at"]
+        reg = self.events(snap.groups[g2id], "regression started")
+        self.assertEqual(len(reg), 1, snap.groups[g2id].get("history"))
+        self.assertGreaterEqual(reg[0]["at"], landed)
 
     # ------------------------------------------------------------ item 4: one write, actl, default by
 
@@ -331,18 +344,24 @@ class PausedGroupPieces(LoopCase):
         self.assertNotIn("paused", self.snap().groups["g1"])
 
     def test_forever_skips_a_paused_group_only(self):
-        self.put("g1", paused={"reason": "env", "at": "t", "text": ""})
-        self.put("g2")
+        """--forever skips the paused group's regression; #117: a paused group still holds the
+        chain, so the later g2 waits for it either way. Each group has a merged member: a group
+        with no members is closed (#118)."""
+        self.add(1, state="merged", group="g1")
+        self.add(2, state="merged", group="g2")
+        self.put("g1", members=["1"], paused={"reason": "env", "at": "t", "text": ""})
+        self.put("g2", members=["2"])
         ctl = self.ctl()
         started = []
         ctl.start_regression = lambda g: started.append(g["id"])
         ctl.forever = True
         ctl.advance_groups(self.snap())
-        self.assertEqual(started, ["g2"])
+        self.assertEqual(started, [])
+        self.assertEqual([self.snap().groups[g]["state"] for g in ("g1", "g2")], ["pr", "pr"])
         ctl.forever = False
         started.clear()
         ctl.advance_groups(self.snap())
-        self.assertEqual(started, ["g1", "g2"])
+        self.assertEqual(started, ["g1"])
 
     def test_after_fixer_env_pauses_with_the_page_text(self):
         import ticket_controller
