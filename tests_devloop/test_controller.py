@@ -1004,7 +1004,8 @@ class T63Acceptance(LoopCase):
         self.assertEqual(len(pages), 1, "exactly one idle page: %r" % pages)
         self.assertEqual(pages[0]["ref"], "controller")
         expected = ["#2 ready, waits for: #1 merged in g1 (stuck)",
-                    "g1 stuck: %s" % last_event]
+                    "g1 stuck: %s" % last_event,
+                    "g2 waits for g1 to land (place 2 in the chain)"]
         lines = self.item_lines(pages[0]["text"])
         self.assertEqual(lines, expected, pages[0]["text"])
         err = res.stderr.splitlines()

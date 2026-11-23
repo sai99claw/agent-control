@@ -9,6 +9,8 @@ Pure functions of a core.pool Snapshot:
                        (a stuck group with no merged ticket has nothing to verify or land)
   waits_for(snap, gid) the nearest earlier group that holds the chain, or None
   behind(snap, gid)    when gid holds the chain, the ids after it in order(snap), else []
+  behind_line(snap, gid)  the stuck-group page line naming behind(snap, gid), or "" when empty
+  with_behind(text, snap, gid)  text with behind_line appended as its last line when not empty
 """
 
 DONE = ("landed", "cancelled")
@@ -52,3 +54,15 @@ def behind(snap, gid):
         return []
     chain = order(snap)
     return chain[chain.index(gid) + 1:]
+
+
+def behind_line(snap, gid):
+    later = behind(snap, gid)
+    if not later:
+        return ""
+    return "later groups waiting for %s to land: %d (%s)" % (gid, len(later), ", ".join(later))
+
+
+def with_behind(text, snap, gid):
+    line = behind_line(snap, gid)
+    return text + "\n" + line if line else text

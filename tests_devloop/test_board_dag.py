@@ -1490,7 +1490,7 @@ class T82Acceptance(BoardLiveTab):
         self.fixture()
         self.regression("full")
         lane = self.lane(self.page())
-        self.assertEqual(self.title(lane), "g21 · PR(待驗) · regression full · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2 張"
+        self.assertEqual(self.title(lane), "g21 · PR(待驗) · regression full · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2 張 · 鏈上第 1 個"
                          % self.hhmm(self.S))
         self.assertEqual(lane.get("data-now"), "regression")
         self.assertEqual(lane.get("data-red"), "3")
@@ -1514,7 +1514,7 @@ class T82Acceptance(BoardLiveTab):
             with self.subTest(stage=stage):
                 self.regression(stage)
                 self.assertEqual(self.title(self.lane(self.page())),
-                                 "g21 · PR(待驗) · %s · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2 張"
+                                 "g21 · PR(待驗) · %s · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2 張 · 鏈上第 1 個"
                                  % (text, self.hhmm(self.S)))
 
     def test_elapsed_counts_from_the_stamp(self):
@@ -1530,7 +1530,7 @@ class T82Acceptance(BoardLiveTab):
                  max_rounds=3)
         lane = self.lane(self.page())
         self.assertEqual(self.title(lane), "g21 · PR(待驗) · 修補第 2/3 輪 · 沒有 agent 在跑 · %s 起 · 14 分 · "
-                         "上次 regression:紅 3 條 · 2 張" % self.hhmm(self.S))
+                         "上次 regression:紅 3 條 · 2 張 · 鏈上第 1 個" % self.hhmm(self.S))
         self.assertEqual(lane.get("data-now"), "fixer")
 
     def test_fixer_with_agent_in_quota(self):
@@ -1544,7 +1544,7 @@ class T82Acceptance(BoardLiveTab):
                  model="m", effort=None, state="quota", since=self.pool_stamp(self.S + 60), until=until)
         lane = self.lane(self.page())
         self.assertEqual(self.title(lane), "g21 · PR(待驗) · 修補第 2/3 輪 · 額度用完,到 %s · %s 起 · 14 分 · "
-                         "上次 regression:紅 3 條 · 2 張"
+                         "上次 regression:紅 3 條 · 2 張 · 鏈上第 1 個"
                          % (board.live_clock(board.pool_seconds(until)), self.hhmm(self.S)))
         self.assertEqual(lane.get("data-now"), "fixer")
 
@@ -1558,7 +1558,7 @@ class T82Acceptance(BoardLiveTab):
                 self.put("release-g21", kind="release", stamp=self.alive(self.pool_stamp(self.S)), group="g21",
                          sha="c" * 40, log=log)
                 lane = self.lane(self.page())
-                self.assertEqual(self.title(lane), "g21 · PR(待驗) · %s · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2 張"
+                self.assertEqual(self.title(lane), "g21 · PR(待驗) · %s · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2 張 · 鏈上第 1 個"
                                  % (text, self.hhmm(self.S)))
                 self.assertEqual(lane.get("data-now"), "release")
 
@@ -1583,10 +1583,10 @@ class T82Acceptance(BoardLiveTab):
                 all_links = [a for a in lane.iter(self.NS + "a") if (a.get("href") or "").startswith("?group=")]
                 self.assertEqual(lane.get("data-red"), red)
                 if part is None:
-                    self.assertEqual(self.title(lane), "g21 · PR(待驗) · 2 張")
+                    self.assertEqual(self.title(lane), "g21 · PR(待驗) · 2 張 · 鏈上第 1 個")
                     self.assertEqual(all_links, [])
                 else:
-                    self.assertEqual(self.title(lane), "g21 · PR(待驗) · %s · 2 張" % part)
+                    self.assertEqual(self.title(lane), "g21 · PR(待驗) · %s · 2 張 · 鏈上第 1 個" % part)
                     self.assertEqual([(a.get("href"), "".join(a.itertext())) for a in links],
                                      [("?group=g21", part)])
 
@@ -1606,7 +1606,7 @@ class T82Acceptance(BoardLiveTab):
         self.assertEqual(states.get("release-g21"), "ended")
         page = self.page()
         lane = self.lane(page)
-        self.assertEqual(self.title(lane), "g21 · PR(待驗) · 上次 regression:紅 3 條 · 2 張")
+        self.assertEqual(self.title(lane), "g21 · PR(待驗) · 上次 regression:紅 3 條 · 2 張 · 鏈上第 1 個")
         self.assertIsNone(lane.get("data-now"))
         other = self.lane(page, "g22")
         self.assertEqual(other.get("data-now"), "regression")
@@ -1666,7 +1666,7 @@ class T82Acceptance(BoardLiveTab):
         self.assertLess(time.time() - started, 899, "the GET came too late for the 14 分 oracle")
         self.assertEqual(status, 200)
         lane = self.lane(page)
-        self.assertEqual(self.title(lane), "g21 · PR(待驗) · regression full · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2 張"
+        self.assertEqual(self.title(lane), "g21 · PR(待驗) · regression full · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2 張 · 鏈上第 1 個"
                          % self.hhmm(started))
         self.assertEqual(lane.get("data-now"), "regression")
         self.assertEqual(lane.get("data-red"), "3")

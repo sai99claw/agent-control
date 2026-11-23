@@ -117,6 +117,9 @@ def idle_lines(snap):
         elif g.get("paused") and state not in ("landed", "cancelled"):
             mark = g["paused"]
             out.append("%s paused (%s): %s" % (gid, mark.get("reason") or "?", _first_line(mark.get("text"))))
+        chain_order, earlier = chain.order(snap), chain.waits_for(snap, gid)
+        if earlier is not None:
+            out.append("%s waits for %s to land (place %d in the chain)" % (gid, earlier, chain_order.index(gid) + 1))
     return out
 
 
@@ -355,7 +358,8 @@ class Controller:
         rnd = int(g.get("fix_round") or 0)
         if rnd >= self.cfg.max_rounds:
             self.set_group(gid, "stuck", "main kept moving")
-            self.pool.report("decision", gid, "group %s cannot catch up with %s" % (gid, main), **pages.ask(
+            self.pool.report("decision", gid, chain.with_behind("group %s cannot catch up with %s" % (gid, main),
+                                                                self.pool.snapshot(), gid), **pages.ask(
                 "%s could not catch up with %s: verify it again, or cancel it?" % (gid, main),
                 [pages.option("group-ready", "fix rounds go back to 0 and the fixer merges %s into %s again" % (main, gid)),
                  pages.option("group-cancel", self.cancel_consequence(gid), note="")],
@@ -502,8 +506,8 @@ class Controller:
         if rnd >= self.cfg.max_rounds:
             self.set_group(gid, "stuck", "red after %d fix rounds" % rnd)
             fix = self.flaky_fix(g, self.repo.sha(g["branch"]))
-            self.pool.report("decision", gid, with_flaky("group %s is still red after %d fix rounds:\n%s" % (
-                gid, rnd, report.get("summary")), g, fix), **self.red_ask(gid, rnd))
+            self.pool.report("decision", gid, chain.with_behind(with_flaky("group %s is still red after %d fix rounds:\n%s" % (
+                gid, rnd, report.get("summary")), g, fix), self.pool.snapshot(), gid), **self.red_ask(gid, rnd))
             return
         self.start_fixer(gid, job["out"], rnd + 1)
 
@@ -559,9 +563,10 @@ class Controller:
             return True
         self.set_group(gid, "stuck", "red after %d fix rounds" % rnd)
         fix = self.flaky_fix(g, self.repo.sha(g["branch"]))
-        self.pool.report("decision", gid, with_flaky("group %s is still red after %d fix rounds; the last round made it "
+        self.pool.report("decision", gid, chain.with_behind(with_flaky("group %s is still red after %d fix rounds; the last round made it "
                          "redder (%d -> %d failing) and was dropped (%s):\n%s" % (
-                             gid, rnd, before, after, ref, base.get("summary")), g, fix), **self.red_ask(gid, rnd))
+                             gid, rnd, before, after, ref, base.get("summary")), g, fix), self.pool.snapshot(), gid),
+                         **self.red_ask(gid, rnd))
         return True
 
     def after_fixer(self, gid, rc):

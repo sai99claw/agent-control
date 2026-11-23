@@ -45,6 +45,7 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from core import chain as chainmod  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core import logtail, memory, osx  # noqa: E402
 from core import pages as pagemod  # noqa: E402
@@ -1361,8 +1362,9 @@ def dag_last_regression(summary):
     return prefix + _clip(first, 30), None
 
 
-def dag_lane_title(cfg, g, gid, label, rows, now):
-    """(markup inside the lane's <text class="lh">, extra attributes of the lane <g>)."""
+def dag_lane_title(cfg, g, gid, label, rows, now, snap):
+    """(markup inside the lane's <text class="lh">, extra attributes of the lane <g>); a group in
+    the chain gets its place (and the group it waits for, if any) as the last parts."""
     if g is None or cfg is None or rows is None:
         return e(gid + " · " + label if gid else label), ""
     parts, attrs = [e(gid), e(group_state_text(g))], []
@@ -1383,6 +1385,15 @@ def dag_lane_title(cfg, g, gid, label, rows, now):
     members = "%d" % len(g.get("members") or [])
     parts.append(e(members + " 張"))
     attrs.insert(0, ' data-members="%s"' % e(members))
+    chain_order = chainmod.order(snap)
+    if gid in chain_order:
+        place = "%d" % (chain_order.index(gid) + 1)
+        parts.append(e("鏈上第 %s 個" % place))
+        attrs.append(' data-place="%s"' % e(place))
+        earlier = chainmod.waits_for(snap, gid)
+        if earlier is not None:
+            parts.append(e("等 %s 落地" % earlier))
+            attrs.append(' data-waits="%s"' % e(earlier))
     return " · ".join(parts), "".join(attrs)
 
 
@@ -1635,7 +1646,7 @@ def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=Non
         height = DAG_LANE_HEAD + max(
             sum(node_h[i] + DAG_NODE_GAP for i in v)
             for (g, _), v in cells.items() if g == gid)
-        title, lane_attrs = dag_lane_title(cfg, snap.groups.get(gid), gid, label, live, now)
+        title, lane_attrs = dag_lane_title(cfg, snap.groups.get(gid), gid, label, live, now, snap)
         lane_y[gid] = y
         part = ['<g class="lane" data-group="%s"%s>' % (e(gid), lane_attrs),
                 '<rect class="band" x="%d" y="%d" width="%d" height="%d" rx="8"/>'
