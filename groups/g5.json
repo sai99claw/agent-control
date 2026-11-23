@@ -2,7 +2,7 @@
   "id": "g5",
   "branch": "int/g5",
   "base": "1a689598081775ea1554fb6c09a7c3587f2c1647",
-  "state": "pr",
+  "state": "verified",
   "alone": false,
   "members": [
     "116",
@@ -58,6 +58,10 @@
     {
       "at": "2026-11-23T05:46:07Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-23T05:46:09Z",
+      "event": "regression green"
     }
   ],
   "main_tried": "4c0471b33f24d1d3e7b8a3e31ac4cbf09f33d7eb",
@@ -98,5 +102,6 @@
       "round": 1
     }
   ],
-  "fix_end_sha": "0fb47e1850a0aac66499d383854e7272da67b7d8"
+  "fix_end_sha": "0fb47e1850a0aac66499d383854e7272da67b7d8",
+  "verified_sha": "0fb47e1850a0aac66499d383854e7272da67b7d8"
 }
