@@ -5,7 +5,8 @@
   "state": "open",
   "alone": false,
   "members": [
-    "110"
+    "110",
+    "111"
   ],
   "fix_round": 0,
   "job": null,
