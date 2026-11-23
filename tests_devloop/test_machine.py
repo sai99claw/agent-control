@@ -24,6 +24,29 @@ from core import pool as pool_mod  # noqa: E402
 from core.pool import Pool, shown_state, TICKET_STATES  # noqa: E402
 
 
+
+def run_worker_in_process(case, timeout):
+    """Issue #7: run a worker (the opener takes no slot) in this process with the worker command
+    T30Acceptance.done_worker sets; returns the path of the hand-in it wrote."""
+    from unittest import mock
+    from core import agents
+    from core.config import Config
+    patch = mock.patch.dict(os.environ)
+    patch.start()
+    case.addCleanup(patch.stop)
+    for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+        del os.environ[key]
+    os.environ["AC_ROOT"] = case.proj
+    with open(os.path.join(case.proj, "board", "config.json")) as fh:
+        agents_cfg = json.load(fh)["devloop"]["agents"]
+    script = "cat >/dev/null; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\""
+    case.config(agents=dict(agents_cfg, worker=["sh", "-c", script]))
+    run_dir = os.path.join(case.tmp, "run-worker")
+    hand = agents.run(Config(case.proj), "worker", "go", case.proj, run_dir, timeout)
+    case.assertIsNone(hand.problem())
+    return os.path.join(run_dir, "result.json")
+
+
 class ExclusiveRegression(LoopCase):
     """devloop.regression_exclusive: the implementer's tests (gate and whole-machine take in core/slots.py)."""
 
@@ -213,8 +236,9 @@ class T4Acceptance(LoopCase):
         self.assertEqual(overlaps, [], runs)
 
     def test_v2_a_held_mark_keeps_every_taker_waiting_until_it_is_released(self):
-        """Item 3 with D-091 item 6: while another process holds LOCK_EX on slots/exclusive, an
-        agent takes no slot; it waits past its own timeout and runs once the mark is released."""
+        """Item 3 with D-091 item 6, with a worker since issue #7 (the opener takes no slot): while
+        another process holds LOCK_EX on slots/exclusive, a worker takes no slot; it waits past its
+        own timeout and runs once the mark is released."""
         import fcntl
         import threading
         slots = os.path.join(self.tmp, "wt", "slots")
@@ -227,13 +251,10 @@ class T4Acceptance(LoopCase):
         self.addCleanup(timer.cancel)
         self.config(machine_slots=2, regression_exclusive=True, agent_timeout_seconds=2)
         timer.start()
-        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        ran = glob.glob(os.path.join(os.path.dirname(self.plan_path), "count-creator-*"))
-        self.assertTrue(ran, "the creator never ran")
+        result = run_worker_in_process(self, 2)
         self.assertTrue(released)
-        self.assertGreaterEqual(min(os.path.getmtime(p) for p in ran), released[0] - 0.05,
-                                "the creator ran while the exclusive mark was held")
+        self.assertGreaterEqual(os.path.getmtime(result), released[0] - 0.05,
+                                "the worker ran while the exclusive mark was held")
 
     def test_v3_exclusive_without_machine_slots_stops_every_script(self):
         """Item 2: regression_exclusive true needs machine_slots."""
@@ -732,8 +753,8 @@ class T3Acceptance(LoopCase):
         self.assertEqual(self.two_tickets(1), 1, self.recorded())
 
     def test_an_agent_waits_for_the_slot_and_runs_once_it_is_freed(self):
-        """D-091 item 6 (was: never starts): the creator waits past its own timeout for the held
-        slot, starts only after it is freed and exits 0."""
+        """D-091 item 6, with a worker since issue #7 (the opener takes no slot): the worker waits
+        past its own timeout for the held slot and starts only after it is freed."""
         import fcntl
         import threading
         slot_dir = os.path.join(self.tmp, "wt", "slots")
@@ -746,13 +767,10 @@ class T3Acceptance(LoopCase):
         self.addCleanup(timer.cancel)
         self.config(machine_slots=1, agent_timeout_seconds=2)
         timer.start()
-        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        ran = glob.glob(os.path.join(os.path.dirname(self.plan_path), "count-creator-*"))
-        self.assertTrue(ran, "the creator never ran")
+        result = run_worker_in_process(self, 2)
         self.assertTrue(released)
-        self.assertGreaterEqual(min(os.path.getmtime(p) for p in ran), released[0] - 0.05,
-                                "the creator ran while the slot was held")
+        self.assertGreaterEqual(os.path.getmtime(result), released[0] - 0.05,
+                                "the worker ran while the slot was held")
 
     def test_a_regression_without_a_slot_in_its_time_is_unmeasured(self):
         self.hold_slot_zero()
@@ -765,6 +783,13 @@ class T3Acceptance(LoopCase):
         self.assertEqual(got["status"], "unmeasured")
         self.assertIn("machine slot", got["summary"])
 
+
+    def test_no_slot_roles_start_at_once_and_a_worker_waits(self):
+        """Issue #7, own unit test: NO_SLOT_ROLES never touch a held slot."""
+        from core import agents
+        self.assertEqual(agents.NO_SLOT_ROLES, ("creator", "consolidator", "consolidator_peer"))
+        for role in agents.NO_SLOT_ROLES:
+            self.assertNotIn(role, ("worker", "verifier", "reviewer", "fixer"))
 
 class T30Acceptance(LoopCase):
     """Ticket #30: waiting for a machine slot does not count against an agent's or an issuer's

@@ -36,6 +36,11 @@ QUOTA_SIGNS = ("usage limit", "rate limit", "quota", "credit balance", "limit re
                "out of credits", "too many requests")
 
 
+# Roles that start without a machine slot (issue #7): the opener (also when revising) and memory
+# consolidation never wait for a regression or for other agents.
+NO_SLOT_ROLES = ("creator", "consolidator", "consolidator_peer")
+
+
 class Hand:
     """What came back from one agent run."""
 
@@ -196,11 +201,12 @@ class Pending:
         self.parent = os.getpid()
 
     def launch(self):
-        """Start the next command of the chain that exists, under a machine slot. The wait has no
+        """Start the next command of the chain that exists, under a machine slot (not for the roles
+        in NO_SLOT_ROLES: they start at once, waited stays 0). The wait has no
         limit and does not count against this run's timeout (added to self.waited); the slot is
         freed the moment the command's process exits."""
         self._release()
-        if self.cfg is not None:
+        if self.cfg is not None and self.role not in NO_SLOT_ROLES:
             if slots.needed(self.cfg):
                 self._live("slot", osx.stamp(), self.chain[0] if self.chain else None)
             began = time.time()

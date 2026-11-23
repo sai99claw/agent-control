@@ -134,7 +134,9 @@ of cached input (codex counts cached input inside input), `cache_read_tokens` th
 
 `machine_slots` (default null = no limit) caps the heavy runs on the machine at N, across every
 devloop process that shares the project's worktrees root. What takes a slot: every agent run
-(every role, every command of its chain, from just before it starts until its process exits), the
+except the opener (role creator, also when revising) and memory consolidation (consolidator,
+consolidator_peer), which take no slot and start at once even while a regression holds the machine
+(every other role, every command of its chain, from just before it starts until its process exits), the
 issuer's red check and each case run, and a regression (from before preflight until `full` ends).
 A slot is a `flock` on `<worktrees>/slots/slot-<i>` (i = 0..N-1); the files are created when
 missing and never deleted. The devloop process that started the run holds the lock, so a
@@ -145,7 +147,8 @@ is taken. A regression's wait still counts against `regression_timeout_seconds`
 ("unmeasured" when no slot comes free in time).
 Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file) in the
 environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
-`ticket_creator.py --revise`).
+`ticket_creator.py --revise`). `run_tests.py` outside a slot (the opener's way to run tests) takes
+one without waiting, or runs nothing and exits 2 with machine busy on stderr.
 
 `regression_exclusive` (default false) makes a regression take the whole machine: it runs only
 while no other slot is held, and no new slot is taken while it waits or runs. It
