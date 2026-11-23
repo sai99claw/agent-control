@@ -15,6 +15,11 @@
     {
       "at": "2026-11-23T04:09:29Z",
       "event": "opened from main 7be8b0b68229"
+    },
+    {
+      "at": "2026-11-23T04:09:54Z",
+      "event": "main moved to 2a0e6ef56f62: fast-forwarded int/g4 to it"
     }
-  ]
+  ],
+  "main_tried": "2a0e6ef56f6254044355285a448647c48508b64f"
 }
