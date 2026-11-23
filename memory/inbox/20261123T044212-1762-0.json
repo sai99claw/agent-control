@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "creator",
-  "text": "When a request moves a decision from run time to creation time (a group fixed when the ticket is written), list every run-time rule that relied on the decision still being open (a group finalizing when nothing can join, idle detection counting open groups) and give members that can never proceed a way out; reproduce the stall on today's code with a raw pool fixture, where it shows as a controller that never ends.",
-  "source": "request (opener)",
-  "at": "2026-11-23T04:42:11Z"
-}

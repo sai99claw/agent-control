@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "creator",
-  "text": "When a new command or stage must be optional, look first for an existing optional one's built-in no-op (an undeclared preflight is rc 0 'nothing to check') and mirror it; a new exit code or outcome status for 'not declared' costs a branch in every caller.",
-  "source": "request (opener)",
-  "at": "2026-11-21T19:05:59Z"
-}
