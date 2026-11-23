@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "worker",
+  "text": "Before running a mutation check, make sure no background test run is reading the same tree: a test that spawns the program under test picks up the mutated file for as long as it is in place.",
+  "source": "#118 r1 worker",
+  "at": "2026-11-23T05:10:08Z"
+}
