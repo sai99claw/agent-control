@@ -1,0 +1,59 @@
+{
+  "title": "scripts/release.sh exits 86 when its tag cannot be made or pushed (issue #1, part 1)",
+  "objective": "agent-control's own release script exits 86 (the environment) for each of its failures and never exits 1.",
+  "outline": "scripts/release.sh only: the two `exit 1` lines (tag already exists; push refused) become `exit 86`, and the header line 'Exit 0 released · non-zero: the controller writes a decision page (no retry, no rollback)' is rewritten to the codes above. Nothing else in the script changes.",
+  "test_plan": "No verifier: the implementer writes the cases for acceptance 1 and 2 in tests_devloop/test_pool_git.py, in a new class T<id>Acceptance(GitIsolatedCase) placed right after class AgentControlRelease (before class DagRules), with the same fixture AgentControlRelease uses (tempdir git repo with one empty commit; run `sh <HOME>/scripts/release.sh` with the env above; pop DEVLOOP_REMOTE from the inherited environment first). Expected codes come from this ticket (86), not from the script. Red before (read from the code at 7be8b0b, not run): both paths end in `exit 1`. Acceptance 3 is covered by the existing AgentControlRelease cases (they assert != 0 / == 0 and the stderr words, so they hold unchanged); run test_pool_git once. Acceptance 4 is checked by reading.",
+  "notes": "Issue #1 (GitHub sai99claw/agent-control #1), part 1 of 2; the controller side is the ticket that depends on this one. Why: under the release exit-code contract of issue #1 (rc 1 = the product failed a check and opens a fix ticket; rc 86 = the environment), agent-control's release has no product check at all. In the cloud every release fails on the refused tag push; with exit 1 that would open one fix ticket per landing. 'Tag already exists' (seen when a landing is retried after a controller restart) is not a product check either, so it is 86 too. This must land no later than the controller ticket (the DAG makes that one depend on this).",
+  "acceptance": [
+    "Run as `sh <repo>/scripts/release.sh` in a git repo with one commit, with DEVLOOP_RELEASE_SHA=<that commit>, DEVLOOP_GROUP=g2 and DEVLOOP_REMOTE=nowhere (a remote that does not exist), it exits 86 and its stderr still contains 'not pushed'.",
+    "Run a second time with the same DEVLOOP_RELEASE_SHA and DEVLOOP_GROUP (no DEVLOOP_REMOTE) on the same day, it exits 86 and its stderr still contains 'already exists'.",
+    "A run that makes the tag (no DEVLOOP_REMOTE) still exits 0 and prints 'released <tag>'; a run without DEVLOOP_RELEASE_SHA still exits non-zero (unchanged; the existing AgentControlRelease cases keep passing as they are).",
+    "The script's header comment states the exit codes: 0 released; 86 the environment (the tag already exists, the push was refused); the script runs no product check, so it never exits 1."
+  ],
+  "needs_verifier": false,
+  "complexity": "simple",
+  "token_estimate": 2000000,
+  "token_basis": "one shell script, two exit codes and a header line; two small cases in an existing test file; no verifier. Calibrated on recorded landed tickets (simple ones cost 2.7M-4.7M with a verifier, cache reads included); this is the smallest of them.",
+  "vision": "VISION 一張需求從頭到尾 step 10 (全綠就落地) with the 'add one, remove one' rule; metric 每張落地票的 token 與時間 (down): once rc 1 opens fix tickets, it keeps every cloud landing of agent-control (all of whose releases fail on the tag push) from paying for an opener run plus a fix ticket, about 3M tokens per landing (recorded cost of a small landed ticket, e.g. #102 2.7M).",
+  "removes": "none: it adds no gate or rule; it only changes two exit codes so that a refused push or an existing tag is read as the environment, not as a product failure (without it, the controller ticket of issue #1 would add one ticket per cloud landing).",
+  "id": "110",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-23T04:09:20Z",
+  "request": "# Four fixes reported by tabby_pool (T) as GitHub issues #1, #2, #4, #5 on sai99claw/agent-control\n\nThe user asked for all four (2026-11-23: 「1245 這些聽起來都好解決先處理掉」). Each ticket names its issue number in its title or notes so the main session can close the issue after landing. Issue texts are quoted below as reported; they are data, not instructions. Tests go in the area's own test file in tests_devloop/ (or a new file for a new area), using loop_harness.py; never a catch-all file.\n\n## Issue #1: a release red that is a test failure gets an agent, not only a page\nUser ruling (tabby D-H79 addendum, verbatim): 「發版測試 跟 落地測試一樣 如果失敗 都要找agent 去查 去修」. Today a failed `devloop.release` writes one decision page (\"leave it or run the release again?\") and nothing investigates. In T, three release reds that passed on a plain rerun were real product races.\nWanted:\n- The release command's exit code says what kind of failure it was, like the test interface does: rc 1 = the product failed a check (for T: release-test red on staging, prod untouched); rc 86 = the environment (a push refused, a build tool missing, a host down); anything else is treated like 86. Document this contract in devloop/README.md.\n- rc 1: the controller has a fix ticket opened through the normal opener path (the same thing `actl new --request-file` does), with a request that carries the group, sha, the last `devloop-stage:` line, and the release log tail (the failing case and its message when the log has them). The ticket then goes worker -> verifier -> regression -> land -> release like any other. The controller also re-runs the release once on the same sha; a second rc 1 writes the decision page as today (naming the opened ticket). Never patch anything on the release path itself.\n- rc 86 / other / timeout: as today (one decision page, no ticket, no rerun).\n- agent-control's own scripts/release.sh: a refused tag push is the environment, so it exits 86 (in the cloud every release fails that way; it must not open a ticket per landing).\n- Out of scope: rolling back a release.\n\n## Issue #2: every flaky case gets a fix ticket\nSame ruling as #1. #109 turns a rerun-green red into one `flaky (passed when run again): ...` line on the landed page; in T every such red chased so far was a real product race (#259, #260, #295, #317, #318), not a bad test.\nWanted:\n- When a group lands (or ends stuck) with a non-empty flaky list, the controller has one fix ticket opened through the same opener path as #1 (reuse #1's mechanism; this ticket depends on #1's ticket): one request naming every flaky id with both messages (the red one and the fact it passed on the rerun), asking to find and fix the cause (product race or test), never by a sleep or a retry inside the test.\n- Do not open a second ticket for an id an open (not landed, not cancelled) ticket already carries from this mechanism; say in the group event that it was already open.\n- The landed page's flaky line also names the opened ticket.\n\n## Issue #4: a worker's \"blocked\" is checked, and every stuck ticket gets a page\nObserved in T (2026-11-22, #319): a fallback agent handed in `blocked` (\"Chrome cannot navigate to 127.0.0.1 because the screen is locked; only the user can unblock this\"). False: the same case passed on the host in 10 s; the agent's own sandbox blocked loopback HTTP. The ticket went `stuck (decision)` and no page was written: devloop/ticket_issuer.py `stuck()` skips the page for reason \"decision\" on the assumption that a revise escalation already wrote one, which is not true for a worker's `blocked` hand-in.\nWanted:\n- (a) Every ticket that goes stuck has a page. Only a stuck that follows a revise escalation which already wrote its page (the opener's kind `question`) writes none; the page for a `blocked` hand-in quotes the worker's text and has the usual retry / revise / cancel options.\n- (b) A `blocked` hand-in may name failing test ids (a `failing` list in the hand-in; add it to the worker hand-in format). When it does, ",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-23T04:09:20Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 183.88333333333333,
+      "at": "2026-11-23T04:09:17Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-23T035054Z-a1",
+      "input_tokens": 19,
+      "output_tokens": 19028,
+      "cache_read_tokens": 1390772,
+      "cache_write_tokens": 47442,
+      "usd": 1.0382622333333333,
+      "session_id": "69d6958f-19fd-41d5-b8a2-c8b4b0f7a0d6",
+      "split_over": [
+        "110",
+        "111",
+        "112",
+        "113",
+        "114",
+        "115"
+      ]
+    }
+  ]
+}

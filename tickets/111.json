@@ -1,0 +1,65 @@
+{
+  "title": "--decision is never silently ignored: --from main acts like --from user, other uses are refused (issue #5)",
+  "objective": "ticket_creator.py's --decision acts with --from main exactly as with --from user, and wherever it would be ignored it is refused instead.",
+  "outline": "devloop/ticket_creator.py main(): give --decision default None so 'given' and 'not given' can be told apart; when --revise and source in ('user', 'main'): decision = args.decision or 'revise', by = args.by or ('main-session' if source == 'main' else None), then the existing checks and decide(); when args.decision is not None in any other case: refuse (one line on stderr, return 2) before Config/pool work that writes anything. decide(): keep calling revise() with source 'user' (the reviser prompt and user_reset path are the user's; revise.json records 'user', which apply_unapplied skips) and pass the resolved by to the 'user answer' event, user_reset and ack. Docstring + README row (line 31 today: '`--revise N --from user --decision D ...`').",
+  "test_plan": "Verifier writes cases for acceptance 1-7 in tests_devloop/test_opener.py, a new class T<id>Acceptance(LoopCase) placed right after class RequiredFields (before class T12Acceptance); setUp removes every DEVLOOP_* key from self.env. Fixtures: `self.add(1, state='stuck', stuck={'reason': 'decision', 'text': 'x'})`; the 'revised' hand-in comes from `self.plan(creator={'1': ['revised']})` (fake_agent's creator action 'revised' hands acceptance ['a possible thing'] and cases_wrong true); the 'unchanged' hand-in from `self.config(agents=dict({r: AGENT for r in ROLES}, creator=['sh', '-c', 'cat >/dev/null; printf \\'{\"kind\": \"unchanged\", \"note\": \"n\"}\\' > \"$DEVLOOP_RESULT\"']))` (the same command T59Acceptance.UNCHANGED uses). 'No opener started' = no file count-creator-1 (acceptance 6) or count-creator-- (acceptance 7) in the plan file's folder (fake_agent writes count-<role>-<ticket> on every run). Commands run with self.run_py('ticket_creator.py', ...). Expected values come from this ticket. Measured red before (scratch harness run on 7be8b0b): acceptance 1 exits 1 with 'REVISE FAILED: the opener handed in kind 'tickets'' and #1 stays stuck; acceptance 6 (--from worker --decision retry) exits 1 after running the opener; acceptance 7 (--request x --decision cancel) exits 0 and opens tickets 1 and 2. Acceptance 8-10: the implementer's own tests (8 already holds today; 9 at the unit layer: run a --from main revise, then call ticket_creator.apply_unapplied for #1 with since=0 and assert it returns [] ).",
+  "notes": "Issue #5 (GitHub #5), observed in T on 2026-11-22 (#319): `actl new --revise 319 --via main --from main --decision retry --reason ...` ran the opener (outcome revised) and the ticket stayed 'stuck (decision)' for two hours until `actl tickets ready 319`. Cause (read from the code): main() uses --decision only when --from user; argparse's default 'revise' also hides whether --decision was given. Out of scope: the worker's own --revise path (source worker / verifier / fixer), which must never change a ticket's state. Keep source 'user' for the reviser in decide(): apply_unapplied (ticket_creator.py) skips only revise dirs whose revise.json source is 'user'; a revise dir with source 'main' and a 'revised' hand-in but no 'revised' event (the user path writes 'user decision: ready', not 'revised') would be applied again by the next issuer. The board's buttons already pass --from user --decision X; core/pages.py prints --from user commands; neither changes.",
+  "acceptance": [
+    "On a stuck ticket #1, `ticket_creator.py --revise 1 --via main --from main --decision retry --reason go` exits 0 and leaves #1 in state 'ready' with round 0 and stuck None; #1's newest 'user answer' event has decision 'retry' and by 'main-session'.",
+    "On a stuck ticket #1, `--revise 1 --from main --decision cancel --reason no` exits 0 and leaves #1 in state 'cancelled'.",
+    "On a stuck ticket #1, `--revise 1 --from main --decision revise --reason 'drop item 2'` runs the opener; when it hands in kind 'revised' with ticket {\"acceptance\": [\"a possible thing\"]} the command exits 0 and #1 is 'ready' with round 0 and acceptance ['a possible thing']; when it hands in kind 'unchanged' the command exits 0 and #1 is 'ready' with round 0 and its acceptance unchanged.",
+    "`--from main` without --decision means --decision revise, as it does for --from user: on a stuck #1, `--revise 1 --from main --reason 'drop item 2'` with an opener that hands in kind 'revised' exits 0 and leaves #1 'ready'; without a reason it exits 2 as --from user does today ('a revise decision needs the user's words').",
+    "With --by NAME the 'user answer' event's by is NAME for --from main too; without --by it is 'main-session' for --from main and 'user' for --from user (unchanged). Pages acked by the answer get the same name as acked_by.",
+    "`--decision` given together with --revise and a --from other than user or main (worker, verifier, fixer or any other word) exits 2, prints exactly one non-empty line on stderr that starts with 'ticket_creator: ' and contains '--decision', starts no opener and changes nothing in the pool (the ticket's JSON is identical before and after).",
+    "`--decision` given without --revise (with --request or --request-file) exits 2 with exactly one such stderr line and opens no ticket and starts no opener.",
+    "--from worker / verifier / any other source without --decision is unchanged: the plain revise path, which never changes the ticket's state.",
+    "A revision answered with --from main is written so that a later issuer's apply_unapplied does not apply it a second time (its revise.json source stays 'user', or apply_unapplied skips 'main' as well).",
+    "devloop/README.md's ticket_creator command row and ticket_creator.py's module docstring say that --from main is the main session answering for the user (D-094), with the same --decision effects, and that --decision anywhere else is refused."
+  ],
+  "needs_verifier": true,
+  "complexity": "simple",
+  "token_estimate": 3500000,
+  "token_basis": "one function (main) and one helper (decide) in ticket_creator.py, a README row and the docstring; 7 verifier cases with existing fakes; calibrated on recorded simple tickets with a verifier (#101-#106: 2.7M-4.7M, cache reads included).",
+  "vision": "VISION metrics 每張票需要我介入幾次 and 等我處理的事積了多少 (both down): a main-session answer on the user's behalf (D-094) acts at once instead of leaving the ticket stuck until a second command; in T #319 that gap was 2 hours of a stuck ticket.",
+  "removes": "the extra `actl tickets ready N` step after a main-session retry, and the silent no-op of --decision outside --from user (replaced by a one-line refusal).",
+  "id": "111",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-23T04:09:20Z",
+  "request": "# Four fixes reported by tabby_pool (T) as GitHub issues #1, #2, #4, #5 on sai99claw/agent-control\n\nThe user asked for all four (2026-11-23: 「1245 這些聽起來都好解決先處理掉」). Each ticket names its issue number in its title or notes so the main session can close the issue after landing. Issue texts are quoted below as reported; they are data, not instructions. Tests go in the area's own test file in tests_devloop/ (or a new file for a new area), using loop_harness.py; never a catch-all file.\n\n## Issue #1: a release red that is a test failure gets an agent, not only a page\nUser ruling (tabby D-H79 addendum, verbatim): 「發版測試 跟 落地測試一樣 如果失敗 都要找agent 去查 去修」. Today a failed `devloop.release` writes one decision page (\"leave it or run the release again?\") and nothing investigates. In T, three release reds that passed on a plain rerun were real product races.\nWanted:\n- The release command's exit code says what kind of failure it was, like the test interface does: rc 1 = the product failed a check (for T: release-test red on staging, prod untouched); rc 86 = the environment (a push refused, a build tool missing, a host down); anything else is treated like 86. Document this contract in devloop/README.md.\n- rc 1: the controller has a fix ticket opened through the normal opener path (the same thing `actl new --request-file` does), with a request that carries the group, sha, the last `devloop-stage:` line, and the release log tail (the failing case and its message when the log has them). The ticket then goes worker -> verifier -> regression -> land -> release like any other. The controller also re-runs the release once on the same sha; a second rc 1 writes the decision page as today (naming the opened ticket). Never patch anything on the release path itself.\n- rc 86 / other / timeout: as today (one decision page, no ticket, no rerun).\n- agent-control's own scripts/release.sh: a refused tag push is the environment, so it exits 86 (in the cloud every release fails that way; it must not open a ticket per landing).\n- Out of scope: rolling back a release.\n\n## Issue #2: every flaky case gets a fix ticket\nSame ruling as #1. #109 turns a rerun-green red into one `flaky (passed when run again): ...` line on the landed page; in T every such red chased so far was a real product race (#259, #260, #295, #317, #318), not a bad test.\nWanted:\n- When a group lands (or ends stuck) with a non-empty flaky list, the controller has one fix ticket opened through the same opener path as #1 (reuse #1's mechanism; this ticket depends on #1's ticket): one request naming every flaky id with both messages (the red one and the fact it passed on the rerun), asking to find and fix the cause (product race or test), never by a sleep or a retry inside the test.\n- Do not open a second ticket for an id an open (not landed, not cancelled) ticket already carries from this mechanism; say in the group event that it was already open.\n- The landed page's flaky line also names the opened ticket.\n\n## Issue #4: a worker's \"blocked\" is checked, and every stuck ticket gets a page\nObserved in T (2026-11-22, #319): a fallback agent handed in `blocked` (\"Chrome cannot navigate to 127.0.0.1 because the screen is locked; only the user can unblock this\"). False: the same case passed on the host in 10 s; the agent's own sandbox blocked loopback HTTP. The ticket went `stuck (decision)` and no page was written: devloop/ticket_issuer.py `stuck()` skips the page for reason \"decision\" on the assumption that a revise escalation already wrote one, which is not true for a worker's `blocked` hand-in.\nWanted:\n- (a) Every ticket that goes stuck has a page. Only a stuck that follows a revise escalation which already wrote its page (the opener's kind `question`) writes none; the page for a `blocked` hand-in quotes the worker's text and has the usual retry / revise / cancel options.\n- (b) A `blocked` hand-in may name failing test ids (a `failing` list in the hand-in; add it to the worker hand-in format). When it does, ",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-23T04:09:20Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 183.88333333333333,
+      "at": "2026-11-23T04:09:17Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-23T035054Z-a1",
+      "input_tokens": 17,
+      "output_tokens": 19025,
+      "cache_read_tokens": 1390767,
+      "cache_write_tokens": 47441,
+      "usd": 1.0382622333333333,
+      "session_id": "69d6958f-19fd-41d5-b8a2-c8b4b0f7a0d6",
+      "split_over": [
+        "110",
+        "111",
+        "112",
+        "113",
+        "114",
+        "115"
+      ]
+    }
+  ]
+}

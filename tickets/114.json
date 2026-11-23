@@ -1,0 +1,61 @@
+{
+  "title": "A worker's blocked hand-in leaves a page unless its own revise escalation already wrote one (issue #4a)",
+  "objective": "A ticket that goes stuck because its worker handed in blocked always has a page: its own, or the one its revise escalation wrote in the same round.",
+  "outline": "devloop/ticket_creator.py _revise(): in the kind 'question' branch keep the page name pool.report returns and append event(row, 'escalated', source=source, page=name) to the ticket in one pool.update (the ticket exists; skip silently if it does not). devloop/ticket_issuer.py: Stuck gets an optional flag saying whether the issuer writes the page; _round()'s blocked branch checks the ticket (re-read from the pool, since the worker's revise wrote it mid-round) for an 'escalated' event after the last 'round start' and raises Stuck('decision', text) with the page flag off only then; stuck() writes the page unless that flag is off (this replaces `if reason != 'decision'`). stuck_ask('decision') may get its own recommendation line (the worker's text above says why; a retry runs the ticket as written). Existing stores: the escalation page in the inbox is what the user reads and stays; the 'escalated' ticket event is only what the issuer reads.",
+  "test_plan": "Verifier writes cases for acceptance 1-4 in tests_devloop/test_issuer.py, a new class T<id>Acceptance(LoopCase) placed right after class Revise (before class FrozenWrites); setUp removes every DEVLOOP_* key from self.env. The verifier adds one fake: in tests_devloop/fake_agent.py's worker section, a branch for action 'revise_blocked' placed right after the existing `if action == \"blocked\":` block, with the comment '# issue #4: revise (escalates when the creator plan says question), then hand in blocked': it runs the same ticket_creator.py --revise call action 'revise' runs (writing revise.out), then hands {\"kind\": \"blocked\", \"text\": \"waiting for the user's decision\"} and exits 0 without committing. Acceptance 1: self.add(1), plan worker {'1': ['blocked']}, one controller run. Acceptance 2-3: plan worker {'1': ['revise_blocked']}, creator {'1': ['question']} (the fake creator keys a revise on the ticket id). Acceptance 4: self.add(1, history=[{'event': 'round start', 'round': 1}, {'event': 'escalated', 'source': 'worker', 'page': 'old'}]) with worker {'1': ['blocked']}. Expected values come from this ticket and fake_agent's texts. Measured red before (scratch harness run on 7be8b0b): a blocked worker leaves the ticket stuck (decision) and the only page is the controller's idle page. Acceptance 5-6: implementer (5 already holds for the idle line and board tests; extend the stuck_ask tuple in place).",
+  "notes": "Issue #4 (GitHub #4), part (a). Observed in T on 2026-11-22 (#319): a fallback agent handed in blocked ('Chrome cannot navigate to 127.0.0.1 because the screen is locked; only the user can unblock this'); the ticket went 'stuck (decision)' and no page was written, because ticket_issuer.stuck() skips the page for reason 'decision' on the assumption that a revise escalation already wrote one; that holds only after an escalation. Project memory already records this hole ('Any path that stops a ticket without going through revise must write the page itself'). The ticket that checks a blocked hand-in's failing ids builds on this one (same branch of _round). Out of scope: changing any agent sandbox.",
+  "acceptance": [
+    "A worker that hands in {\"kind\": \"blocked\", \"text\": \"need the user\"} without a revise in that round: the ticket is 'stuck' with stuck reason 'decision', and there is exactly one decision page with ref '1'; its text contains 'need the user', its option actions are ['retry', 'revise', 'cancel'] and pages.problems('1', page) == [].",
+    "When a revise run of ticket N ends with the opener's kind 'question', ticket_creator writes one history event named 'escalated' on ticket N with the fields source (the caller's --from) and page (the inbox page name pool.report returned for the question page).",
+    "A worker whose revise escalated and that then hands in blocked: the ticket is 'stuck' with reason 'decision', there is exactly one decision page with ref '1' (the escalation's, whose text starts with '#1 needs your decision (raised by the worker)'), and the ticket's 'escalated' event's page is that page's name.",
+    "Only an 'escalated' event after the ticket's last 'round start' event counts: a ticket whose history already holds a 'round start' and an 'escalated' event from an earlier run, dispatched again with a worker that hands in blocked, gets its own decision page as in acceptance 1.",
+    "The stuck reason stays 'decision' in both cases, so the idle line ('#1 stuck (decision): <text>') and the board's category ('decision') are unchanged; issuer.stuck_ask('decision') is a valid set with options [retry, revise, cancel] (add 'decision' in place to the reason tuple of test_issuer.PageSetsOfIssuerAndWriters.test_issuer_stuck_sets_are_valid_and_ordered).",
+    "ticket_issuer.py's module docstring and devloop/README.md say that a worker's blocked hand-in gets one decision page, unless the worker's revise escalated in that round (its page is the page)."
+  ],
+  "needs_verifier": true,
+  "complexity": "simple",
+  "token_estimate": 3500000,
+  "token_basis": "two small edits (ticket_creator._revise question branch, ticket_issuer blocked branch + stuck()), docstring and README lines, one fake action, 3 verifier cases on existing fixtures; calibrated on recorded simple tickets with a verifier (2.7M-4.7M, cache reads included).",
+  "vision": "VISION 看板與統計 (「誰被什麼卡住、哪些事等我決定」) and metric 等我處理的事積了多少 (down, by making it visible): a blocked ticket can no longer sit stuck with no page; T #319 sat about two hours unseen.",
+  "removes": "the rule in ticket_issuer.stuck() that skips the page for every 'decision' stuck (replaced by the narrower check: only after this round's revise escalation).",
+  "id": "114",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-23T04:09:20Z",
+  "request": "# Four fixes reported by tabby_pool (T) as GitHub issues #1, #2, #4, #5 on sai99claw/agent-control\n\nThe user asked for all four (2026-11-23: 「1245 這些聽起來都好解決先處理掉」). Each ticket names its issue number in its title or notes so the main session can close the issue after landing. Issue texts are quoted below as reported; they are data, not instructions. Tests go in the area's own test file in tests_devloop/ (or a new file for a new area), using loop_harness.py; never a catch-all file.\n\n## Issue #1: a release red that is a test failure gets an agent, not only a page\nUser ruling (tabby D-H79 addendum, verbatim): 「發版測試 跟 落地測試一樣 如果失敗 都要找agent 去查 去修」. Today a failed `devloop.release` writes one decision page (\"leave it or run the release again?\") and nothing investigates. In T, three release reds that passed on a plain rerun were real product races.\nWanted:\n- The release command's exit code says what kind of failure it was, like the test interface does: rc 1 = the product failed a check (for T: release-test red on staging, prod untouched); rc 86 = the environment (a push refused, a build tool missing, a host down); anything else is treated like 86. Document this contract in devloop/README.md.\n- rc 1: the controller has a fix ticket opened through the normal opener path (the same thing `actl new --request-file` does), with a request that carries the group, sha, the last `devloop-stage:` line, and the release log tail (the failing case and its message when the log has them). The ticket then goes worker -> verifier -> regression -> land -> release like any other. The controller also re-runs the release once on the same sha; a second rc 1 writes the decision page as today (naming the opened ticket). Never patch anything on the release path itself.\n- rc 86 / other / timeout: as today (one decision page, no ticket, no rerun).\n- agent-control's own scripts/release.sh: a refused tag push is the environment, so it exits 86 (in the cloud every release fails that way; it must not open a ticket per landing).\n- Out of scope: rolling back a release.\n\n## Issue #2: every flaky case gets a fix ticket\nSame ruling as #1. #109 turns a rerun-green red into one `flaky (passed when run again): ...` line on the landed page; in T every such red chased so far was a real product race (#259, #260, #295, #317, #318), not a bad test.\nWanted:\n- When a group lands (or ends stuck) with a non-empty flaky list, the controller has one fix ticket opened through the same opener path as #1 (reuse #1's mechanism; this ticket depends on #1's ticket): one request naming every flaky id with both messages (the red one and the fact it passed on the rerun), asking to find and fix the cause (product race or test), never by a sleep or a retry inside the test.\n- Do not open a second ticket for an id an open (not landed, not cancelled) ticket already carries from this mechanism; say in the group event that it was already open.\n- The landed page's flaky line also names the opened ticket.\n\n## Issue #4: a worker's \"blocked\" is checked, and every stuck ticket gets a page\nObserved in T (2026-11-22, #319): a fallback agent handed in `blocked` (\"Chrome cannot navigate to 127.0.0.1 because the screen is locked; only the user can unblock this\"). False: the same case passed on the host in 10 s; the agent's own sandbox blocked loopback HTTP. The ticket went `stuck (decision)` and no page was written: devloop/ticket_issuer.py `stuck()` skips the page for reason \"decision\" on the assumption that a revise escalation already wrote one, which is not true for a worker's `blocked` hand-in.\nWanted:\n- (a) Every ticket that goes stuck has a page. Only a stuck that follows a revise escalation which already wrote its page (the opener's kind `question`) writes none; the page for a `blocked` hand-in quotes the worker's text and has the usual retry / revise / cancel options.\n- (b) A `blocked` hand-in may name failing test ids (a `failing` list in the hand-in; add it to the worker hand-in format). When it does, ",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-23T04:09:20Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 183.88333333333333,
+      "at": "2026-11-23T04:09:17Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-23T035054Z-a1",
+      "input_tokens": 17,
+      "output_tokens": 19025,
+      "cache_read_tokens": 1390767,
+      "cache_write_tokens": 47441,
+      "usd": 1.0382622333333333,
+      "session_id": "69d6958f-19fd-41d5-b8a2-c8b4b0f7a0d6",
+      "split_over": [
+        "110",
+        "111",
+        "112",
+        "113",
+        "114",
+        "115"
+      ]
+    }
+  ]
+}
