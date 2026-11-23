@@ -9,7 +9,7 @@
     "A stuck group's page: each decision page written when a group stops - the controller's 'still red after N fix rounds' (after_regression and drop_redder_round), 'cannot catch up with main' (fix_main_moved), and auto_fixer's 'the fixer needs your decision', 'input from the web was NOT acted on' and 'the fixer left <branch> ...' - has, when core.chain.behind() of that group is not empty, the whole line 'later groups waiting for <gid> to land: <k> (<gA>, <gB>)' (k = how many, ids in chain order); with nothing behind it, no such line. Fixtures: (a) self.config(max_rounds=1), self.add(1), self.add(2), self.plan(worker={'1': ['red']}, fixer={'g1': ['nothing']}): the decision page with ref 'g1' whose text starts 'group g1 is still red after 1 fix rounds' has the line 'later groups waiting for g1 to land: 1 (g2)'; (b) self.add(1), self.add(2), self.plan(worker={'1': ['red']}, fixer={'g1': ['blocked']}): the decision page with ref 'g1' whose text starts 'group g1: the fixer needs your decision' has that line.",
     "Board DAG tab: the lane of every group in core.chain.order() gets data-place=\"<k>\" and the title part '鏈上第 <k> 個' appended at the end of its title; a lane whose group waits (waits_for() names gM) also gets data-waits=\"<gM>\" and the part '等 <gM> 落地' after it; lanes of landed or cancelled groups get neither. Fixture: g21 pr with members ['1', '7'] (tickets 1 and 7 merged, group g21) and g22 open with ['3', '4', '8'] (tickets ready, group g22): g21's lane has data-place '1', no data-waits, and its title ends with ' · 2 張 · 鏈上第 1 個'; g22's lane has data-place '2', data-waits 'g21', and its title ends with ' · 3 張 · 鏈上第 2 個 · 等 g21 落地'.",
     "devloop/README.md: the Dashboard text on the DAG tab's lane titles and the idle-page row of 'What the main session runs' mention the place and the wait.",
-    "Old cases changed in place: tests_devloop/test_board_dag.py's exact lane-title literals (after issue #6 part 2 they end in ' · 2 張') gain the chain parts their fixture's groups get (' · 鏈上第 1 個' for a lane whose group is first in the chain); tests_devloop/test_controller.py T63Acceptance.test_a_dependency_merged_in_a_stuck_group_is_named_with_its_group's expected lines gain 'g2 waits for g1 to land (place 2 in the chain)' as the last line."
+    "Old cases changed in place: tests_devloop/test_board_dag.py's exact lane-title literals (after issue #6 part 2 they end in ' · 2 張') gain the chain parts their fixture's groups get (' · 鏈上第 1 個' for a lane whose group is first in the chain); tests_devloop/test_group_members.py T118Acceptance.test_a_lane_counts_its_members_without_a_cap's expected title ending (lane g21, a pr group alone and so first in the chain) becomes ' · 2 張 · 鏈上第 1 個' instead of ' · 2 張'; tests_devloop/test_controller.py T63Acceptance.test_a_dependency_merged_in_a_stuck_group_is_named_with_its_group's expected lines gain 'g2 waits for g1 to land (place 2 in the chain)' as the last line."
   ],
   "needs_verifier": true,
   "complexity": "complex",
@@ -43,6 +43,16 @@
       "at": "2026-11-23T05:17:59Z",
       "event": "round start",
       "round": 1
+    },
+    {
+      "at": "2026-11-23T05:21:07Z",
+      "event": "revised",
+      "source": "worker",
+      "fields": [
+        "acceptance"
+      ],
+      "cases_wrong": false,
+      "run": "revise-2026-11-23T052023Z"
     }
   ],
   "cost": [
