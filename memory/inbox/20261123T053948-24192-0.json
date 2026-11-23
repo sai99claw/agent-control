@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "fixer",
+  "text": "When a ticket makes empty groups close themselves, re-check old unit fixtures that build groups with members []: an assertion like 'nothing started' can pass only because the fixture's groups were cancelled first.",
+  "source": "group g5 fix r1",
+  "at": "2026-11-23T05:39:47Z"
+}
