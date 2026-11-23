@@ -2,7 +2,7 @@
   "id": "g4",
   "branch": "int/g4",
   "base": "7be8b0b682293e35e08c11dbc9fc375cfac68789",
-  "state": "open",
+  "state": "pr",
   "alone": false,
   "members": [
     "110",
@@ -23,6 +23,10 @@
     {
       "at": "2026-11-23T04:09:54Z",
       "event": "main moved to 2a0e6ef56f62: fast-forwarded int/g4 to it"
+    },
+    {
+      "at": "2026-11-23T04:23:31Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "main_tried": "2a0e6ef56f6254044355285a448647c48508b64f"
