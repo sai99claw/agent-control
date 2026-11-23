@@ -17,6 +17,9 @@ ticket_issuer.py
   2 x max_rounds rounds in all)
   worker thinks the ticket is wrong -> it runs ticket_creator.py --revise itself
 group complete (= one PR, a local mark) -> regression.py (preflight + quick, if declared + full suite)
+  groups form one chain (core/chain.py, group-number order): the regression (or a fix round)
+    starts only when every earlier group is landed or cancelled; a stuck group with no merged
+    ticket holds no one
   quick or full red with 1-5 failing cases -> those ids run once more (`run <ids>`); the ones that
     pass are flaky: not red, named in the report's `flaky` and on the group's pages
   red -> auto_fixer.py on the integration branch (max 3 rounds) -> regression again
@@ -86,6 +89,14 @@ branch as it was, is not retried for the same main sha (`main_tried` on the grou
 nothing until the group is due for its regression (pr or fixing, no job, not paused under
 `--forever`): then auto_fixer runs with a main-moved report instead of the regression, counted as a
 fix round (at `devloop.max_rounds`: stuck "main kept moving" and a decision page).
+
+Groups form one chain (issue #6), in group-number order (g5 before g10). A group in pr or fixing
+starts its regression, a main-moved fix round or a retried fix round only when
+every earlier group is landed or cancelled, so a group that waited merges main once and runs its regression once;
+following main goes on while it waits, and landing a verified group is not gated. A stuck group
+with no merged ticket holds no one (it has nothing to verify or land); a stuck group with a merged
+ticket, or a paused one, holds every later group until it lands or is cancelled. A group that
+only waits does not keep a controller without `--forever` running: it ends with the idle page.
 
 A fix round that leaves the branch redder is dropped (#74). auto_fixer records `fix_start_sha` (the
 branch head the fixer agent starts from, after its own clean merge of main) in the same pool write

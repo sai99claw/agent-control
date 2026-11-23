@@ -905,5 +905,166 @@ class MemberLeavesUnit(LoopCase):
         self.assertEqual(s.groups["g1"]["history"], [])
 
 
+class ChainGateUnits(LoopCase):
+    """#117 acceptance 2, 6, 7, 8 (the implementer's): what the controller starts for a group in
+    pr or fixing while an earlier group holds the chain, and what tick() counts as work."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def group(self, gid, state, members, merged=(), **fields):
+        """A group with its own branch off main; members in `merged` are merged tickets of it."""
+        git(self.proj, "branch", "int/" + gid, "main")
+        for ident in members:
+            self.add(ident, state="merged" if ident in merged else "stuck", group=gid)
+        g = {"id": gid, "branch": "int/" + gid, "state": state, "alone": False,
+             "members": list(members), "fix_round": 0, "job": None}
+        g.update(fields)
+
+        def change(tx):
+            tx.put_group(g)
+        self.pool.update(change, "test: group %s" % gid)
+
+    def ctl(self, forever=False):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = forever
+        c.started, c.landed = [], []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        c.land = lambda g: c.landed.append(g["id"])
+        return c
+
+    def history(self, gid):
+        return [h.get("event") or "" for h in self.snap().groups[gid].get("history") or []]
+
+    def commit_main(self, rel, text):
+        with open(os.path.join(self.proj, rel), "w") as fh:
+            fh.write(text)
+        git(self.proj, "add", "--", rel)
+        git(self.proj, "commit", "-q", "-m", "m")
+        return git(self.proj, "rev-parse", "HEAD")
+
+    def test_a_later_pr_group_waits_for_an_earlier_pr_group(self):
+        self.group("g1", "pr", ["1"], merged=["1"])
+        self.group("g2", "pr", ["2"], merged=["2"])
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [("g1", "regression")])
+
+    def test_a_waiting_group_still_follows_main(self):
+        self.group("g1", "pr", ["1"], merged=["1"], job={"kind": "regression", "stamp": {}, "out": "x"})
+        self.group("g2", "pr", ["2"], merged=["2"])
+        main = self.commit_main("NOTES.md", "n\n")
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [])
+        self.assertEqual(git(self.proj, "rev-parse", "int/g2"), main)
+        self.assertIn("main moved to %s: fast-forwarded int/g2 to it" % main[:12], self.history("g2"))
+
+    def test_no_main_moved_fix_round_while_waiting(self):
+        self.group("g1", "fixing", ["1"], merged=["1"])
+        self.group("g2", "pr", ["2"], merged=["2"])
+        tree = os.path.join(self.tmp, "side")
+        git(self.proj, "worktree", "add", "-q", tree, "int/g2")
+        with open(os.path.join(tree, "shared.txt"), "w") as fh:
+            fh.write("group\n")
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", "c")
+        git(self.proj, "worktree", "remove", "--force", tree)
+        self.commit_main("shared.txt", "main\n")
+        c = self.ctl()
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind)) if gid == "g2" else None
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [])
+        g = self.snap().groups["g2"]
+        self.assertEqual((g["state"], g["fix_round"]), ("pr", 0))
+        self.assertTrue(any("conflicts with int/g2" in e for e in self.history("g2")))
+
+    def test_no_retried_fix_round_while_waiting(self):
+        report = os.path.join(self.tmp, "fix-report.json")
+        with open(report, "w") as fh:
+            fh.write("{}")
+        self.group("g1", "pr", ["1"], merged=["1"], job={"kind": "regression", "stamp": {}, "out": "x"})
+        self.group("g2", "fixing", ["2"], merged=["2"], fix_retry=True, fix_report=report, fix_round=1)
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [])
+        self.assertEqual(self.snap().groups["g2"]["fix_round"], 1)
+
+    def test_landing_a_verified_group_is_not_gated(self):
+        self.group("g1", "pr", ["1"], merged=["1"], job={"kind": "regression", "stamp": {}, "out": "x"})
+        self.group("g2", "verified", ["2"], merged=["2"])
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(c.landed, ["g2"])
+
+    def test_stuck_without_merged_member_and_cancelled_hold_no_one(self):
+        self.group("g1", "stuck", ["1"])
+        self.group("g2", "cancelled", ["2"])
+        self.group("g3", "pr", ["3"], merged=["3"])
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [("g3", "regression")])
+
+    def test_stuck_with_merged_member_holds(self):
+        self.group("g1", "stuck", ["1", "2"], merged=["1"])
+        self.group("g3", "pr", ["3"], merged=["3"])
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [])
+
+    def paused_holds(self, forever):
+        self.group("g1", "pr", ["1"], merged=["1"], paused={"reason": "env", "at": "x", "text": ""})
+        self.group("g2", "pr", ["2"], merged=["2"])
+        c = self.ctl(forever=forever)
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind)) if gid == "g2" else None
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [])
+
+    def test_a_paused_group_holds_under_forever(self):
+        self.paused_holds(True)
+
+    def test_a_paused_group_holds_without_forever(self):
+        self.paused_holds(False)
+
+    def busy(self):
+        c = self.ctl()
+        c.finish_jobs = c.advance_groups = lambda snap: None
+        return c.tick()
+
+    def test_tick_does_not_count_a_waiting_group(self):
+        self.group("g1", "stuck", ["1", "2"], merged=["1"])
+        self.group("g2", "pr", ["2"], merged=["2"])
+        self.group("g3", "fixing", ["3"], merged=["3"])
+        self.assertFalse(self.busy())
+
+    def test_tick_counts_the_first_pr_group_and_groups_with_a_job(self):
+        self.group("g1", "pr", ["1"], merged=["1"])
+        self.assertTrue(self.busy())
+
+    def test_tick_counts_a_waiting_group_with_a_job(self):
+        self.group("g1", "stuck", ["1"], merged=["1"])
+        self.group("g2", "fixing", ["2"], merged=["2"], job={"kind": "fixer", "stamp": {}, "out": "x"})
+        self.assertTrue(self.busy())
+
+    def test_tick_counts_an_open_group_behind_a_holder(self):
+        self.group("g1", "stuck", ["1"], merged=["1"])
+        self.group("g2", "open", ["2"], merged=["2"])
+        self.assertTrue(self.busy())
+
+    def test_tick_counts_a_verified_group_behind_a_holder(self):
+        self.group("g1", "stuck", ["1"], merged=["1"])
+        self.group("g2", "verified", ["2"], merged=["2"])
+        self.assertTrue(self.busy())
+
+
 if __name__ == "__main__":
     unittest.main()

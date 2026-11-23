@@ -57,6 +57,12 @@ No script polls another; each records its outcome in the pool and exits.
   join it. `alone` tickets get their own group.
 - An open group whose tickets are all merged or stuck becomes the PR. A stuck ticket does not hold
   its group; its dependents wait.
+- Groups form one chain (issue #6, `core/chain.py`), in group-number order: a group in pr or
+  fixing starts its regression, main-moved fix round or retried fix round only when
+  every earlier group is landed or cancelled, so it merges main once and runs its regression once. A stuck group
+  with no merged ticket holds no one; a stuck group with a merged ticket, or a paused group, holds
+  the later ones. Following main goes on while a group waits; landing a verified group is not
+  gated. A group that only waits is not work: a controller without `--forever` ends.
 
 ## 5. Merging and landing
 

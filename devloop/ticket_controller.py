@@ -7,7 +7,9 @@ Each tick, in this order:
   2. groups       - main is merged into every waiting integration branch first (#72: clean ->
                     no state change; a conflict -> the fixer once the group is due for its
                     regression); an open group whose tickets are all merged or stuck becomes a
-                    PR; a PR gets a regression; red -> auto_fixer (at most devloop.max_rounds);
+                    PR; groups form one chain (core/chain.py, in group-number order): a PR
+                    gets a regression (or a fix round) only when
+                    every earlier group is landed or cancelled - a stuck group with no merged ticket holds no one; red -> auto_fixer (at most devloop.max_rounds);
                     green -> main fast-forwards to the integration branch (a main that moved
                     meanwhile is merged in and verified again) and the project's release runs;
                     a release that exits 1 (the product failed a check) has the opener open a
@@ -40,7 +42,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import agents, codemap, host, memory, osx, pages, release  # noqa: E402
+from core import agents, chain, codemap, host, memory, osx, pages, release  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -197,7 +199,9 @@ class Controller:
         snap = self.pool.snapshot()
         keeping = self.consolidate(snap)
         running = [t for t in snap.tickets.values() if t.get("state") == "running"]
-        active = [g for g in snap.groups.values() if g.get("state") in ("open", "pr", "fixing", "verified")]
+        active = [g for g in snap.groups.values()
+                  if g.get("state") in ("open", "verified") or g.get("job")
+                  or (g.get("state") in ("pr", "fixing") and chain.waits_for(snap, g["id"]) is None)]
         return bool(started or keeping or running or active or self.children)
 
     # ------------------------------------------------------------ 1. jobs
@@ -271,6 +275,8 @@ class Controller:
                 elif members:
                     self.set_group(g["id"], "stuck", "no ticket of the group got merged")
             elif state in ("pr", "fixing") and not g.get("job"):
+                if chain.waits_for(self.pool.snapshot(), g["id"]) is not None:
+                    continue                   # an earlier group still holds the chain
                 if g.get("paused") and self.forever:
                     continue                   # waits for `tickets.py rerun gN`
                 if behind:
