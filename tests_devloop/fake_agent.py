@@ -73,6 +73,10 @@ if role == "worker":
         open(os.path.join(os.path.dirname(result_path), "revise.out"), "w").write(out.stdout + out.stderr)
         hand({"kind": "blocked", "text": "waiting for the user's decision"})
         sys.exit(0)
+    if action == "blocked_failing":   # issue #4b: blocked with failing ids from $FAKE_FAILING
+        hand({"kind": "blocked", "text": "cannot reach 127.0.0.1 from this sandbox",
+              "failing": json.loads(os.environ.get("FAKE_FAILING") or '["suite.base"]')})
+        sys.exit(0)
     open("impl_%s.txt" % ticket, "w").write("bad" if action == "wrong" else "ok")
     if action == "red":
         open("red.txt", "w").write("x")

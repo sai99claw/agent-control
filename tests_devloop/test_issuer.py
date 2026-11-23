@@ -630,6 +630,116 @@ class FreeRounds(LoopCase):
                          "conflict, 1 revision); last feedback:\nround 4: last")
 
 
+class T115Acceptance(LoopCase):
+    """Ticket #115 (issue #4b): a blocked hand-in's failing ids are run by devloop; when they pass,
+    the worker runs again in a round that does not count. Expected values come from the ticket and
+    the fakes (fake_agent 'blocked_failing', fake_tests' rerun rows), never from ticket_issuer.py."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.run_ids = os.path.join(self.tmp, "run-ids.txt")
+        self.env["FAKE_RUN_IDS"] = self.run_ids
+
+    def run_loop(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap()
+
+    def ids_run(self):
+        if not os.path.exists(self.run_ids):
+            return []
+        with open(self.run_ids) as fh:
+            return [line.strip() for line in fh if line.strip()]
+
+    def decision_pages(self, snap):
+        return [row for row in snap.inbox.values() if row.get("kind") == "decision" and row.get("ref") == "1"]
+
+    def worker_rows(self, t):
+        return [(row.get("round"), row.get("model")) for row in t.get("cost") or [] if row.get("role") == "worker"]
+
+    # ------------------------------------------------------------ acceptance 1
+
+    def test_1_the_worker_prompt_shows_a_blocked_hand_in_with_failing_ids(self):
+        import string
+        from core import agents
+        fields = {f for _, f, _, _ in string.Formatter().parse(agents.raw("worker.md")) if f}
+        text = agents.render("worker.md", {f: "VALUE_%s" % f for f in fields})
+        self.assertIn('"blocked"', text)
+        self.assertIn('"failing"', text, "worker.md does not show a blocked hand-in with a \"failing\" list")
+
+    # ------------------------------------------------------------ acceptance 2
+
+    def test_2_passing_ids_give_a_free_agent_env_round_and_the_ticket_lands(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["blocked_failing", "ok"]})
+        snap = self.run_loop()
+        t = snap.ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 2), t.get("stuck"))
+        fed = [h for h in t["history"] if h["event"] == "feedback" and h.get("round") == 1]
+        self.assertEqual([h.get("free") for h in fed], ["agent_env"], t["history"])
+        prompt = os.path.join(self.tmp, "wt", "runs", "1", "r2-worker", "prompt.md")
+        self.assertTrue(os.path.exists(prompt), "no round-2 worker prompt at %s" % prompt)
+        with open(prompt) as fh:
+            text = fh.read()
+        self.assertIn("passed when devloop ran them", text)
+        self.assertIn("suite.base", text)
+        self.assertEqual(self.ids_run(), ["suite.base"])
+        self.assertEqual(self.decision_pages(snap), [])
+
+    # ------------------------------------------------------------ acceptance 3
+
+    def test_3_the_free_round_runs_the_next_command_of_a_two_command_chain(self):
+        self.config(agents=dict({r: AGENT for r in ROLES},
+                                worker_simple=[AGENT + ["--model", "w1"], AGENT + ["--model", "w2"]]))
+        self.add(1)
+        self.plan(worker={"1": ["blocked_failing", "ok"]})
+        t = self.run_loop().ticket("1")
+        self.assertEqual(t["state"], "landed", t.get("stuck"))
+        self.assertEqual(self.worker_rows(t), [(1, "w1"), (2, "w2")])
+
+    def test_3_a_chain_of_one_command_runs_the_same_command_again(self):
+        self.config(agents=dict({r: AGENT for r in ROLES}, worker_simple=[AGENT + ["--model", "w1"]]))
+        self.add(1)
+        self.plan(worker={"1": ["blocked_failing", "ok"]})
+        t = self.run_loop().ticket("1")
+        self.assertEqual(t["state"], "landed", t.get("stuck"))
+        self.assertEqual(self.worker_rows(t), [(1, "w1"), (2, "w1")])
+
+    # ------------------------------------------------------------ acceptance 4
+
+    def test_4_ids_that_do_not_pass_leave_one_decision_page(self):
+        self.env["FAKE_FAILING"] = '["impl.impl_1.txt"]'
+        self.add(1)
+        self.plan(worker={"1": ["blocked_failing"]})
+        snap = self.run_loop()
+        t = snap.ticket("1")
+        self.assertEqual(t["state"], "stuck")
+        self.assertEqual(t["stuck"]["reason"], "decision")
+        self.assertEqual(self.ids_run(), ["impl.impl_1.txt"], "devloop did not run the worker's ids")
+        found = self.decision_pages(snap)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("cannot reach 127.0.0.1 from this sandbox", found[0]["text"])
+        self.assertIn("impl.impl_1.txt", found[0]["text"])
+
+    # ------------------------------------------------------------ acceptance 5
+
+    def test_5_a_worker_that_keeps_blocking_stops_at_twice_max_rounds(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["blocked_failing"]})
+        t = self.run_loop().ticket("1")
+        self.assertEqual((t["state"], t["stuck"]["reason"], t["round"]), ("stuck", "rounds", 2), t.get("stuck"))
+        self.assertIn("2 rounds used and still not passing (0 real red, 2 free: 0 merge conflict, "
+                      "0 revision, 2 agent environment)", t["stuck"]["text"])
+
+
 class T11Acceptance(LoopCase):
     """Ticket #11: a revision the opener finished reaches the pool even when the worker is stopped."""
 
