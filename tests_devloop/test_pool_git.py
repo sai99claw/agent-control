@@ -211,6 +211,41 @@ class AgentControlRelease(GitIsolatedCase):
             self.assertEqual(json.load(fh)["devloop"]["release"], "sh scripts/release.sh")
 
 
+class T110Acceptance(GitIsolatedCase):
+    """release.sh exits 86 (the environment) when its tag exists or its push is refused."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="ac-release-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.git("init", "-q", "-b", "main")
+        self.git("-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "c")
+        self.sha = self.git("rev-parse", "HEAD").strip()
+
+    def git(self, *args):
+        return subprocess.run(["git"] + list(args), cwd=self.tmp, check=True, capture_output=True,
+                              text=True).stdout
+
+    def release(self, **env):
+        full = dict(os.environ, GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@x")
+        full.pop("DEVLOOP_REMOTE", None)
+        full.update(env)
+        return subprocess.run(["sh", os.path.join(HOME, "scripts", "release.sh")], cwd=self.tmp,
+                              env=full, capture_output=True, text=True)
+
+    def test_refused_push_exits_86(self):
+        res = self.release(DEVLOOP_RELEASE_SHA=self.sha, DEVLOOP_GROUP="g2", DEVLOOP_REMOTE="nowhere")
+        self.assertEqual(res.returncode, 86, res.stderr)
+        self.assertIn("not pushed", res.stderr)
+
+    def test_existing_tag_exits_86(self):
+        first = self.release(DEVLOOP_RELEASE_SHA=self.sha, DEVLOOP_GROUP="g2")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        again = self.release(DEVLOOP_RELEASE_SHA=self.sha, DEVLOOP_GROUP="g2")
+        self.assertEqual(again.returncode, 86, again.stderr)
+        self.assertIn("already exists", again.stderr)
+
+
 class DagRules(unittest.TestCase):
     def test_problems(self):
         dag = {"1": {"depends_on": ["2"]}, "2": {"depends_on": ["1"]}, "3": {"depends_on": ["9"]},
