@@ -1,0 +1,17 @@
+{
+  "id": "g4",
+  "branch": "int/g4",
+  "base": "7be8b0b682293e35e08c11dbc9fc375cfac68789",
+  "state": "open",
+  "alone": false,
+  "members": [],
+  "fix_round": 0,
+  "job": null,
+  "created": "2026-11-23T04:09:29Z",
+  "history": [
+    {
+      "at": "2026-11-23T04:09:29Z",
+      "event": "opened from main 7be8b0b68229"
+    }
+  ]
+}
