@@ -20,7 +20,8 @@ calls ticket_creator.py --revise itself (it is in the worker's prompt); a revisi
 handed in but nobody wrote into the pool (the worker was stopped meanwhile) is written in by the
 issuer before the next round starts. Out of rounds, out of
 time, hard_block, environment, or a question only the user can answer -> the ticket is "stuck"
-and the main session gets one page.
+and the main session gets one page. A worker's blocked hand-in gets one decision page, unless
+the worker's revise escalated in that round (its page is the page).
 
 An agent whose last command hits the account's usage limit does not lose the round: the issuer
 waits for the reset (agents.quota_wait), its ticket stays "running" with a "waiting" mark and the
@@ -54,9 +55,9 @@ class Interrupted(Exception):
 
 
 class Stuck(Exception):
-    def __init__(self, reason, text):
+    def __init__(self, reason, text, page=True):
         super().__init__(text)
-        self.reason, self.text = reason, text
+        self.reason, self.text, self.page = reason, text, page
 
 
 THROWN_OUT = ("the ticket was revised during this round and the revision threw out the "
@@ -224,7 +225,14 @@ class Issuer:
             memory.collect(self.pool, h, "#%s r%d %s" % (self.id, r, h.role))
         whand = hands[0] if work else None
         if whand and whand.kind == "blocked":
-            raise Stuck("decision", whand.result.get("text") or "worker says the ticket needs your decision")
+            escalated = False   # an 'escalated' event after the last 'round start': its page is the page
+            for h in self.ticket().get("history") or []:
+                if h.get("event") == "round start":
+                    escalated = False
+                elif h.get("event") == "escalated":
+                    escalated = True
+            raise Stuck("decision", whand.result.get("text") or "worker says the ticket needs your decision",
+                        page=not escalated)
         if cases_thrown_out(self.ticket()):
             # This round's verifier (if any) wrote against the old ticket: do not red-check or
             # save its cases; the next round writes them again and restarts the worker.
@@ -493,14 +501,14 @@ class Issuer:
 
     # ------------------------------------------------------------ endings
 
-    def stuck(self, reason, text):
+    def stuck(self, reason, text, page=True):
         def mutate(t):
             t["state"], t["run"] = "stuck", None
             t.pop("waiting", None)
             t["stuck"] = {"reason": reason, "text": text, "at": osx.now()}
             event(t, "stuck", reason=reason)
         self.save(mutate, "stuck (%s)" % reason)
-        if reason != "decision":   # a revise that escalated already wrote its page
+        if page:   # not when the worker's revise escalated in this round: that page is the page
             self.pool.report("env" if reason == "env" else "decision", self.id,
                              "#%s is stuck (%s): %s" % (self.id, reason, text), **self.stuck_ask(reason))
 
@@ -618,7 +626,7 @@ def _go(issuer):
         return issuer.go()
     except Stuck as exc:
         issuer.stop_agents()
-        _safe(lambda: issuer.stuck(exc.reason, exc.text))
+        _safe(lambda: issuer.stuck(exc.reason, exc.text, exc.page))
         print("ticket_issuer: #%s stuck (%s): %s" % (issuer.id, exc.reason, exc.text), file=sys.stderr)
         return 1
     except Interrupted as exc:
