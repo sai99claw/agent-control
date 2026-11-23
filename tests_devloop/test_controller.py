@@ -835,7 +835,7 @@ class T72Acceptance(LoopCase):
         return sha
 
     def open_group(self):
-        self.add(1)
+        self.add(1, group="g1")
         git(self.proj, "branch", "int/g1", "main")
         g = {"id": "g1", "branch": "int/g1", "state": "open", "alone": False, "members": ["1"],
              "fix_round": 0, "job": None}
@@ -1400,7 +1400,7 @@ class FollowMainUnits(LoopCase):
 
     def test_untouched_groups(self):
         """Item 8: landed, cancelled, with a job, no branch."""
-        self.add(1)
+        self.add(1, group="g4")
         self.group("g1", state="landed")
         self.group("g2", state="cancelled")
         self.group("g3", state="pr", job={"kind": "regression", "stamp": {}, "out": "x"})
@@ -1493,7 +1493,7 @@ class FollowMainUnits(LoopCase):
 
     def test_a_lost_swap_is_not_tried(self):
         from core.gitx import Git
-        self.add(1)
+        self.add(1, group="g1")
         self.group()
         old = git(self.proj, "rev-parse", "int/g1")
         self.commit_on("main", {"NOTES.md": "n\n"})

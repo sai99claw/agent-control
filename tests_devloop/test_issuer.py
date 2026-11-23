@@ -144,8 +144,11 @@ class T100Acceptance(LoopCase):
 
     def test_8_two_tickets_of_a_group_on_the_same_file_one_lands_the_other_gets_free_merge_rounds(self):
         self.config(max_rounds=1)
-        self.add(1)
-        self.add(2)
+        self.add(1, group="g1")
+        self.add(2, group="g1")
+        g = {"id": "g1", "branch": "int/g1", "state": "open", "members": ["1", "2"], "fix_round": 0,
+             "job": None, "created": "2026-11-23T00:00:00Z", "history": []}
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1")   # #118: one group, as an opening writes it
         self.plan(worker={"1": ["shared"], "2": ["shared"]})
         snap = self.run_loop()
         states = {i: snap.ticket(i)["state"] for i in ("1", "2")}
