@@ -112,16 +112,16 @@ class T100Acceptance(LoopCase):
         rs, fb = self.rs, self.fb
         cases = [
             ({"round": 3, "history": [rs(1), fb(1, "merge"), rs(2), fb(2, "revision"), rs(3), fb(3, None)]},
-             {"merge": 1, "revision": 1}),
+             {"merge": 1, "revision": 1, "agent_env": 0}),
             ({"round": 1, "history": [rs(1), fb(1, "merge"), rs(2), fb(2, "merge"),
                                       {"event": "user decision: ready"}, rs(1), fb(1, "revision")]},
-             {"merge": 0, "revision": 1}),
+             {"merge": 0, "revision": 1, "agent_env": 0}),
             ({"round": 0, "history": [rs(1), fb(1, "merge"), rs(2), fb(2, "merge"),
                                       {"event": "user decision: ready"}]},
-             {"merge": 0, "revision": 0}),
+             {"merge": 0, "revision": 0, "agent_env": 0}),
             ({"round": 1, "history": [{"event": "round start"}, {"event": "feedback", "round": 1}]},
-             {"merge": 0, "revision": 0}),
-            ({}, {"merge": 0, "revision": 0}),
+             {"merge": 0, "revision": 0, "agent_env": 0}),
+            ({}, {"merge": 0, "revision": 0, "agent_env": 0}),
         ]
         for t, want in cases:
             with self.subTest(t=t):
@@ -1106,6 +1106,108 @@ class HardBlockOwnChange(LoopCase):
     def test_branch_started_from_newer_main_does_not_count_main(self):
         issuer, g = self._issuer_for(True, "impl.py", "y = 2\n", patterns=["FORBIDDEN_MARK"])
         issuer.hard_block(g)
+
+
+class BlockedCheckUnits(unittest.TestCase):
+    """Issuer.blocked_check and the agent-environment free round (implementer's tests of #115)."""
+
+    def issuer(self, chain_len=2):
+        import ticket_issuer
+        iss = object.__new__(ticket_issuer.Issuer)
+        iss.id, iss.branch, iss._free, iss.started_agents = "9", "t/9", None, []
+        iss.cases_branch, iss.target = "t/9-cases", "int/g1"
+        iss.wt, iss.deadline = "/nowhere", time.time() + 600
+        iss.cfg = mock.Mock()
+        iss.cfg.agent_chain.return_value = [["a"]] * chain_len
+        iss.cfg.runs_dir.return_value = "/nowhere/runs/9"
+        iss.test_slot = mock.Mock()
+        return iss
+
+    def work(self, index):
+        return mock.Mock(index=index, chain_role="worker", role="worker")
+
+    def test_invalid_failing_runs_nothing_and_is_stuck_with_the_text(self):
+        import ticket_issuer
+        for bad in (None, [], "suite.base", [1], ["a", None], {"a": 1}):
+            with self.subTest(failing=bad):
+                iss = self.issuer()
+                with mock.patch.object(ticket_issuer.testrun, "run") as run:
+                    with self.assertRaises(ticket_issuer.Stuck) as cm:
+                        iss.blocked_check(self.work(0), "no net", bad)
+                run.assert_not_called()
+                iss.test_slot.assert_not_called()
+                self.assertEqual((cm.exception.reason, cm.exception.text, cm.exception.page),
+                                 ("decision", "no net", True))
+
+    def test_green_makes_the_round_free_and_moves_to_the_next_command(self):
+        import ticket_issuer
+        green = mock.Mock(status=ticket_issuer.testrun.GREEN)
+        for index, size, want in ((0, 2, 1), (1, 2, 1), (0, 1, 0)):
+            with self.subTest(index=index, size=size):
+                iss = self.issuer(size)
+                with mock.patch.object(ticket_issuer.testrun, "run", return_value=green) as run:
+                    text = iss.blocked_check(self.work(index), "no net", ["suite.base", "x.y"])
+                self.assertEqual(run.call_count, 1)
+                args, kw = run.call_args
+                self.assertEqual(args[1:4], ("/nowhere", "run", ["suite.base", "x.y"]))
+                self.assertEqual(kw["keep_dir"], os.path.join("/nowhere/runs/9", "blocked-check"))
+                iss.test_slot.return_value.release.assert_called_once_with()
+                self.assertEqual((iss._free, iss.next_worker), ("agent_env", want))
+                self.assertIn("passed when devloop ran them on t/9", text)
+                self.assertIn("(no net)", text)
+                self.assertIn("(suite.base x.y)", text)
+
+    def test_not_green_is_stuck_with_the_summary(self):
+        import ticket_issuer
+        for status in (ticket_issuer.testrun.RED, ticket_issuer.testrun.ENV,
+                       ticket_issuer.testrun.UNMEASURED):
+            with self.subTest(status=status):
+                iss = self.issuer()
+                out = mock.Mock(status=status)
+                out.summary.return_value = "SUMMARY"
+                with mock.patch.object(ticket_issuer.testrun, "run", return_value=out):
+                    with self.assertRaises(ticket_issuer.Stuck) as cm:
+                        iss.blocked_check(self.work(0), "no net", ["impl.impl_1.txt"])
+                self.assertEqual(cm.exception.reason, "decision")
+                self.assertEqual(cm.exception.text,
+                                 "no net\ndevloop ran the ids the worker named: SUMMARY")
+                self.assertIsNone(iss._free)
+                self.assertEqual(iss.next_worker, 0)
+
+    def test_rounds_text_names_agent_environment_only_when_there_is_one(self):
+        import ticket_issuer
+        hist = [{"event": "round start", "round": 1},
+                {"event": "feedback", "round": 1, "free": "agent_env"},
+                {"event": "feedback", "round": 2, "free": "merge"},
+                {"event": "feedback", "round": 3}]
+        t = {"round": 3, "feedback": ["round 3: last"], "history": hist}
+        self.assertEqual(ticket_issuer.free_rounds(t), {"merge": 1, "revision": 0, "agent_env": 1})
+        self.assertEqual(ticket_issuer.rounds_text(t),
+                         "3 rounds used and still not passing (1 real red, 2 free: 1 merge "
+                         "conflict, 0 revision, 1 agent environment); last feedback:\nround 3: last")
+        t["history"] = hist[:1] + hist[2:]
+        self.assertIn("(1 real red, 1 free: 1 merge conflict, 0 revision); last",
+                      ticket_issuer.rounds_text(dict(t, round=2)))
+
+    def test_the_next_worker_index_is_used_once(self):
+        import ticket_issuer
+        iss = self.issuer()
+        iss.next_worker, iss.pending = 1, []
+        iss.cfg.max_rounds, iss.cfg.agent_timeout_seconds = 1, 60
+        iss.cfg.base_test_ids, iss.cfg.index_path = [], None
+        iss.cfg.agent.return_value = ["a"]
+        iss.check_time = lambda: None
+        firsts = []
+        with mock.patch.object(ticket_issuer.agents, "start",
+                               side_effect=lambda *a, **kw: firsts.append(kw.get("first")) or mock.Mock(waited=0.0)), \
+                mock.patch.object(ticket_issuer.agents, "render", return_value="p"), \
+                mock.patch.object(ticket_issuer.memory, "for_prompt", return_value=""), \
+                mock.patch.object(ticket_issuer.memory, "project_path", return_value=""):
+            t = {"id": "9", "complexity": "complex"}
+            iss.start("verifier", "verifier.md", t, 1, "/nowhere")
+            iss.start("worker", "worker.md", t, 1, "/nowhere")
+            iss.start("worker", "worker.md", t, 2, "/nowhere")
+        self.assertEqual(firsts, [0, 1, 0])
 
 
 if __name__ == "__main__":

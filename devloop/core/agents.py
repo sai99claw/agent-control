@@ -134,9 +134,10 @@ _model = model_of   # older name, still imported in places
 # ---------------------------------------------------------------- running
 
 def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None, round_no=None,
-          chain_role=None, on_quota=None):
+          chain_role=None, on_quota=None, first=0):
     """Start an agent without waiting. Returns a Pending. `chain_role` picks the commands when
-    they differ from the role's (a simple ticket's worker uses "worker_simple").
+    they differ from the role's (a simple ticket's worker uses "worker_simple"). `first` starts
+    the chain at that index; a quota wait then restarts from that command too.
 
     `on_quota(phase, row=None, until=None, text=None)`: when given, a run whose last command is
     out of quota waits for the reset instead of ending. Before the wait it is called with phase
@@ -147,11 +148,11 @@ def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None,
     osx.atomic_write(os.path.join(run_dir, "prompt.md"), prompt)
     env = cfg.env(DEVLOOP_ROLE=role, DEVLOOP_RUN_DIR=run_dir, DEVLOOP_RESULT=result_path,
                   **(extra_env or {}))
-    chain = [with_effort(argv, effort) for argv in cfg.agent_chain(chain_role or role)]
+    chain = [with_effort(argv, effort) for argv in cfg.agent_chain(chain_role or role)][first:]
     extra = extra_env or {}
     p = Pending(role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg,
                 on_quota=on_quota, chain_role=chain_role, ticket=extra.get("DEVLOOP_TICKET"),
-                group=extra.get("DEVLOOP_GROUP"))
+                group=extra.get("DEVLOOP_GROUP"), first=first)
     p.launch()
     return p
 
@@ -168,12 +169,17 @@ class Interrupted(Exception):
 
 class Pending:
     def __init__(self, role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg=None,
-                 on_quota=None, chain_role=None, ticket=None, group=None):
+                 on_quota=None, chain_role=None, ticket=None, group=None, first=0):
         self.role, self.chain, self.prompt, self.cwd, self.env = role, chain, prompt, cwd, env
         self.run_dir, self.result_path, self.timeout, self.round_no = run_dir, result_path, timeout, round_no
         self.cfg = cfg
         self.on_quota = on_quota
         self.full_chain = list(chain)
+        # index, in the role's whole chain, of the command running now (its hand-in is the one
+        # finish() collects); the chain given here starts at index `first`
+        self.first = first
+        self.index = None
+        self.popped = 0
         self.started = time.time()
         self.proc = self.argv = self.log = self.slot = None
         # seconds spent waiting for a machine slot (every launch adds) or for a quota reset
@@ -241,6 +247,7 @@ class Pending:
             env = dict(self.env, **{slots.ENV: self.slot.path})
         while self.chain:
             argv = self.chain.pop(0)
+            self.popped += 1
             try:
                 os.unlink(self.result_path)
             except FileNotFoundError:
@@ -258,6 +265,7 @@ class Pending:
                 last = exc
                 continue
             self.argv = argv
+            self.index = self.first + self.popped - 1
             return
         raise osx.OSFailure("no command for %s could start (%s)" % (self.role, last))
 
@@ -322,6 +330,7 @@ class Pending:
         self.waited += time.time() - began
         self.on_quota("over")
         self.chain = list(self.full_chain)
+        self.popped = 0
         self.tried = []
         self.started = time.time()
         self.waited_before = self.waited

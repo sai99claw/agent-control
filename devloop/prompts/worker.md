@@ -50,7 +50,11 @@ written), or ESCALATED (stop and hand in "blocked").
 Write JSON to {result_path}, then stop:
 
     {{"kind": "done", "summary": "what you changed and what you ran"}}
-    {{"kind": "blocked", "text": "why only the user can unblock this"}}
+    {{"kind": "blocked", "text": "why only the user can unblock this", "failing": ["<test id>", ...]}}
+
+When you are blocked because tests fail in your own environment, list their ids in "failing":
+devloop runs those ids itself, and when they pass it starts you again in a round that does not
+count; leave "failing" out when the block is not about tests.
 
 Add "lessons" to your hand-in only for something this run taught you that a future agent should
 know - one principle per entry, no story:

@@ -1157,5 +1157,55 @@ class ProjectRulesHome(unittest.TestCase):
             self.assertIn(word, sec.replace("Project memory", "project memory"))
 
 
+class ChainStartUnits(LoopCase):
+    """agents.start(first=N) and Pending.index (implementer's tests of #115)."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    cfg = QuotaWaitUnits.cfg
+
+    def hands_in(self, mark, quota=False):
+        body = 'echo "usage limit reached"; exit 1' if quota else \
+            'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"'
+        return ["sh", "-c", "cat >/dev/null; : %s; %s" % (mark, body)]
+
+    def test_first_starts_the_chain_there_and_index_counts_in_the_whole_chain(self):
+        from core import agents
+        chain = [self.hands_in("c0"), self.hands_in("c1"), self.hands_in("c2")]
+        for first in (0, 1, 2):
+            with self.subTest(first=first):
+                p = agents.start(self.cfg(chain), "worker", "go", self.proj,
+                                 os.path.join(self.tmp, "run%d" % first), 30, first=first)
+                hand = p.finish()
+                self.assertEqual(hand.kind, "done")
+                self.assertEqual(p.index, first)
+                self.assertIn(": c%d;" % first, p.argv[-1])
+                self.assertEqual(len(p.full_chain), 3 - first)
+
+    def test_a_fallback_moves_the_index_and_a_quota_wait_restarts_from_first(self):
+        from core import agents
+        count = os.path.join(self.tmp, "count")
+        once = ["sh", "-c", 'cat >/dev/null; : c2; n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s; '
+                'if [ "$n" -lt 1 ]; then echo "usage limit reached"; exit 1; fi; '
+                'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"' % (count, count)]
+        chain = [self.hands_in("c0"), self.hands_in("c1", quota=True), once]
+        p = agents.start(self.cfg(chain, quota_retry_seconds=1), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30, first=1, on_quota=lambda *a, **kw: None)
+        hand = p.finish()
+        self.assertEqual(hand.kind, "done")
+        # c1 quota -> c2 quota (last) -> wait -> restart at c1 (not c0) -> c1 quota -> c2 hands in
+        self.assertEqual(p.index, 2)
+        self.assertEqual(p.logs, 4)
+        self.assertEqual([h["model"] for h in hand.cost["fell_back_from"]], ["sh"])
+
+
 if __name__ == "__main__":
     unittest.main()

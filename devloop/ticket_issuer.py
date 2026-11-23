@@ -2,8 +2,9 @@
 """ticket_issuer --id N --target int/gK : take one ticket from "running" to "merged".
 
 Started only by ticket_controller. Per round (at most devloop.max_rounds rounds that were not
-free - a round that ended on a merge conflict with the group or on a revision that threw out the
-verifier's cases is free - and at most 2 x max_rounds rounds in all; whole run at most
+free - a round that ended on a merge conflict with the group, on a revision that threw out the
+verifier's cases, or on a blocked worker whose failing ids passed when devloop ran them is
+free - and at most 2 x max_rounds rounds in all; whole run at most
 devloop.issuer_timeout_seconds (time waiting for a machine slot or for a usage limit to reset
 not counted)):
 
@@ -21,7 +22,10 @@ handed in but nobody wrote into the pool (the worker was stopped meanwhile) is w
 issuer before the next round starts. Out of rounds, out of
 time, hard_block, environment, or a question only the user can answer -> the ticket is "stuck"
 and the main session gets one page. A worker's blocked hand-in gets one decision page, unless
-the worker's revise escalated in that round (its page is the page).
+the worker's revise escalated in that round (its page is the page). When the blocked hand-in
+names "failing" test ids, devloop runs them on the ticket branch first: when they pass, the block
+was the agent's own environment, the round is free (agent_env) and the worker runs again next
+round on the next command of its chain.
 
 An agent whose last command hits the account's usage limit does not lose the round: the issuer
 waits for the reset (agents.quota_wait), its ticket stays "running" with a "waiting" mark and the
@@ -77,13 +81,13 @@ def cases_thrown_out(t):
 
 
 def free_rounds(t):
-    """{"merge": M, "revision": V}: the free 'feedback' events of the ticket's current run (after
-    the last 'round start' with round 1) whose round is <= t['round']."""
+    """{"merge": M, "revision": V, "agent_env": A}: the free 'feedback' events of the ticket's
+    current run (after the last 'round start' with round 1) whose round is <= t['round']."""
     hist = t.get("history") or []
     starts = [i for i, h in enumerate(hist) if h.get("event") == "round start" and h.get("round") == 1]
     hist = hist[starts[-1]:] if starts else hist
     r = int(t.get("round") or 0)
-    out = {"merge": 0, "revision": 0}
+    out = {"merge": 0, "revision": 0, "agent_env": 0}
     for h in hist:
         if (h.get("event") == "feedback" and h.get("free") in out
                 and int(h.get("round") or 0) <= r):
@@ -96,6 +100,8 @@ class Issuer:
     # own test runs waited for a machine slot: neither counts against issuer_timeout_seconds.
     started_agents = ()
     test_waited = 0.0
+    # Chain index the next worker starts at (set by a blocked hand-in whose ids passed; used once)
+    next_worker = 0
 
     def __init__(self, cfg, pool, ident, target):
         self.cfg, self.pool, self.id, self.target = cfg, pool, str(ident), target
@@ -159,7 +165,7 @@ class Issuer:
         while True:
             free = free_rounds(t)
             used = int(t.get("round") or 0)
-            if not (used - free["merge"] - free["revision"] < rounds and used < 2 * rounds):
+            if not (used - sum(free.values()) < rounds and used < 2 * rounds):
                 break
             # A revision the opener handed in while its ticket_creator.py was stopped (with the
             # worker that ran it) is written into the pool before the round reads the ticket.
@@ -231,8 +237,12 @@ class Issuer:
                     escalated = False
                 elif h.get("event") == "escalated":
                     escalated = True
-            raise Stuck("decision", whand.result.get("text") or "worker says the ticket needs your decision",
-                        page=not escalated)
+            text = whand.result.get("text") or "worker says the ticket needs your decision"
+            if escalated:
+                raise Stuck("decision", text, page=False)
+            blocked = self.blocked_check(work, text, whand.result.get("failing"))
+        else:
+            blocked = None
         if cases_thrown_out(self.ticket()):
             # This round's verifier (if any) wrote against the old ticket: do not red-check or
             # save its cases; the next round writes them again and restarts the worker.
@@ -241,7 +251,9 @@ class Issuer:
             return THROWN_OUT, costs
 
         problems = []
-        if whand and whand.problem():
+        if blocked:
+            problems.append(blocked)
+        elif whand and whand.problem():
             problems.append(whand.problem())
         elif whand:
             self.worker_ok = True
@@ -295,6 +307,28 @@ class Issuer:
         if failed:
             return failed, costs
         return self.integrate(g, t), costs
+
+    def blocked_check(self, work, text, ids):
+        """A blocked worker named failing test ids: run them on the ticket branch. Green -> the
+        round is free (agent_env), the next worker starts on the next command of the chain, and
+        the feedback text is returned. Otherwise (no valid ids, or not green) -> Stuck."""
+        if not (isinstance(ids, list) and ids and all(isinstance(x, str) for x in ids)):
+            raise Stuck("decision", text)
+        self.check_time()
+        slot = self.test_slot()
+        try:
+            out = testrun.run(self.cfg, self.wt, "run", ids, timeout=self.left(),
+                              keep_dir=os.path.join(self.cfg.runs_dir(self.id), "blocked-check"))
+        finally:
+            slot.release()
+        if out.status != testrun.GREEN:
+            raise Stuck("decision", text + "\ndevloop ran the ids the worker named: " + out.summary())
+        self._free = "agent_env"
+        size = len(self.cfg.agent_chain(work.chain_role or work.role))
+        self.next_worker = min(work.index + 1, size - 1)
+        return ("the worker handed in blocked (%s), but the ids it named (%s) passed when devloop "
+                "ran them on %s: the block was the agent's own environment, not the ticket; "
+                "continue the work" % (text, " ".join(ids), self.branch))
 
     def integrate(self, g, t):
         """Take in the latest target, re-test if it changed anything, move the target."""
@@ -436,10 +470,13 @@ class Issuer:
             "project_memory": memory.project_path(self.cfg),
         }
         timeout = min(self.cfg.agent_timeout_seconds, self.left())
+        first = 0
+        if role == "worker":
+            first, self.next_worker = self.next_worker, 0
         p = agents.start(self.cfg, role, agents.render(template, values), cwd, run_dir, timeout,
                          extra_env={"DEVLOOP_TICKET": self.id, "AC_CODE_ROOT": cwd},
                          effort=t.get("effort") if role == "worker" else None, round_no=r,
-                         chain_role=chain, on_quota=self.on_quota)
+                         chain_role=chain, on_quota=self.on_quota, first=first)
         self.pending.append(p)
         self.started_agents.append(p)
         return p
@@ -567,10 +604,11 @@ class Issuer:
 def rounds_text(t):
     """The 'rounds' stuck text: rounds used, split into real reds and free rounds, last feedback."""
     r, free = int(t.get("round") or 0), free_rounds(t)
-    m, v = free["merge"], free["revision"]
+    m, v, a = free["merge"], free["revision"], free["agent_env"]
     return ("%d rounds used and still not passing (%d real red, %d free: %d merge conflict, "
-            "%d revision); last feedback:\n%s" % (
-                r, r - m - v, m + v, m, v, "\n".join((t.get("feedback") or [])[-1:])))
+            "%d revision%s); last feedback:\n%s" % (
+                r, r - m - v - a, m + v + a, m, v, ", %d agent environment" % a if a else "",
+                "\n".join((t.get("feedback") or [])[-1:])))
 
 
 def complexity(t):

@@ -12,7 +12,8 @@ ticket_controller.py (no LLM, the only driver)
 ticket_issuer.py
   worker + verifier -> (reviewer) -> verifier's cases -> worker's branch merged into int/<group>
   failing step = feedback for the next round (max 3 rounds, 3 hours; a round that ended on a
-  merge conflict with the group or on a revision that threw out the cases does not count, at most
+  merge conflict with the group, on a revision that threw out the cases, or on a blocked worker
+  whose failing ids passed when devloop ran them (agent environment) does not count, at most
   2 x max_rounds rounds in all)
   worker thinks the ticket is wrong -> it runs ticket_creator.py --revise itself
 group complete (= one PR, a local mark) -> regression.py (preflight + quick, if declared + full suite)
@@ -165,7 +166,7 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 | Role | Script | When | Default models | Writes |
 |---|---|---|---|---|
 | `creator` | `ticket_creator.py` | for the main session's request, or for a worker that runs `--revise` | opus xhigh | hand-in `tickets` (tickets and DAG entries), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
-| `worker` | `ticket_issuer.py` | for each ticket round (complex tickets) | opus medium | code and unit tests committed on the ticket branch; hand-in `done` or `blocked` (a `blocked` hand-in gets one decision page, unless the worker's revise escalated in that round: its page is the page) |
+| `worker` | `ticket_issuer.py` | for each ticket round (complex tickets) | opus medium | code and unit tests committed on the ticket branch; hand-in `done` or `blocked` (with optional `failing` test ids: devloop runs them on the ticket branch, and when they pass the worker runs again on the next command of its chain in a round that does not count; otherwise a `blocked` hand-in gets one decision page, unless the worker's revise escalated in that round: its page is the page) |
 | `worker_simple` | `ticket_issuer.py` | instead of `worker` when the ticket has `complexity: simple` | sonnet medium | the same as `worker` |
 | `verifier` | `ticket_issuer.py` | at the same time as the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases` |
 | `reviewer` | `ticket_issuer.py` | after the worker, for complex tickets | opus medium | hand-in `review` (verdict pass or fail, feedback); edits nothing |
