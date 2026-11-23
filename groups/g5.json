@@ -51,9 +51,15 @@
     {
       "at": "2026-11-23T05:35:17Z",
       "event": "fixer started"
+    },
+    {
+      "at": "2026-11-23T05:35:20Z",
+      "event": "fixer agent started (round 1)"
     }
   ],
   "main_tried": "4c0471b33f24d1d3e7b8a3e31ac4cbf09f33d7eb",
   "last_regression": "2 failing:\n- test_controller.PausedGroupPieces.test_forever_skips_a_paused_group_only AssertionError \n- test_controller.T51Acceptance.test_2_3_4_forever_pauses_goes_on_and_rerun_lands AssertionError ",
-  "fix_report": "/home/user/agent-control-devloop/runs/regression/g5/result-1795411632.json"
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g5/result-1795411632.json",
+  "fix_agent_round": 1,
+  "fix_start_sha": "5380b5465e02872e8b94993d1949fbbe42800bc0"
 }
