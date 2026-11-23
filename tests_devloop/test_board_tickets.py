@@ -600,7 +600,7 @@ class T39Acceptance(LoopCase):
                  waiting={"reason": "quota", "since": "2026-11-06T10:00:00", "until": "2026-11-06T15:00:00",
                           "text": "resets 3pm"})
         page = self.render()
-        heads = ["票", "狀態", "輪", "整合分支", "相依", "一起驗", "驗證者", "覆核", "token", "快取讀", "快取寫",
+        heads = ["票", "狀態", "輪", "整合分支", "相依", "驗證者", "覆核", "token", "快取讀", "快取寫",
                  "分鐘", "估 token", "說明", "標題"]
         note = heads.index("說明")
         state = heads.index("狀態")

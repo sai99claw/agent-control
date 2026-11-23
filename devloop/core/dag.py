@@ -1,13 +1,11 @@
-"""The DAG file: which ticket waits for which, and whether it may be verified with others.
+"""The DAG file: which ticket waits for which.
 
-    {"tickets": {"203": {"depends_on": ["201", "202"], "verify": "together"},
-                 "204": {"depends_on": ["203"], "verify": "alone", "why_alone": "..."}}}
+    {"tickets": {"203": {"depends_on": ["201", "202"]},
+                 "204": {"depends_on": ["203"]}}}
 
-`verify` is "together" unless the ticket is a systemic change (D-080); a missing value means
-"together".
+Which group a ticket is verified in is not here: it is the ticket's 'group', written when the
+ticket is opened (core/pool.new_group).
 """
-
-VERIFY = ("together", "alone")
 
 
 def node(dag, ident):
@@ -16,10 +14,6 @@ def node(dag, ident):
 
 def deps(dag, ident):
     return [str(d) for d in node(dag, ident).get("depends_on") or []]
-
-
-def verify(dag, ident):
-    return node(dag, ident).get("verify") or "together"
 
 
 def problems(dag, known_tickets=()):
@@ -41,10 +35,6 @@ def problems(dag, known_tickets=()):
                 out.append("#%s depends on #%s, which does not exist" % (ident, d))
             if str(d) == str(ident):
                 out.append("#%s depends on itself" % ident)
-        if row.get("verify", "together") not in VERIFY:
-            out.append("#%s: verify must be together or alone" % ident)
-        if row.get("verify") == "alone" and not row.get("why_alone"):
-            out.append("#%s: verify alone needs why_alone (only for a systemic change)" % ident)
     cycle = find_cycle(dag)
     if cycle:
         out.append("cycle: " + " -> ".join("#" + c for c in cycle))

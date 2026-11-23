@@ -1,8 +1,9 @@
 """The ticket pool: a git repository that holds the only state of the loop.
 
     tickets/<id>.json   one ticket
-    dag.json            {"tickets": {"<id>": {"depends_on": [...], "verify": "together"|"alone"}}}
-    groups/<gid>.json   one integration branch (= one PR)
+    dag.json            {"tickets": {"<id>": {"depends_on": [...]}}}
+    groups/<gid>.json   one integration branch (= one PR); a ticket's group is written when it is
+                        opened (new_group) and the controller only follows it
     inbox/<name>.json   reports for the main session
     memory/inbox/<name>.json   lessons waiting to be consolidated; memory/state.json
     memory/discussions/<name>.md   records of two-model consolidations
@@ -340,3 +341,19 @@ def leave_group(tx, t):
         g["members"] = [m for m in g.get("members") or [] if m != t["id"]]
         event(g, "member #%s left: back to ready" % t["id"])
         tx.put_group(g)
+
+
+def new_group(tx, ids, why):
+    """Write the next group (at the end of the chain) with `ids` as its members and set each of
+    those tickets' 'group' to it; one group event `why`. No git: the controller makes the branch
+    from main right before the first start. Returns the group id."""
+    gid = tx.data.next_group_id()
+    g = {"id": gid, "branch": "int/" + gid, "state": "open", "members": list(ids), "fix_round": 0,
+         "job": None, "created": osx.now()}
+    event(g, why)
+    tx.put_group(g)
+    for ident in ids:
+        t = tx.ticket(ident)
+        t["group"] = gid
+        tx.put_ticket(t)
+    return gid

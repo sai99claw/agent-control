@@ -5,9 +5,9 @@ Five scripts, one git-backed ticket pool, one DAG file: agent-control's loop (D-
 (`actl new`, `actl run`, `actl tickets …`, `actl board …`). Python 3.8+ standard library only; Linux and macOS.
 
 ```
-you -> main session -> ticket_creator.py -> opener (LLM) -> pool: tickets + dag.json
+you -> main session -> ticket_creator.py -> opener (LLM) -> pool: tickets + dag.json + their group
 ticket_controller.py (no LLM, the only driver)
-  reads the DAG, groups tickets, opens integration branch int/<group> from main,
+  reads the DAG, follows each ticket's group, makes branch int/<group> from main at its first start,
   starts ticket_issuer.py --id N --target int/<group> (parallelism decided here)
 ticket_issuer.py
   worker + verifier -> (reviewer) -> verifier's cases -> worker's branch merged into int/<group>
@@ -53,7 +53,7 @@ Run them from the project (or set `AC_ROOT` to it).
 
 `release` is required (every project ships a release script; the controller only calls it, with
 `DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS`, `DEVLOOP_RELEASE_DIR` set; it runs in a throwaway checkout that is removed afterwards, so anything it produces goes to `$DEVLOOP_RELEASE_DIR` = `<worktrees>/runs/release/<group>/`, which devloop never empties; its whole output is kept in `<worktrees>/runs/release/<group>.log`, named on the group as `release_log` and in the page) and is stopped after `release_timeout_seconds` (default 3600). A release that exits 1 at landing (the product failed a check) has the opener open a fix ticket for it (`ticket_creator.py --by controller --origin '{"kind": "release", "group": ..., "sha": ...}'`; none while a ticket opened this way is still open, its number goes on the page instead) and then runs once more on the same sha; the controller waits for that opener run (minutes) and the rerun decides the group's `release` and page; it changes nothing on main or in the release. Every other outcome runs once (see **Release exit codes**). Everything else has a default:
-`pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_group_size` 10 (a `together` ticket opens a new integration branch once the open one has this many members; no ticket that is not yet a member joins a group that is full, whichever path chose it), `max_rounds` 3,
+`pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_rounds` 3,
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
 `agents.<role>` (the command that starts an agent; prompt on stdin),
@@ -89,6 +89,22 @@ branch as it was, is not retried for the same main sha (`main_tried` on the grou
 nothing until the group is due for its regression (pr or fixing, no job, not paused under
 `--forever`): then auto_fixer runs with a main-moved report instead of the regression, counted as a
 fix round (at `devloop.max_rounds`: stuck "main kept moving" and a decision page).
+
+A ticket's group is written when it is opened, and the controller only follows it (issue #6
+part 2). The tickets of one opener hand-in become the members of one new group at the end of the
+chain, in the same pool write as the tickets (`opened by the opener for #N, #M`); the opening makes
+no git branch, and `dag.json` keeps only `depends_on`. A ready ticket starts only in its own group
+while that group is open, once each dependency is landed or merged in the same group and, with a
+landed one, the group's branch contains main or does not exist yet; the controller makes the branch
+from main's current sha right before the first start and records that sha as the group's `base`.
+An open group with no running member and no ready member that can still start goes on: its ready
+members leave it, then it becomes pr (a merged member remains), stuck (other members remain) or
+cancelled (none remains); a group with no members left is cancelled. Existing pools: a ready
+ticket written before this change has no group and gets a group of its own at the end of the chain,
+one group each, in ticket order, once its dependencies allow (each is landed, running, merged, or
+ready in an open group; first event `opened for #N, which had no open group`), so nothing is lost;
+the same holds for a ticket that left its group. The group-size setting and the DAG's `verify` are
+gone; a config or `dag.json` that still has them is accepted.
 
 Groups form one chain (issue #6), in group-number order (g5 before g10). A group in pr or fixing
 starts its regression, a main-moved fix round or a retried fix round only when

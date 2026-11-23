@@ -94,7 +94,7 @@ class T117Acceptance(LoopCase):
     def test_two_groups_reaching_pr_together_run_one_regression_each(self):
         """Acceptance 3."""
         self.add(1)
-        self.add(2, verify="alone")
+        self.add(2)
         self.run_ok()
         snap = self.snap()
         self.assertEqual((self.state(1), self.state(2)), ("landed", "landed"))
@@ -113,7 +113,7 @@ class T117Acceptance(LoopCase):
     def test_a_later_group_done_first_waits_for_the_earlier_one(self):
         """Acceptance 4."""
         self.add(1)
-        self.add(2, verify="alone")
+        self.add(2)
         self.plan(worker={"1": ["slow"]})
         self.run_ok()
         snap = self.snap()
@@ -126,7 +126,7 @@ class T117Acceptance(LoopCase):
     def test_a_stuck_group_with_a_merged_member_holds_later_groups_and_the_run_ends(self):
         """Acceptance 5."""
         self.add(1)
-        self.add(2, verify="alone")
+        self.add(2)
         self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked"]})
         self.run_ok(timeout=60)
         snap = self.snap()

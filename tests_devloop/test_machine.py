@@ -219,7 +219,7 @@ class T4Acceptance(LoopCase):
         self.log = os.path.join(self.tmp, "intervals.txt")
         self.env.update(FAKE_INTERVALS=self.log, FAKE_HOLD="1.5")
         self.add(1)
-        self.add(2, verify="alone")
+        self.add(2)
         self.plan(worker={"2": ["slow"]})
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
@@ -735,7 +735,7 @@ class T3Acceptance(LoopCase):
     def two_tickets(self, slots):
         self.intervals(slots)
         self.add(1)
-        self.add(2, verify="alone")
+        self.add(2)
         self.plan(worker={"2": ["slow"]})
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)

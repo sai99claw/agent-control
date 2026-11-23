@@ -46,7 +46,7 @@ class TheHappyPath(LoopCase):
 
     def test_an_alone_ticket_gets_its_own_integration_branch(self):
         self.add(1)
-        self.add(2, verify="alone")
+        self.add(2)
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         groups = {g["id"]: g["members"] for g in self.snap().groups.values()}
@@ -248,13 +248,10 @@ class T110Acceptance(GitIsolatedCase):
 
 class DagRules(unittest.TestCase):
     def test_problems(self):
-        dag = {"1": {"depends_on": ["2"]}, "2": {"depends_on": ["1"]}, "3": {"depends_on": ["9"]},
-               "4": {"verify": "alone"}, "5": {"verify": "sometimes"}}
+        dag = {"1": {"depends_on": ["2"]}, "2": {"depends_on": ["1"]}, "3": {"depends_on": ["9"]}}
         text = "\n".join(dagmod.problems(dag))
         self.assertIn("cycle", text)
         self.assertIn("#3 depends on #9", text)
-        self.assertIn("#4: verify alone needs why_alone", text)
-        self.assertIn("#5: verify must be together or alone", text)
 
     def test_topo_puts_dependencies_first(self):
         dag = {"3": {"depends_on": ["1", "2"]}, "2": {"depends_on": ["1"]}, "1": {}}

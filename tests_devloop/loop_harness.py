@@ -116,7 +116,7 @@ class LoopCase(GitIsolatedCase):
         with open(self.plan_path, "w") as fh:
             json.dump(roles, fh)
 
-    def add(self, ident, deps=(), verify="together", needs_verifier=True, complexity="simple", **extra):
+    def add(self, ident, deps=(), needs_verifier=True, complexity="simple", **extra):
         def change(tx):
             t = {"id": str(ident), "title": "ticket %s" % ident, "objective": "o", "acceptance": ["a"],
                  "needs_verifier": needs_verifier, "complexity": complexity, "state": "ready",
@@ -124,10 +124,7 @@ class LoopCase(GitIsolatedCase):
             t.update(extra)
             tx.put_ticket(t)
             dag = tx.data.dag
-            node = {"depends_on": [str(d) for d in deps], "verify": verify}
-            if verify == "alone":
-                node["why_alone"] = "systemic"
-            dag[str(ident)] = node
+            dag[str(ident)] = {"depends_on": [str(d) for d in deps]}
             tx.put_dag({"tickets": dag})
         self.pool.update(change, "test: add #%s" % ident)
 

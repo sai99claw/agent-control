@@ -989,8 +989,8 @@ class T63Acceptance(LoopCase):
 
     def test_a_dependency_merged_in_a_stuck_group_is_named_with_its_group(self):
         self.add(1)
-        # verify="alone": #2 cannot join g1 beside the merged #1, so it stays ready (ticket test_plan)
-        self.add(2, deps=(1,), verify="alone")
+        # #2 gets a group of its own (g2), so it stays ready waiting for #1 merged in g1 (ticket test_plan)
+        self.add(2, deps=(1,))
         self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked"]})
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -1517,7 +1517,7 @@ class FollowMainUnits(LoopCase):
 
 
 class MainAncestorJoinUnits(LoopCase):
-    """#104: a ticket with a landed dependency joins only a group whose branch has main."""
+    """#104, #118: a member with a landed dependency starts only once its group's branch has main."""
 
     def setUp(self):
         super().setUp()
@@ -1571,9 +1571,9 @@ class MainAncestorJoinUnits(LoopCase):
 
     def build(self, main_files):
         self.add(1, state="landed")
-        self.add(2, deps=[1])
+        self.add(2, deps=[1], group="g1")
         self.add(3, state="running", group="g1", target="int/g1")
-        self.group("g1", members=["3"])
+        self.group("g1", members=["3", "2"])
         self.commit_on("int/g1", {"shared.txt": "group\n"})
         self.commit_on("main", main_files)
         c = self.ctl()
@@ -1584,26 +1584,26 @@ class MainAncestorJoinUnits(LoopCase):
         c = self.build({"shared.txt": "main\n"})
         snap = self.snap()
         self.assertFalse(c.has_main(snap.groups["g1"]))
-        self.assertFalse(c.joinable(snap, "2", snap.groups["g1"]))
-        self.assertIsNone(c.group_for(snap, "2"))
+        self.assertFalse(c.can_start_now(snap, "2", snap.groups["g1"]))
+        self.assertFalse(c.can_still_start(snap, "2", snap.groups["g1"]))
 
     def test_member_and_no_landed_dep_make_no_git_call(self):
         c = self.build({"shared.txt": "main\n"})
         snap = self.snap()
         calls = []
         c.repo.is_ancestor = lambda *a: calls.append(a) or False
-        self.assertTrue(c.joinable(snap, "3", snap.groups["g1"]))
-        self.add(4)
+        self.assertTrue(c.can_start_now(snap, "3", snap.groups["g1"]))
+        self.add(4, group="g1")
         snap = self.snap()
-        self.assertTrue(c.joinable(snap, "4", snap.groups["g1"]))
+        self.assertTrue(c.can_start_now(snap, "4", snap.groups["g1"]))
         self.assertEqual(calls, [])
 
     def test_clean_merge_joins(self):
         c = self.build({"NOTES.md": "n\n"})
         snap = self.snap()
         self.assertTrue(c.has_main(snap.groups["g1"]))
-        self.assertTrue(c.joinable(snap, "2", snap.groups["g1"]))
-        self.assertEqual(c.group_for(snap, "2"), "g1")
+        self.assertTrue(c.can_start_now(snap, "2", snap.groups["g1"]))
+        self.assertTrue(c.can_still_start(snap, "2", snap.groups["g1"]))
 
 
 class NoReverifyRule(unittest.TestCase):

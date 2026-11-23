@@ -21,10 +21,7 @@
 
 # Rules for the DAG
 
-Every ticket gets a DAG entry:
+Every ticket gets a DAG entry with one field:
 
 - `depends_on`: tickets whose code this one needs. Existing ids or the placeholders of tickets
   you open in this hand-in.
-- `verify`: `"together"` (the default) means this ticket may be verified together with others
-  in one integration branch. Use `"alone"` only for a systemic change (for example: replacing how
-  the whole project builds, lands or stores data), and say why in `why_alone`.

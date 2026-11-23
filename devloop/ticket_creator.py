@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import agents, inflight, memory, osx, pages  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.pool import event, frozen_reason, leave_group  # noqa: E402
+from core.pool import event, frozen_reason, leave_group, new_group  # noqa: E402
 
 PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 TEXT_FIELDS = ("title", "objective", "outline", "test_plan", "notes")
@@ -239,10 +239,8 @@ def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None, origin
                 row["origin"] = origin
             event(row, "opened", **({"by": by} if by else {}))
             tx.put_ticket(row)
-            node = dict(result["dag"][str(t["key"])])
-            node["depends_on"] = [mapping.get(str(d), str(d)) for d in node.get("depends_on") or []]
-            node.setdefault("verify", "together")
-            dag[ident] = node
+            node = result["dag"][str(t["key"])]
+            dag[ident] = {"depends_on": [mapping.get(str(d), str(d)) for d in node.get("depends_on") or []]}
             ids.append(ident)
         if cost:
             shares = [split(r, ids) for r in cost]
@@ -250,7 +248,14 @@ def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None, origin
                 row = tx.data.tickets[ident]
                 row["cost"] = list(row.get("cost") or []) + [s[k] for s in shares]
                 tx.put_ticket(row)
+        for node in dag.values():
+            if isinstance(node, dict):
+                node.pop("verify", None)
+                node.pop("why_alone", None)
         tx.put_dag({"tickets": dag})
+        if ids:
+            ordered = sorted(ids, key=dagmod._order_key)
+            new_group(tx, ordered, "opened by the opener for " + ", ".join("#" + i for i in ordered))
         return ids
     return pool.update(change, "tickets: open from a request")
 

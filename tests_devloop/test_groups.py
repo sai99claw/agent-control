@@ -1,4 +1,4 @@
-"""integration groups: size, membership, ready / cancel of a group, rulings on a group"""
+"""integration groups: membership, ready / cancel of a group, rulings on a group"""
 
 import calendar
 import glob
@@ -123,185 +123,199 @@ class T34Acceptance(LoopCase):
         self.assertEqual(self.snap().ticket("1"), before)
 
 
-class T33Acceptance(LoopCase):
-    """#33: devloop.max_group_size caps how many tickets one integration branch takes."""
-
-    def cfg(self):
-        from core.config import Config
-        return Config(self.proj)
-
-    def groups(self):
-        return {g["id"]: g["members"] for g in self.snap().groups.values()}
-
-    def test_max_group_size_defaults_to_10_and_takes_a_setting(self):
-        self.assertEqual(getattr(self.cfg(), "max_group_size", None), 10)
-        self.config(max_group_size=3)
-        self.assertEqual(getattr(self.cfg(), "max_group_size", None), 3)
-
-    def test_bad_max_group_size_stops_tickets_list(self):
-        for bad in (0, -1, 2.5, "10", True, None):
-            with self.subTest(bad=bad):
-                self.config(max_group_size=bad)
-                res = self.run_py("tickets.py", "list")
-                self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
-                self.assertIn("devloop.max_group_size", res.stderr)
-
-    def test_three_together_tickets_with_size_2_take_two_groups(self):
-        self.config(max_group_size=2)
-        self.add(1)
-        self.add(2)
-        self.add(3)
-        res = self.controller()
-        self.assertEqual(res.returncode, 0, res.stderr)
-        for i in (1, 2, 3):
-            self.assertEqual(self.state(i), "landed", i)
-        self.assertEqual(self.groups(), {"g1": ["1", "2"], "g2": ["3"]})
-
-    def test_size_1_dependent_ticket_opens_its_group_after_g1_lands(self):
-        self.config(max_group_size=1)
-        self.add(1)
-        self.add(2, deps=[1])
-        res = self.controller()
-        self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(self.state(1), "landed")
-        self.assertEqual(self.state(2), "landed")
-        self.assertEqual(self.groups(), {"g1": ["1"], "g2": ["2"]})
-        groups = self.snap().groups
-        landed, base = groups["g1"].get("landed_sha"), groups["g2"].get("base")
-        self.assertTrue(landed and base, groups)
-        res = subprocess.run(["git", "merge-base", "--is-ancestor", landed, base], cwd=self.proj,
-                             capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0, "g2 was not opened from a main holding g1's landing")
-
-
-class T75Acceptance(LoopCase):
-    """#75: a ticket that is not a member never joins an open group that already holds
-    devloop.max_group_size members, whichever path chose the group. Expected values come from
-    the cap rule in the ticket's acceptance items, not from the code."""
+class GroupFollowUnits(LoopCase):
+    """#118 (the implementer's): the start condition, can-still-start, adoption order, the open
+    group's in-update decision, and a group with no members left."""
 
     def setUp(self):
         super().setUp()
         for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
-            self.env.pop(key, None)
+            self.env.pop(key)
         patch = mock.patch.dict(os.environ)
         patch.start()
         self.addCleanup(patch.stop)
         for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
-            os.environ.pop(key, None)
-        self.config(max_group_size=2)
+            os.environ.pop(key)
 
-    def full_g1(self, first_state="running", deps3=()):
-        """g1 open with members ['1', '2']; ticket 3 ready, `group` g1, not a member."""
-        import ticket_controller
+    def group(self, gid, members, state="open", branch=False, **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": state, "members": list(members),
+             "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z", "history": []}
+        g.update(fields)
+        if branch:
+            git(self.proj, "branch", "int/" + gid, "main")
+        self.pool.update(lambda tx: tx.put_group(g), "test: group %s" % gid)
+
+    def ctl(self):
         from core.config import Config
-        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
-        self.add(1, group="g1", state=first_state)
-        self.add(2, group="g1", state="running")
-        self.add(3, deps=deps3, group="g1")
-        gid = ctl.new_group(False)
-        self.assertEqual(gid, "g1")
-
-        def change(tx):
-            g = tx.data.groups["g1"]
-            g["members"] = ["1", "2"]
-            tx.put_group(g)
-        self.pool.update(change, "test: fill g1")
-        snap = self.snap()
-        self.assertEqual(snap.groups["g1"]["members"], ["1", "2"])
-        self.assertEqual(snap.groups["g1"]["state"], "open")
-        self.assertEqual(snap.ticket("3")["state"], "ready")
-        return ctl, ticket_controller
-
-    def test_group_for_skips_a_full_group_named_by_the_ticket(self):
-        ctl, _ = self.full_g1()
-        got = ctl.group_for(self.snap(), "3")
-        self.assertIsNotNone(got, "ticket 3 has no dependencies: it must get a group")
-        self.assertNotEqual(got, "g1", "g1 already holds max_group_size members")
-        self.assertEqual(self.snap().groups["g1"]["members"], ["1", "2"])
-
-    def test_group_for_waits_when_the_dependency_is_merged_in_a_full_group(self):
-        ctl, _ = self.full_g1(first_state="merged", deps3=[1])
-        before = set(self.snap().groups)
-        got = ctl.group_for(self.snap(), "3")
-        self.assertIsNone(got, "ticket 3 cannot join full g1 and its dependency is not landed")
-        self.assertEqual(set(self.snap().groups), before, "group_for opened a group")
-        self.assertEqual(self.snap().groups["g1"]["members"], ["1", "2"])
-
-    def test_start_issuer_refuses_a_full_group(self):
-        ctl, tc = self.full_g1()
-        calls = []
-
-        def spawn(*a, **k):
-            calls.append((a, k))
-            return mock.Mock()
-        with mock.patch.object(tc.osx, "spawn", spawn):
-            ctl.start_issuer("3", "g1")
-        snap = self.snap()
-        self.assertEqual(snap.ticket("3")["state"], "ready")
-        self.assertEqual(snap.groups["g1"]["members"], ["1", "2"])
-        self.assertEqual(calls, [], "spawn was called for a ticket refused by a full group")
-        # positive control on the same setup: with room in g1, ticket 3 is dispatched to it
-
-        def free(tx):
-            g = tx.data.groups["g1"]
-            g["members"] = ["1"]
-            tx.put_group(g)
-        self.pool.update(free, "test: room in g1")
-        with mock.patch.object(tc.osx, "spawn", spawn):
-            ctl.start_issuer("3", "g1")
-        snap = self.snap()
-        self.assertEqual(snap.ticket("3")["state"], "running")
-        self.assertEqual(snap.groups["g1"]["members"], ["1", "3"])
-        self.assertEqual(len(calls), 1)
-
-
-class GroupSizeUnits(LoopCase):
-    """devloop.max_group_size: joinable() and group_for() (implementer's unit tests)."""
-
-    def ctl(self, size):
-        from unittest import mock
         import ticket_controller
-        c = ticket_controller.Controller.__new__(ticket_controller.Controller)
-        c.cfg = mock.Mock(max_group_size=size)
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.started, c.issued = [], []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
         return c
 
-    def snap(self, members):
-        from unittest import mock
-        return mock.Mock(dag={}, tickets={"9": {}}, groups={"g1": {"id": "g1", "members": members}})
+    def commit_main(self, rel, text):
+        with open(os.path.join(self.proj, rel), "w") as fh:
+            fh.write(text)
+        git(self.proj, "add", "--", rel)
+        git(self.proj, "commit", "-q", "-m", "m")
+        return git(self.proj, "rev-parse", "HEAD")
 
-    def test_full_group_not_joinable(self):
-        from unittest import mock
-        with mock.patch("ticket_controller.dagmod.verify", return_value="together"), \
-                mock.patch("ticket_controller.dagmod.deps", return_value=[]):
-            c = self.ctl(2)
-            self.assertFalse(c.joinable(self.snap(["1", "2"]), "9", {"id": "g1", "members": ["1", "2"]}))
-            self.assertTrue(c.joinable(self.snap(["1"]), "9", {"id": "g1", "members": ["1"]}))
-            self.assertTrue(c.joinable(self.snap(["1", "9"]), "9", {"id": "g1", "members": ["1", "9"]}))
+    def events(self, gid):
+        return [h.get("event") for h in self.snap().groups[gid].get("history") or []]
 
-    def test_member_of_an_overfull_group_goes_back_to_it(self):
-        """A group filled before the cap existed keeps its members: a ready member returns to it."""
-        from unittest import mock
-        members = ["1", "2", "3"]
-        snap = mock.Mock(dag={}, tickets={"3": {"group": "g1"}},
-                         groups={"g1": {"id": "g1", "state": "open", "members": members}})
-        with mock.patch("ticket_controller.dagmod.verify", return_value="together"), \
-                mock.patch("ticket_controller.dagmod.deps", return_value=[]):
-            self.assertEqual(self.ctl(2).group_for(snap, "3"), "g1")
+    def test_landed_dependency_waits_for_a_branch_lacking_main(self):
+        self.add(1, state="landed")
+        self.add(2, deps=[1], group="g1")
+        self.group("g1", ["2"], branch=True)
+        self.commit_main("NOTES.md", "n\n")
+        c = self.ctl()
+        snap = self.snap()
+        self.assertFalse(c.can_start_now(snap, "2", snap.groups["g1"]))
+        self.assertFalse(c.can_still_start(snap, "2", snap.groups["g1"]))
+        c.dispatch(snap)
+        self.assertEqual(c.issued, [])
+        git(self.proj, "update-ref", "refs/heads/int/g1", "main")
+        snap = self.snap()
+        self.assertTrue(c.can_start_now(snap, "2", snap.groups["g1"]))
+        c.dispatch(snap)
+        self.assertEqual(c.issued, [("2", "g1")])
 
-    def test_loop_with_cap_2_keeps_every_group_at_two(self):
-        self.env.pop("DEVLOOP_TICKET", None)
-        self.env.pop("DEVLOOP_GROUP", None)
-        self.config(max_group_size=2, max_parallel=4, max_rounds=4)
-        for i in range(1, 9):
-            self.add(i, deps=[1] if i == 5 else [2] if i == 6 else [])
-        self.plan(worker={"4": ["nothing", "nothing", "ok"], "7": ["slow"]})
-        res = self.controller()
-        self.assertEqual(res.returncode, 0, res.stderr)
-        groups = self.pool.snapshot().groups
-        self.assertTrue(groups)
-        for g in groups.values():
-            self.assertLessEqual(len(g["members"]), 2, g)
-        self.assertEqual(sum(len(g["members"]) for g in groups.values()), 8)
+    def test_missing_branch_is_made_from_main_right_before_the_start(self):
+        self.add(1, state="landed")
+        self.add(2, deps=[1], group="g1")
+        self.group("g1", ["2"])
+        main = self.commit_main("NOTES.md", "n\n")
+        c = self.ctl()
+        snap = self.snap()
+        self.assertTrue(c.can_start_now(snap, "2", snap.groups["g1"]))
+        c.dispatch(snap)
+        self.assertEqual(c.issued, [("2", "g1")])
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), main)
+        self.assertEqual(self.snap().groups["g1"].get("base"), main)
+
+    def test_a_ticket_is_started_only_in_its_own_open_group(self):
+        self.add(1, group="g1")
+        self.add(2, group="g2")
+        self.group("g1", ["1"], state="stuck")
+        self.group("g2", ["2"])
+        c = self.ctl()
+        c.adopt = lambda snap: []
+        c.dispatch(self.snap())
+        self.assertEqual(c.issued, [("2", "g2")])
+
+    def test_can_still_start(self):
+        self.add(1, group="g1")                       # ready in an earlier group
+        self.add(2, state="running", group="g1")
+        self.add(3, state="merged", group="g3")       # merged in a later group
+        self.add(4, state="stuck", group="g1")
+        self.add(5, state="merged", group="g9")       # merged in a cancelled earlier group
+        self.add(6, state="ready")                    # ready without a group
+        self.group("g1", ["1", "2", "4"])
+        self.group("g3", ["3"])
+        self.group("g9", ["5"], state="cancelled")
+        for ident, dep in ((11, 1), (12, 2), (13, 3), (14, 4), (16, 6)):
+            self.add(ident, deps=[dep], group="g2")
+        self.add(15, deps=[5], group="g10")
+        self.group("g2", ["11", "12", "13", "14", "16"])
+        self.group("g10", ["15"])
+        c = self.ctl()
+        snap = self.snap()
+        got = {i: c.can_still_start(snap, i, snap.groups[snap.tickets[i]["group"]])
+               for i in ("11", "12", "13", "14", "15", "16")}
+        self.assertEqual(got, {"11": True, "12": True, "13": False, "14": False, "15": False, "16": False})
+
+    def test_adoption_counts_a_group_made_earlier_in_the_same_write(self):
+        self.add(1)
+        self.add(2, deps=[3])
+        self.add(3, deps=[1])
+        self.add(4, deps=[5])                          # #5 does not exist
+        c = self.ctl()
+        self.assertEqual(c.adopt(self.snap()), ["1", "3"])
+        snap = self.snap()
+        self.assertEqual({g: snap.groups[g]["members"] for g in snap.groups}, {"g1": ["1"], "g2": ["3"]})
+        self.assertEqual(snap.groups["g2"]["history"][0]["event"], "opened for #3, which had no open group")
+        self.assertIsNone(snap.tickets["2"].get("group"))
+        self.assertIsNone(snap.tickets["4"].get("group"))
+        self.assertEqual(c.adopt(self.snap()), ["2"])
+        self.assertEqual(self.snap().tickets["2"]["group"], "g3")
+
+    def test_adoption_leaves_a_group_that_is_not_open(self):
+        self.add(1, group="g1", target="int/g1")
+        self.group("g1", ["1"], state="stuck")
+        c = self.ctl()
+        self.assertEqual(c.adopt(self.snap()), ["1"])
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["members"], [])
+        self.assertEqual(snap.groups["g2"]["members"], ["1"])
+        self.assertEqual((snap.tickets["1"]["group"], snap.tickets["1"].get("target")), ("g2", None))
+        self.assertEqual(c.adopt(self.snap()), [])
+
+    def test_a_member_added_before_the_update_keeps_the_group_open(self):
+        self.add(1, state="stuck", group="g1")
+        self.group("g1", ["1"])
+        c = self.ctl()
+        snap = self.snap()
+        self.assertFalse(c.open_stays(snap, snap.groups["g1"]))
+
+        def opener(tx):                                 # the opener writes between snapshot and update
+            g = tx.data.groups["g1"]
+            g["members"].append("2")
+            tx.put_group(g)
+            tx.put_ticket({"id": "2", "state": "ready", "group": "g1"})
+        self.pool.update(opener, "test: a member joins")
+        self.assertIsNone(c.close_open("g1"))
+        self.assertEqual(self.snap().groups["g1"]["state"], "open")
+
+    def test_an_open_group_goes_on_after_its_ready_members_leave(self):
+        self.add(1, state="merged", group="g1")
+        self.add(2, deps=[9], group="g1", target="int/g1")
+        self.group("g1", ["1", "2"])
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        snap = self.snap()
+        self.assertEqual((snap.groups["g1"]["state"], snap.groups["g1"]["members"]), ("pr", ["1"]))
+        self.assertEqual((snap.tickets["2"]["group"], snap.tickets["2"]["target"]), (None, None))
+        self.assertEqual(self.events("g1")[-2:], ["member #2 left: it cannot start in g1",
+                                                  "all tickets merged or stuck: PR ready"])
+
+    def test_an_open_group_whose_members_all_leave_is_cancelled(self):
+        self.add(2, deps=[9], group="g1")
+        self.group("g1", ["2"])
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(self.snap().groups["g1"]["state"], "cancelled")
+        self.assertEqual(self.events("g1")[-1], "no tickets left: group closed")
+
+    def test_a_group_with_no_members_left_is_cancelled(self):
+        for state in ("stuck", "pr", "fixing"):
+            with self.subTest(state=state):
+                gid = "g" + str(len(self.snap().groups) + 1)
+                self.group(gid, [], state=state, branch=True)
+                self.ctl().advance_groups(self.snap())
+                g = self.snap().groups[gid]
+                self.assertEqual(g["state"], "cancelled")
+                self.assertEqual(g["history"][-1]["event"], "no tickets left: group closed")
+
+    def test_a_group_with_a_job_and_no_members_is_kept(self):
+        self.group("g1", [], state="pr", branch=True, job={"kind": "regression", "stamp": {}, "out": "x"})
+        self.ctl().advance_groups(self.snap())
+        self.assertEqual(self.snap().groups["g1"]["state"], "pr")
+
+    def test_tick_counts_an_open_group_only_when_a_member_can_start_now(self):
+        self.add(1, state="merged", group="g0")
+        self.add(2, deps=[1], group="g1")
+        self.group("g0", ["1"], state="stuck", branch=True)
+        self.group("g1", ["2"])
+        c = self.ctl()
+        c.finish_jobs = c.advance_groups = lambda snap: None
+        self.assertFalse(c.tick())                     # #2 waits for #1 merged in another group
+        self.add(3, group="g1")
+        self.pool.update(lambda tx: tx.data.groups["g1"]["members"].append("3")
+                         or tx.put_group(tx.data.groups["g1"]), "test: #3 joins")
+        c.dispatch = lambda snap: 0
+        self.assertTrue(c.tick())                      # #3 has no dependency: it can start now
 
 
 class T104Acceptance(LoopCase):
@@ -347,22 +361,24 @@ class T104Acceptance(LoopCase):
         c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
         return c
 
-    def layout(self, third_state):
+    def layout(self, third_state, main_file="shared.txt"):
         self.add(1, state="landed")
-        self.add(2, deps=[1])
+        self.add(2, deps=[1], group="g1")
         self.add(3, state=third_state, group="g1", target="int/g1")
         git(self.proj, "branch", "int/g1", "main")
-        g = {"id": "g1", "branch": "int/g1", "state": "open", "alone": False, "members": ["3"],
+        g = {"id": "g1", "branch": "int/g1", "state": "open", "alone": False, "members": ["3", "2"],
              "fix_round": 0, "job": None}
         self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
         self.commit_on("int/g1", {"shared.txt": "group\n"})
-        self.commit_on("main", {"shared.txt": "main\n"})
+        self.commit_on("main", {main_file: "main\n"})
         c = self.ctl()
+        c.issued = []
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
         c.advance_groups(self.snap())
         return c
 
     def test_landed_dep_does_not_join_a_group_lacking_main(self):
-        """Item 4."""
+        """Item 4 (#118: #2 is a member of g1 and is not started while int/g1 lacks main)."""
         c = self.layout("running")
         snap = self.snap()
         g1 = snap.groups["g1"]
@@ -370,15 +386,18 @@ class T104Acceptance(LoopCase):
         self.assertEqual(g1["state"], "open")
         self.assertTrue(g1.get("main_tried"), g1)
         self.assertFalse(c.repo.is_ancestor("main", "refs/heads/int/g1"))
-        self.assertIs(c.joinable(snap, "2", g1), False)
+        self.assertIs(c.can_start_now(snap, "2", g1), False)
+        c.dispatch(snap)
+        self.assertEqual(c.issued, [])
 
     def test_group_for_picks_no_group_lacking_main(self):
-        """Item 4 (group_for half): joins none, opens none."""
-        c = self.layout("running")
+        """Item 4 (#118: after a clean main commit int/g1 has main and #2 is started in g1)."""
+        c = self.layout("running", main_file="NOTES.md")
         snap = self.snap()
         self.assertEqual(snap.groups["g1"]["state"], "open")
-        self.assertFalse(c.repo.is_ancestor("main", "refs/heads/int/g1"))
-        self.assertIsNone(c.group_for(snap, "2"))
+        self.assertTrue(c.repo.is_ancestor("main", "refs/heads/int/g1"))
+        c.dispatch(snap)
+        self.assertEqual(c.issued, [("2", "g1")])
         self.assertEqual(sorted(self.snap().groups), ["g1"])
 
     def test_merged_member_lets_the_group_move_to_pr(self):
@@ -1056,9 +1075,10 @@ class ChainGateUnits(LoopCase):
         self.assertTrue(self.busy())
 
     def test_tick_counts_an_open_group_behind_a_holder(self):
+        """#118 acceptance 9: an open group counts only while a member runs or can start now."""
         self.group("g1", "stuck", ["1"], merged=["1"])
         self.group("g2", "open", ["2"], merged=["2"])
-        self.assertTrue(self.busy())
+        self.assertFalse(self.busy())
 
     def test_tick_counts_a_verified_group_behind_a_holder(self):
         self.group("g1", "stuck", ["1"], merged=["1"])

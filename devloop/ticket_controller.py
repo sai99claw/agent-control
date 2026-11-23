@@ -15,10 +15,13 @@ Each tick, in this order:
                     a release that exits 1 (the product failed a check) has the opener open a
                     fix ticket (none while one opened this way is still open) and runs once
                     more on the same sha, and that run decides the page
-  3. dispatch     - ready tickets whose dependencies are in their starting point (landed, or
-                    merged into the same integration branch) get a ticket_issuer, up to
-                    devloop.max_parallel at a time; "together" tickets share one open group,
-                    an "alone" ticket gets its own
+  3. dispatch     - a ticket's group is written when it is opened; the controller only follows
+                    it. A ready ticket with no open group gets a group of its own at the end of
+                    the chain once its dependencies can still come (adoption); a ready ticket
+                    is started only in its own open group, once its dependencies are in its
+                    starting point (landed, or merged into the same integration branch) and,
+                    with a landed one, the branch has main or does not exist yet (it is then
+                    made from main); up to devloop.max_parallel at a time
   4. memory       - one memory_keeper at a time for a memory file whose lessons are due
 
 Everything it knows is in the pool and in git, so a restart picks up where it was; issuers,
@@ -45,7 +48,7 @@ from core import dag as dagmod  # noqa: E402
 from core import agents, chain, codemap, host, memory, osx, pages, release  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
-from core.pool import event  # noqa: E402
+from core.pool import event, leave_group, new_group  # noqa: E402
 
 LOOP = os.path.dirname(os.path.abspath(__file__))
 LOST = "lost"   # merge_no_reverify: the branch moved under the compare-and-swap
@@ -200,7 +203,8 @@ class Controller:
         keeping = self.consolidate(snap)
         running = [t for t in snap.tickets.values() if t.get("state") == "running"]
         active = [g for g in snap.groups.values()
-                  if g.get("state") in ("open", "verified") or g.get("job")
+                  if g.get("state") == "verified" or g.get("job")
+                  or (g.get("state") == "open" and self.open_has_work(snap, g))
                   or (g.get("state") in ("pr", "fixing") and chain.waits_for(snap, g["id"]) is None)]
         return bool(started or keeping or running or active or self.children)
 
@@ -261,19 +265,14 @@ class Controller:
             if state not in ("landed", "cancelled") and not g.get("job") and self.all_cancelled(snap, g):
                 self.set_group(g["id"], "cancelled", "all tickets cancelled: group closed")
                 continue
+            if state not in ("landed", "cancelled", "open") and not g.get("job") and not g.get("members"):
+                self.set_group(g["id"], "cancelled", "no tickets left: group closed")
+                continue
             behind = self.follow_main(g)
             if state == "open":
-                members = [snap.tickets.get(i) or {} for i in g.get("members") or []]
-                states = [m.get("state") for m in members]
-                if any(s in ("ready", "running") for s in states):
+                if self.open_stays(snap, g):
                     continue
-                if any(self.joinable(snap, i, g) for i, t in snap.tickets.items()
-                       if t.get("state") == "ready" and i not in (g.get("members") or [])):
-                    continue                   # a waiting ticket can still join this branch
-                if "merged" in states:
-                    self.set_group(g["id"], "pr", "all tickets merged or stuck: PR ready")
-                elif members:
-                    self.set_group(g["id"], "stuck", "no ticket of the group got merged")
+                self.close_open(g["id"])
             elif state in ("pr", "fixing") and not g.get("job"):
                 if chain.waits_for(self.pool.snapshot(), g["id"]) is not None:
                     continue                   # an earlier group still holds the chain
@@ -363,6 +362,45 @@ class Controller:
                 "%s moving says nothing about %s's tickets" % (main, gid)))
             return
         self.start_fixer(gid, report, rnd + 1)
+
+    def open_stays(self, data, g):
+        """An open group stays open while a member runs or a ready member can still start."""
+        for i in g.get("members") or []:
+            t = data.tickets.get(i) or {}
+            if t.get("state") == "running":
+                return True
+            if t.get("state") == "ready" and t.get("group") == g["id"] and self.can_still_start(data, i, g):
+                return True
+        return False
+
+    def close_open(self, gid):
+        """An open group with no running member and no ready member that can still start goes on,
+        decided on the data this pool update reads: each ready member leaves it, then it becomes
+        pr (a merged member remains), stuck (other members remain) or cancelled (none remains)."""
+        def change(tx):
+            g = tx.data.groups.get(gid)
+            if not g or g.get("state") != "open" or self.open_stays(tx.data, g):
+                return None
+            for i in list(g.get("members") or []):
+                t = tx.data.tickets.get(i) or {}
+                if t.get("state") != "ready":
+                    continue
+                if t.get("group") == gid:
+                    t["group"] = t["target"] = None
+                    tx.put_ticket(t)
+                g["members"] = [m for m in g["members"] if m != i]
+                event(g, "member #%s left: it cannot start in %s" % (i, gid))
+            states = [(tx.data.tickets.get(i) or {}).get("state") for i in g["members"]]
+            if "merged" in states:
+                g["state"], why = "pr", "all tickets merged or stuck: PR ready"
+            elif states:
+                g["state"], why = "stuck", "no ticket of the group got merged"
+            else:
+                g["state"], why = "cancelled", "no tickets left: group closed"
+            event(g, why)
+            tx.put_group(g)
+            return g["state"]
+        return self.pool.update(change, "group %s: goes on" % gid)
 
     @staticmethod
     def all_cancelled(snap, g):
@@ -906,6 +944,8 @@ class Controller:
     # ------------------------------------------------------------ 3. dispatch
 
     def dispatch(self, snap):
+        if self.adopt(snap):
+            snap = self.pool.snapshot()
         running = sum(1 for t in snap.tickets.values() if t.get("state") == "running")
         room = self.cfg.max_parallel - running
         started = 0
@@ -915,97 +955,119 @@ class Controller:
             t = snap.tickets.get(ident)
             if not t or t.get("state") != "ready":
                 continue
-            gid = self.group_for(snap, ident)
-            if gid is None:
+            g = snap.groups.get(t.get("group") or "")
+            if not g or g.get("state") != "open" or not self.can_start_now(snap, ident, g):
                 continue
-            self.start_issuer(ident, gid)
+            self.make_branch(g)
+            self.start_issuer(ident, g["id"])
             snap = self.pool.snapshot()
             room -= 1
             started += 1
         return started
 
-    def joinable(self, snap, ident, group):
-        """Could ready ticket `ident` start on `group`'s branch right now?"""
-        if group.get("alone") or dagmod.verify(snap.dag, ident) == "alone":
+    @staticmethod
+    def adoptable(data, ident):
+        """A ready ticket with no open group whose every dependency is landed, running or merged,
+        or ready and a member of an open group."""
+        t = data.tickets.get(ident) or {}
+        if t.get("state") != "ready":
             return False
-        members = group.get("members") or []
-        if ident not in members and len(members) >= self.cfg.max_group_size:
+        own = data.groups.get(t.get("group") or "")
+        if own and own.get("state") == "open":
             return False
+        for d in dagmod.deps(data.dag, ident):
+            dt = data.tickets.get(d)
+            if dt is None:
+                return False
+            if dt.get("state") in ("landed", "running", "merged"):
+                continue
+            dg = data.groups.get(dt.get("group") or "")
+            if (dt.get("state") == "ready" and dg and dg.get("state") == "open"
+                    and d in (dg.get("members") or [])):
+                continue
+            return False
+        return True
+
+    def adopt(self, snap):
+        """Each adoptable ticket, in ticket-id order, leaves its old group and becomes the only
+        member of a new group at the end of the chain; one pool write. Returns the ids adopted."""
+        if not any(self.adoptable(snap, i) for i in snap.tickets):
+            return []
+
+        def change(tx):
+            done = []
+            for ident in sorted(tx.data.tickets, key=dagmod._order_key):
+                if not self.adoptable(tx.data, ident):
+                    continue
+                leave_group(tx, tx.ticket(ident))
+                new_group(tx, [ident], "opened for #%s, which had no open group" % ident)
+                done.append(ident)
+            return done
+        return self.pool.update(change, "groups: a group of its own for tickets with none")
+
+    def main_ok(self, group):
+        """The group's branch contains main or does not exist yet."""
+        return not self.repo.sha("refs/heads/" + group["branch"]) or self.has_main(group)
+
+    def can_start_now(self, data, ident, group):
+        """Every dependency is landed or merged in this group, and, with a landed one, main_ok."""
         landed = False
-        for d in dagmod.deps(snap.dag, ident):
-            dt = snap.tickets.get(d) or {}
+        for d in dagmod.deps(data.dag, ident):
+            dt = data.tickets.get(d) or {}
+            if dt.get("state") == "landed":
+                landed = True
+            elif not (dt.get("state") == "merged" and dt.get("group") == group["id"]):
+                return False
+        return not landed or self.main_ok(group)
+
+    def can_still_start(self, data, ident, group):
+        """Every dependency is landed, or ready, running or merged in this group or in an earlier
+        group that is not cancelled, and, with a landed one, main_ok."""
+        gid, landed = group["id"], False
+        for d in dagmod.deps(data.dag, ident):
+            dt = data.tickets.get(d) or {}
             if dt.get("state") == "landed":
                 landed = True
                 continue
-            if dt.get("group") == group["id"] and dt.get("state") == "merged":
+            dgid = dt.get("group") or ""
+            dg = data.groups.get(dgid)
+            if (dt.get("state") in ("ready", "running", "merged") and dg
+                    and (dgid == gid or (_gnum(dgid) < _gnum(gid) and dg.get("state") != "cancelled"))):
                 continue
             return False
-        if landed and ident not in members and not self.has_main(group):
-            return False
-        return True
+        return not landed or self.main_ok(group)
+
+    def open_has_work(self, snap, g):
+        """tick(): an open group is work while a member runs or a ready member can start now."""
+        for i in g.get("members") or []:
+            t = snap.tickets.get(i) or {}
+            if t.get("state") == "running":
+                return True
+            if t.get("state") == "ready" and t.get("group") == g["id"] and self.can_start_now(snap, i, g):
+                return True
+        return False
 
     def has_main(self, group):
         """Is main an ancestor of the group's branch?"""
         return self.repo.is_ancestor(self.cfg.main_branch, "refs/heads/" + group["branch"])
 
-    def group_for(self, snap, ident):
-        """The group this ticket would join now, creating it if needed; None = must wait."""
-        t, dag = snap.tickets[ident], snap.dag
-        alone = dagmod.verify(dag, ident) == "alone"
-        current = snap.groups.get(t.get("group") or "")
-        cur_members = (current or {}).get("members") or []
-        if (current and current.get("state") == "open"
-                and (ident in cur_members or len(cur_members) < self.cfg.max_group_size)):
-            open_group = current
-        elif alone:
-            open_group = None
-        else:
-            limit = self.cfg.max_group_size
-            open_group = next((g for _, g in sorted(snap.groups.items(), key=lambda kv: _gnum(kv[0]))
-                               if g.get("state") == "open" and not g.get("alone")
-                               and len(g.get("members") or []) < limit), None)
-        landed = False
-        for d in dagmod.deps(dag, ident):
-            dt = snap.tickets.get(d) or {}
-            if dt.get("state") == "landed":
-                landed = True
-                continue
-            if open_group and dt.get("group") == open_group["id"] and dt.get("state") == "merged":
-                continue
-            return None
-        if open_group:
-            if landed and ident not in (open_group.get("members") or []) and not self.has_main(open_group):
-                return None
-            return open_group["id"]
-        return self.new_group(alone)
-
-    def new_group(self, alone):
+    def make_branch(self, g):
+        """Right before the first start: the group's branch from main's current sha ('base')."""
+        if self.repo.sha("refs/heads/" + g["branch"]):
+            return
         main = self.cfg.main_branch
         base = self.repo.sha(main)
         if not base:
             raise Stop(2, "no %s branch in %s" % (main, self.cfg.root))
-
-        def change(tx):
-            gid = tx.data.next_group_id()
-            g = {"id": gid, "branch": "int/" + gid, "base": base, "state": "open", "alone": alone,
-                 "members": [], "fix_round": 0, "job": None, "created": osx.now()}
-            event(g, "opened from %s %s" % (main, base[:12]))
-            tx.put_group(g)
-            return gid
-        gid = self.pool.update(change, "group: open")
-        if not self.repo.sha("refs/heads/int/" + gid):
-            self.repo.run("branch", "int/" + gid, base)
-        return gid
+        self.repo.run("branch", g["branch"], base)
+        self.set_group(g["id"], None, "branch %s made from %s %s" % (g["branch"], main, base[:12]), base=base)
 
     def start_issuer(self, ident, gid):
         branch = "int/" + gid
 
         def change(tx):
             t = tx.ticket(ident)
-            if t.get("state") != "ready":
-                return False
-            members = tx.data.groups[gid]["members"]
-            if ident not in members and len(members) >= self.cfg.max_group_size:
+            if t.get("state") != "ready" or tx.data.groups[gid].get("state") != "open":
                 return False
             t["state"], t["group"], t["target"], t["run"] = "running", gid, branch, None
             t["claimed_at"] = osx.now()

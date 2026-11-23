@@ -45,18 +45,28 @@ No script polls another; each records its outcome in the pool and exits.
 - **Group states**: open → pr → (fixing) → verified → landed; stuck.
 - **Memory** (D-088; the folder is the project setting `devloop.memory`, default `memory/` in the pool; see `devloop.memory` in the README): `memory/role|model/<name>.md`, `memory/project.md`; lessons from
   hand-ins wait in the pool's `memory/inbox/`; one consolidation at a time (5 lessons or 3 days, once per 24 h).
-- **DAG** (`dag.json`): `depends_on`, `verify` = `together` (default) or `alone` (+ `why_alone`,
-  only for a systemic change).
+- **DAG** (`dag.json`): `depends_on` only. A ticket's group is not in the DAG: it is the ticket's
+  `group` and the group's `members`, written together when the ticket is opened.
 
 ## 4. Grouping and dispatch
 
-- A ready ticket may start when every dependency is in its starting point: landed, or merged into
-  the same open integration branch. Issuers branch from the integration branch head, so a ticket
-  sees the merged work of the tickets it depends on.
-- `together` tickets share the open group until it has `max_group_size` members (default 10), then the next one opens another group; a group stays open while a ready ticket could still
-  join it. `alone` tickets get their own group.
-- An open group whose tickets are all merged or stuck becomes the PR. A stuck ticket does not hold
-  its group; its dependents wait.
+- A ticket's group is written when it is opened; the controller only follows it (issue #6 part 2).
+  The tickets of one opener hand-in become the members of one new group at the end of the chain,
+  in the same pool write as the tickets; the opening makes no git branch.
+- A ready ticket starts only in its own group while that group is open, when every dependency is
+  in its starting point: landed, or merged into the same group; with a landed one, the group's
+  branch must contain main or not exist yet. The controller makes the branch from main's current
+  sha right before the first start (the group's `base`). Issuers branch from the integration
+  branch head, so a ticket sees the merged work of the tickets it depends on.
+- A ready ticket with no open group (written before this change, or one that left its group) gets
+  a group of its own at the end of the chain, in ticket order, once every dependency is landed,
+  running, merged, or ready in an open group; a ticket whose dependency is stuck, cancelled or
+  missing gets none and waits.
+- An open group stays open while a member runs or a ready member can still start (every dependency
+  landed, or ready, running or merged in this group or in an earlier group that is not cancelled).
+  Otherwise its ready members leave it and it becomes the PR when a merged member remains, stuck
+  when other members remain, cancelled when none remains. A group with no members left is
+  cancelled. A stuck ticket does not hold its group; its dependents wait.
 - Groups form one chain (issue #6, `core/chain.py`), in group-number order: a group in pr or
   fixing starts its regression, main-moved fix round or retried fix round only when
   every earlier group is landed or cancelled, so it merges main once and runs its regression once. A stuck group

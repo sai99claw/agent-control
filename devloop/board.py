@@ -942,7 +942,7 @@ def render_tickets_tab(cfg, snap, key, query, now):
     out.append('<section><h2>票</h2>%s<p class="quiet">顯示 %d / 共 %d 張票</p>' % (
         render_filters(snap, f), len(order), len(snap.tickets)))
     out.append('<div class="scroll"><table><tr><th>票</th><th>狀態</th><th>輪</th>'
-               '<th>整合分支</th><th>相依</th><th>一起驗</th><th>驗證者</th><th>覆核</th><th>token</th>'
+               '<th>整合分支</th><th>相依</th><th>驗證者</th><th>覆核</th><th>token</th>'
                '<th>快取讀</th><th>快取寫</th><th>分鐘</th><th>估 token</th><th>說明</th><th>標題</th></tr>')
     for ident in order:
         t = snap.tickets[ident]
@@ -964,13 +964,12 @@ def render_tickets_tab(cfg, snap, key, query, now):
             note = "%s:%s" % (CATEGORY_TEXT[category], note)
         written = cache_written(t)
         complex_ = t.get("complexity") == "complex" or (t.get("complexity") is None and t.get("needs_review"))
-        out.append("<tr class='s-%s'><td>#%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
+        out.append("<tr class='s-%s'><td>#%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
                    "<td>%s</td><td>%s</td>"
                    "<td class='num'>%s</td><td class='num'>%s</td><td class='num'>%s</td><td class='num'>%s</td>"
                    "<td class='num'>%s</td><td>%s</td><td>%s</td></tr>" % (
                        e(state), e(ident), e(STATE_TEXT.get(state, state)), e(t.get("round", 0)),
                        e(t.get("target") or ""), e(" ".join("#" + d for d in dagmod.deps(snap.dag, ident))),
-                       e({"together": "一起", "alone": "單獨"}.get(dagmod.verify(snap.dag, ident))),
                        e("有" if t.get("needs_verifier", True) else "無"), e("有" if complex_ else "無"),
                        e(UNKNOWN if fresh is None else format(fresh, ",")),
                        e(UNKNOWN if cached is None else format(cached, ",")),
@@ -1244,7 +1243,7 @@ def _group_key(gid):
 
 def dag_blockers(snap):
     """Ids of tickets that keep their dependents waiting for good: stuck, cancelled, or merged into a
-    stuck group (ticket_controller.joinable/group_for only start a ticket on landed or same-open-group
+    stuck group (ticket_controller.can_start_now only starts a ticket on landed or same-open-group
     merged dependencies)."""
     out = set()
     for ident, t in snap.tickets.items():
@@ -1381,7 +1380,7 @@ def dag_lane_title(cfg, g, gid, label, rows, now):
         parts.append('<a href="?group=%s">%s</a>' % (e(quote(gid)), e(last)))
     if red is not None:
         attrs.append(' data-red="%s"' % e(red))
-    members = "%d/%d" % (len(g.get("members") or []), cfg.max_group_size)
+    members = "%d" % len(g.get("members") or [])
     parts.append(e(members + " 張"))
     attrs.insert(0, ' data-members="%s"' % e(members))
     return " · ".join(parts), "".join(attrs)
