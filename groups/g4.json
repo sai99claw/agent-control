@@ -2,7 +2,7 @@
   "id": "g4",
   "branch": "int/g4",
   "base": "7be8b0b682293e35e08c11dbc9fc375cfac68789",
-  "state": "pr",
+  "state": "verified",
   "alone": false,
   "members": [
     "110",
@@ -35,8 +35,13 @@
     {
       "at": "2026-11-23T04:29:51Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-23T04:29:53Z",
+      "event": "regression green"
     }
   ],
   "main_tried": "2a0e6ef56f6254044355285a448647c48508b64f",
-  "last_regression": "green"
+  "last_regression": "green",
+  "verified_sha": "b7ab676d8ff55df4cf6ed6ed1ddc3e6df9bf6545"
 }
