@@ -2,7 +2,7 @@
   "id": "g5",
   "branch": "int/g5",
   "base": "1a689598081775ea1554fb6c09a7c3587f2c1647",
-  "state": "pr",
+  "state": "fixing",
   "alone": false,
   "members": [
     "116",
@@ -11,7 +11,7 @@
     "119",
     "120"
   ],
-  "fix_round": 0,
+  "fix_round": 1,
   "job": null,
   "created": "2026-11-23T04:42:17Z",
   "history": [
@@ -34,8 +34,13 @@
     {
       "at": "2026-11-23T05:35:13Z",
       "event": "regression red"
+    },
+    {
+      "at": "2026-11-23T05:35:15Z",
+      "event": "fix round 1"
     }
   ],
   "main_tried": "4c0471b33f24d1d3e7b8a3e31ac4cbf09f33d7eb",
-  "last_regression": "2 failing:\n- test_controller.PausedGroupPieces.test_forever_skips_a_paused_group_only AssertionError \n- test_controller.T51Acceptance.test_2_3_4_forever_pauses_goes_on_and_rerun_lands AssertionError "
+  "last_regression": "2 failing:\n- test_controller.PausedGroupPieces.test_forever_skips_a_paused_group_only AssertionError \n- test_controller.T51Acceptance.test_2_3_4_forever_pauses_goes_on_and_rerun_lands AssertionError ",
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g5/result-1795411632.json"
 }
