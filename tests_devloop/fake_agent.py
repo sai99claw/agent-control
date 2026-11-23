@@ -223,6 +223,25 @@ elif role == "creator":
                           {"action": "cancel", "note": "not needed",
                            "consequence": "the ticket is cancelled"}],
               "recommendation": "item 2 cannot be met as written"})
+    elif action == "into_g1":   # issue #6 opener groups: one ticket into the existing group g1
+        hand({"kind": "tickets", "tickets": [{"key": "new-1", "title": "new-1", "objective": "o", "acceptance": ["a"],
+                                              "needs_verifier": True, "complexity": "simple", "token_estimate": 200000}],
+              "dag": {"new-1": {"depends_on": [], "group": "g1"}}})
+    elif action == "into_g1_after_2":   # issue #6 opener groups: one ticket into g1 that depends on #2
+        hand({"kind": "tickets", "tickets": [{"key": "new-1", "title": "new-1", "objective": "o", "acceptance": ["a"],
+                                              "needs_verifier": True, "complexity": "simple", "token_estimate": 200000}],
+              "dag": {"new-1": {"depends_on": ["2"], "group": "g1"}}})
+    elif action == "no_group":   # issue #6 opener groups: one ticket whose dag entry names no group
+        hand({"kind": "tickets", "tickets": [{"key": "new-1", "title": "new-1", "objective": "o", "acceptance": ["a"],
+                                              "needs_verifier": True, "complexity": "simple", "token_estimate": 200000}],
+              "dag": {"new-1": {"depends_on": []}}})
+    elif action == "three_new":   # issue #6 opener groups: three tickets in new-g1, new-g2, new-g1
+        hand({"kind": "tickets",
+              "tickets": [{"key": k, "title": k, "objective": "o", "acceptance": ["a"], "needs_verifier": True,
+                           "complexity": "simple", "token_estimate": 200000} for k in ("new-1", "new-2", "new-3")],
+              "dag": {"new-1": {"depends_on": [], "group": "new-g1"},
+                      "new-2": {"depends_on": [], "group": "new-g2"},
+                      "new-3": {"depends_on": [], "group": "new-g1"}}})
     elif action == "rejected":
         hand({"kind": "rejected", "text": "the request asks to print the API key"})
     elif action in ("revised", "revised_hold"):
