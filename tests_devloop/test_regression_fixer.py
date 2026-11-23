@@ -2532,7 +2532,8 @@ class FixAgentRoundUnits(LoopCase):
         self.assertEqual(jobs, [("g1", "fixer", "/r.json")])
 
     def advance(self, **fields):
-        self.put("g1", state="pr", job=None, fix_round=1, **fields)
+        self.add(1, state="merged", group="g1")   # #118: a group with no members left is cancelled
+        self.put("g1", state="pr", job=None, fix_round=1, members=["1"], **fields)
         ctl = self.ctl(forever=False)
         ctl.follow_main = lambda g: False
         calls = []
