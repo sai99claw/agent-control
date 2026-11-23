@@ -61,5 +61,24 @@
   "last_regression": "2 failing:\n- test_controller.PausedGroupPieces.test_forever_skips_a_paused_group_only AssertionError \n- test_controller.T51Acceptance.test_2_3_4_forever_pauses_goes_on_and_rerun_lands AssertionError ",
   "fix_report": "/home/user/agent-control-devloop/runs/regression/g5/result-1795411632.json",
   "fix_agent_round": 1,
-  "fix_start_sha": "5380b5465e02872e8b94993d1949fbbe42800bc0"
+  "fix_start_sha": "5380b5465e02872e8b94993d1949fbbe42800bc0",
+  "cost": [
+    {
+      "role": "fixer",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": null,
+      "seconds": 263.3,
+      "at": "2026-11-23T05:39:45Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/fix/g5/r1",
+      "input_tokens": 28,
+      "output_tokens": 7351,
+      "cache_read_tokens": 886261,
+      "cache_write_tokens": 41009,
+      "usd": 0.6524562000000002,
+      "session_id": "9454968a-81d7-438c-832e-456a40a9a881"
+    }
+  ]
 }
