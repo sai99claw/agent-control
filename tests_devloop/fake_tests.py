@@ -16,6 +16,9 @@ STARTED = time.time()
 if os.environ.get("FAKE_INTERVALS"):
     atexit.register(lambda: open(os.environ["FAKE_INTERVALS"], "a").write(
         "tests %s %.3f %.3f\n" % (cmd, STARTED, time.time())))
+if os.environ.get("FAKE_SLOT_SEEN"):  # issue #7: the slot this test run ran under
+    with open(os.environ["FAKE_SLOT_SEEN"], "w") as fh:
+        fh.write(os.environ.get("DEVLOOP_SLOT") or "")
 out = os.environ.get("AC_TEST_OUT", ".")
 if os.environ.get("FAKE_NEED_SETUP") and not os.path.exists(".setup-done"):  # #36: needs worktree_setup
     print("no .setup-done in this folder")

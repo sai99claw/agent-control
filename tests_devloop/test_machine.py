@@ -864,6 +864,172 @@ class T30Acceptance(LoopCase):
         self.assertEqual((t["state"], t["round"]), ("landed", 1), t.get("stuck") or t.get("history"))
 
 
+class T116Acceptance(LoopCase):
+    """Ticket #116 (issue #7): the opener and memory consolidation start without a machine slot;
+    run_tests.py outside a slot never waits for one."""
+
+    BUSY = ("run_tests: machine busy (a regression holds the machine or every machine slot is "
+            "taken); nothing was run")
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        os.environ["AC_ROOT"] = self.proj
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def agents_cfg(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    def hold_file(self, name, seconds):
+        """Another holder (this test process) takes LOCK_EX on <worktrees>/slots/<name> and frees it
+        after `seconds`; returns the list the release time is appended to."""
+        import fcntl
+        import threading
+        slot_dir = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slot_dir, exist_ok=True)
+        fh = open(os.path.join(slot_dir, name), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        released = []
+        timer = threading.Timer(seconds, lambda: (released.append(time.time()), fh.close()))
+        self.addCleanup(timer.cancel)
+        timer.start()
+        return released
+
+    def hold_slot_for(self, seconds):
+        import threading
+        from core import slots
+        slot = slots.take(self.cfg(), time.time() + 5)
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
+        timer = threading.Timer(seconds, slot.release)
+        self.addCleanup(timer.cancel)
+        timer.start()
+        return slot
+
+    def assert_opener_did_not_wait(self, released):
+        began = time.time()
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=60)
+        elapsed = time.time() - began
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertLess(elapsed, 15, "the opener waited for the machine")
+        self.assertEqual(released, [], "the holder released before the opener was done")
+        ran = glob.glob(os.path.join(os.path.dirname(self.plan_path), "count-creator-*"))
+        self.assertTrue(ran, "the creator never ran")
+
+    def test_1_the_opener_does_not_wait_for_a_held_slot(self):
+        self.config(machine_slots=1)
+        self.assert_opener_did_not_wait(self.hold_file("slot-0", 20))
+
+    def test_2_the_opener_does_not_wait_for_a_held_exclusive_mark(self):
+        self.config(machine_slots=2, regression_exclusive=True)
+        self.assert_opener_did_not_wait(self.hold_file("exclusive", 20))
+
+    SCRIPT = ('echo "{\\"kind\\": \\"done\\", \\"slot\\": \\"$DEVLOOP_SLOT\\"}" '
+              '> "$DEVLOOP_RESULT"; exit 0')
+    NO_SLOT = ("creator", "consolidator", "consolidator_peer")
+
+    def no_slot_agents(self):
+        cmd = ["sh", "-c", self.SCRIPT]
+        self.config(machine_slots=1, agents=dict(self.agents_cfg(), **{r: cmd for r in self.NO_SLOT}))
+
+    def test_3_no_slot_roles_start_at_once_and_see_no_slot(self):
+        from core import agents
+        self.no_slot_agents()
+        self.hold_slot_for(8)
+        for role in self.NO_SLOT:
+            with self.subTest(role=role):
+                began = time.time()
+                hand = agents.run(self.cfg(), role, "go", self.proj,
+                                  os.path.join(self.tmp, "run-" + role), 30)
+                self.assertLess(time.time() - began, 4, "%s waited for the held slot" % role)
+                self.assertIsNone(hand.problem())
+                self.assertEqual(hand.result["slot"], "")
+
+    def test_4_the_opener_live_record_never_says_slot(self):
+        from core import agents, inflight
+        self.no_slot_agents()
+        self.hold_slot_for(8)
+        states = []
+        with mock.patch.object(inflight, "put", side_effect=lambda cfg, name, rec: states.append(rec.get("state"))):
+            hand = agents.run(self.cfg(), "creator", "go", self.proj,
+                              os.path.join(self.tmp, "run-creator"), 30)
+        self.assertIsNone(hand.problem())
+        self.assertNotIn("slot", states)
+        self.assertIn("running", states)
+        self.assertEqual(set(states), {"running"}, states)
+
+    def assert_busy(self):
+        intervals = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = intervals
+        began = time.time()
+        res = self.run_py("run_tests.py", "case_1", timeout=60)
+        elapsed = time.time() - began
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertEqual(res.stderr.strip(), self.BUSY)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertEqual(res.stdout, "")
+        self.assertLess(elapsed, 5)
+        if os.path.exists(intervals):
+            with open(intervals) as fh:
+                self.assertEqual(fh.read(), "", "the test interface was started")
+
+    def test_6_run_tests_says_machine_busy_when_every_slot_is_held(self):
+        self.config(machine_slots=1)
+        self.hold_file("slot-0", 20)
+        self.assert_busy()
+
+    def test_6_run_tests_says_machine_busy_when_the_exclusive_mark_is_held(self):
+        self.config(machine_slots=2, regression_exclusive=True)
+        self.hold_file("exclusive", 20)
+        self.assert_busy()
+
+    def test_7_run_tests_runs_under_its_own_slot_and_frees_it(self):
+        from core import slots
+        self.config(machine_slots=1)
+        seen = os.path.join(self.tmp, "slot-seen.txt")
+        self.env["FAKE_SLOT_SEEN"] = seen
+        res = self.run_py("run_tests.py", "case_1", timeout=60)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertTrue(os.path.exists(seen), "the fake test run never recorded its slot")
+        with open(seen) as fh:
+            self.assertEqual(fh.read(), os.path.join(self.tmp, "wt", "slots", "slot-0"))
+        began = time.time()
+        slot = slots.take(self.cfg(), time.time() + 1)
+        self.assertTrue(slot and slot.held, "run_tests.py left its slot held")
+        slot.release()
+        self.assertLess(time.time() - began, 1)
+
+    def test_9_the_opener_prompt_says_how_to_run_tests_and_what_busy_means(self):
+        import ticket_creator
+        text = ticket_creator.chain()
+        for words in ("run_tests.py", "machine busy", "not measured (machine busy)"):
+            self.assertIn(words, text)
+
+    def test_10_readme_slot_section_names_the_slotless_roles_and_machine_busy(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        section = text.split("## Machine slots", 1)[1].split("\n## ", 1)[0]
+        flat = " ".join(section.split())
+        for words in ("creator", "consolidator_peer", "machine busy",
+                      "agent", "red check", "regression", "slots/slot-", "own limit", "DEVLOOP_SLOT",
+                      "parent's slot", "wait for a slot without a limit", "from when the slot is taken",
+                      "still counts against `regression_timeout_seconds`", "regression_exclusive",
+                      "slots/exclusive", "needs `machine_slots`"):
+            self.assertIn(words, flat)
+        self.assertNotIn('"no slot"', flat)
+
+
 class MachineSlots(LoopCase):
     """devloop.machine_slots: the implementer's tests (core/slots.py and its call sites)."""
 
