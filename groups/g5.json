@@ -2,7 +2,7 @@
   "id": "g5",
   "branch": "int/g5",
   "base": "1a689598081775ea1554fb6c09a7c3587f2c1647",
-  "state": "open",
+  "state": "pr",
   "alone": false,
   "members": [
     "116",
@@ -22,6 +22,10 @@
     {
       "at": "2026-11-23T04:43:27Z",
       "event": "main moved to 4c0471b33f24: fast-forwarded int/g5 to it"
+    },
+    {
+      "at": "2026-11-23T05:26:59Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "main_tried": "4c0471b33f24d1d3e7b8a3e31ac4cbf09f33d7eb"
