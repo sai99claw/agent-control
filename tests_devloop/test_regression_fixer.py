@@ -1738,6 +1738,166 @@ class T109Acceptance(LoopCase):
             self.assertIn("flaky", fh.read())
 
 
+class T113Acceptance(LoopCase):
+    """#113 (issue #2): every flaky case of a landing or stuck group gets a fix ticket from the
+    opener, named on the group's page. Expected literals come from the ticket and fake_tests.py
+    (flaky_row: "first run of <id>"), never from ticket_controller.py."""
+
+    LINE_START = "flaky (passed when run again): "
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    # ------------------------------------------------------------ helpers
+
+    def commit_files(self, *names):
+        for name in names:
+            with open(os.path.join(self.proj, name), "w") as fh:
+                fh.write("x\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "add " + " ".join(names))
+
+    def add_open_nine(self):
+        self.add(9, state="stuck", stuck={"reason": "decision", "text": "x"},
+                 origin={"kind": "flaky", "group": "g0", "ids": ["flaky.a"]})
+
+    def run_once(self):
+        res = self.controller()
+        return res.stdout + res.stderr
+
+    def ids(self):
+        return sorted(self.snap().tickets, key=int)
+
+    def page(self, kind, needle=None):
+        rows = [r for r in self.snap().inbox.values() if r.get("kind") == kind and r.get("ref") == "g1"
+                and (needle is None or needle in (r.get("text") or ""))]
+        self.assertEqual(len(rows), 1, self.snap().inbox)
+        return rows[0]
+
+    def flaky_line(self, page):
+        lines = [x for x in (page.get("text") or "").split("\n") if x.startswith(self.LINE_START)]
+        self.assertEqual(len(lines), 1, page.get("text"))
+        return lines[0]
+
+    def flaky_fix_event(self):
+        history = self.snap().groups["g1"].get("history") or []
+        evs = [h for h in history if str(h.get("event") or "").startswith("flaky fix")]
+        self.assertEqual(len(evs), 1, history)
+        return evs[0]
+
+    def creator_runs(self):
+        path = os.path.join(os.path.dirname(self.plan_path), "count-creator--")
+        if not os.path.exists(path):
+            return 0
+        with open(path) as fh:
+            return int(fh.read())
+
+    def opened_at(self, ident):
+        t = self.snap().ticket(str(ident))
+        opened = [e for e in t.get("history") or [] if e.get("event") == "opened"]
+        self.assertEqual(len(opened), 1, t.get("history"))
+        return opened[0]
+
+    # ------------------------------------------------------------ acceptance 1-2
+
+    def test_a1_a2_landing_with_flaky_opens_one_ticket_named_on_the_landed_page(self):
+        self.commit_files("flaky_a.txt")
+        self.add(1)
+        self.plan(creator={"-": ["one_ticket"]})
+        out = self.run_once()
+        self.assertEqual(self.state(1), "landed", out)
+        # acceptance 1
+        self.assertEqual(self.ids(), ["1", "2"], out)
+        self.assertEqual(self.creator_runs(), 1)
+        t2 = self.snap().ticket("2")
+        self.assertEqual(t2.get("origin"), {"kind": "flaky", "group": "g1", "ids": ["flaky.a"]}, t2)
+        self.assertEqual(self.opened_at(2).get("by"), "controller")
+        request = t2.get("request") or ""
+        self.assertIn("- flaky.a: failed with: first run of flaky.a; passed when run again",
+                      request.split("\n"), request)
+        self.assertIn("Never hide it with a sleep or a retry inside the test.", request)
+        # acceptance 2
+        ev = self.flaky_fix_event()
+        self.assertEqual(ev.get("opened"), ["2"], ev)
+        self.assertEqual(ev.get("already_open"), {}, ev)
+        self.assertEqual(ev.get("ids"), ["flaky.a"], ev)
+        line = self.flaky_line(self.page("landed"))
+        self.assertTrue(line.endswith(" - fix ticket: #2"), line)
+
+    # ------------------------------------------------------------ acceptance 3
+
+    def test_a3_an_open_flaky_ticket_carrying_the_id_is_named_and_no_opener_runs(self):
+        self.commit_files("flaky_a.txt")
+        self.add_open_nine()
+        self.add(1)
+        self.plan(creator={"-": ["one_ticket"]})
+        out = self.run_once()
+        self.assertEqual(self.state(1), "landed", out)
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.plan_path), "count-creator--")),
+                         "the opener ran")
+        self.assertEqual(self.ids(), ["1", "9"], out)
+        ev = self.flaky_fix_event()
+        self.assertEqual(ev.get("opened"), [], ev)
+        self.assertEqual(ev.get("already_open"), {"flaky.a": "9"}, ev)
+        self.assertIn("already open", ev.get("event") or "", ev)
+        line = self.flaky_line(self.page("landed"))
+        self.assertTrue(line.endswith(" - fix ticket: #9 (already open)"), line)
+
+    # ------------------------------------------------------------ acceptance 4
+
+    def test_a4_only_ids_no_open_ticket_carries_go_to_the_opener(self):
+        self.commit_files("flaky_a.txt", "flaky_b.txt")
+        self.add_open_nine()
+        self.add(1)
+        self.plan(creator={"-": ["one_ticket"]})
+        out = self.run_once()
+        self.assertEqual(self.state(1), "landed", out)
+        self.assertEqual(self.creator_runs(), 1, out)
+        new = [i for i in self.ids() if i not in ("1", "9")]
+        self.assertEqual(len(new), 1, self.ids())
+        t = self.snap().ticket(new[0])
+        self.assertEqual(t.get("origin"), {"kind": "flaky", "group": "g1", "ids": ["flaky.b"]}, t)
+        line = self.flaky_line(self.page("landed"))
+        self.assertTrue(line.endswith(" - fix ticket: #%s, #9 (already open)" % new[0]), line)
+
+    # ------------------------------------------------------------ acceptance 5
+
+    def test_a5_stuck_group_opens_the_ticket_before_its_still_red_page(self):
+        self.commit_files("flaky_a.txt")
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]}, creator={"-": ["one_ticket"]})
+        out = self.run_once()
+        self.assertEqual(self.snap().groups["g1"].get("state"), "stuck", out)
+        self.assertEqual(self.ids(), ["1", "2"], out)
+        self.assertEqual(self.snap().ticket("2").get("origin"),
+                         {"kind": "flaky", "group": "g1", "ids": ["flaky.a"]})
+        page = self.page("decision", "still red after")
+        line = self.flaky_line(page)
+        self.assertTrue(line.endswith(" - fix ticket: #2"), line)
+        self.assertLessEqual(self.opened_at(2).get("at"), page.get("at"))
+
+    def test_a5_release_failed_page_names_the_fix_ticket(self):
+        self.commit_files("flaky_a.txt")
+        self.config(release="exit 3")
+        self.add(1)
+        self.plan(creator={"-": ["one_ticket"]})
+        out = self.run_once()
+        self.assertEqual(self.state(1), "landed", out)
+        self.assertEqual(self.ids(), ["1", "2"], out)
+        self.assertEqual(self.snap().ticket("2").get("origin"),
+                         {"kind": "flaky", "group": "g1", "ids": ["flaky.a"]})
+        page = self.page("decision", "but the release failed")
+        line = self.flaky_line(page)
+        self.assertTrue(line.endswith(" - fix ticket: #2"), line)
+
+
 class DroppedFixRoundUnits(LoopCase):
     """#74 internals at the Controller layer: when the regression after a fix round drops that
     round (compare-and-swap back to fix_start_sha), and every case that leaves the branch alone."""
@@ -2209,13 +2369,84 @@ class FlakyRerunUnits(LoopCase):
         self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
         ctl = ticket_controller.Controller(Config(self.proj), self.pool)
         ctl.start_fixer = lambda *a: self.fail("no fixer at max_rounds")
+        ctl.open_fix = lambda origin, request: (['7'], None)
         ctl.after_regression("g1", {"kind": "regression", "out": paths["after"]}, 1)
         pages_ = [p for p in self.snap().inbox.values() if p.get("kind") == "decision" and p.get("ref") == "g1"]
         self.assertEqual(len(pages_), 1)
         self.assertIn("refs/devloop/dropped/g1-r1", pages_[0]["text"])
-        self.assertEqual(pages_[0]["text"].splitlines()[-1], "flaky (passed when run again): m.slow (first)")
+        self.assertEqual(pages_[0]["text"].splitlines()[-1],
+                         "flaky (passed when run again): m.slow (first) - fix ticket: #7")
         events = [h for h in self.snap().groups["g1"]["history"] if h["event"].startswith("flaky:")]
         self.assertEqual([e["flaky"] for e in events], [[{"id": "m.slow", "message": "first\nsecond"}]])
+
+
+class FlakyFixUnits(LoopCase):
+    """#113 implementer's unit tests: Controller.flaky_fix with a stub open_fix, and the
+    optional fix argument of flaky_line/with_flaky."""
+
+    def ctl_with(self, history, calls, result):
+        import ticket_controller
+        from core.config import Config
+        g = {"id": "g1", "branch": "int/g1", "state": "verified", "members": [], "history": history}
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+        ctl.open_fix = lambda origin, request: (calls.append((origin, request)), result)[1]
+        return ctl, g
+
+    def fix_events(self):
+        return [h for h in self.snap().groups["g1"]["history"] if h["event"].startswith("flaky fix")]
+
+    def test_flaky_line_appends_the_fix_text_only_when_given(self):
+        import ticket_controller
+        g = {"history": [{"event": "flaky: a", "flaky": [{"id": "a", "message": "m"}]}]}
+        self.assertEqual(ticket_controller.flaky_line(g, "#3"), "flaky (passed when run again): a (m) - fix ticket: #3")
+        self.assertEqual(ticket_controller.with_flaky("t", g, "#3"), "t\nflaky (passed when run again): a (m) - fix ticket: #3")
+        self.assertEqual(ticket_controller.flaky_line({}, "#3"), "")
+
+    def test_no_flaky_events_no_opener_no_event(self):
+        calls = []
+        ctl, g = self.ctl_with([{"event": "regression red"}], calls, (["5"], None))
+        self.assertIsNone(ctl.flaky_fix(g, "abc"))
+        self.assertEqual((calls, self.fix_events()), ([], []))
+
+    def test_opener_opening_nothing_names_its_problem(self):
+        calls = []
+        hist = [{"event": "flaky: a", "flaky": [{"id": "a", "message": "x\ny"}, {"id": "b", "message": None}]}]
+        ctl, g = self.ctl_with(hist, calls, ([], "ticket_creator exit 2 (log: L)"))
+        self.assertEqual(ctl.flaky_fix(g, "abc"), "none opened (ticket_creator exit 2 (log: L))")
+        origin, request = calls[0]
+        self.assertEqual(origin, {"kind": "flaky", "group": "g1", "ids": ["a", "b"]})
+        self.assertIn("\n- a: failed with: x | y; passed when run again\n", request)
+        self.assertIn("\n- b: failed with: (no message); passed when run again\n", request)
+        self.assertIn("\nsha: abc\n", request)
+        [ev] = self.fix_events()
+        self.assertEqual((ev["opened"], ev["already_open"], ev["ids"], ev["problem"]),
+                         ([], {}, ["a", "b"], "ticket_creator exit 2 (log: L)"))
+
+    def test_a_long_message_is_cut_to_500_characters(self):
+        calls = []
+        ctl, g = self.ctl_with([{"event": "flaky: a", "flaky": [{"id": "a", "message": "z" * 900}]}],
+                               calls, (["4"], None))
+        self.assertEqual(ctl.flaky_fix(g, "abc"), "#4")
+        self.assertIn("- a: failed with: %s; passed when run again" % ("z" * 500), calls[0][1])
+        self.assertNotIn("z" * 501, calls[0][1])
+        [ev] = self.fix_events()
+        self.assertNotIn("problem", ev)
+
+    def test_landed_and_cancelled_flaky_tickets_are_not_open(self):
+        calls = []
+        self.add(3, state="landed", origin={"kind": "flaky", "group": "g0", "ids": ["a"]})
+        self.add(4, state="cancelled", origin={"kind": "flaky", "group": "g0", "ids": ["a"]})
+        self.add(5, state="ready", origin={"kind": "release", "group": "g0", "ids": ["a"]})
+        self.add(10, state="merged", origin={"kind": "flaky", "group": "g0", "ids": ["c", "b"]})
+        hist = [{"event": "flaky: a", "flaky": [{"id": "a", "message": "m"}, {"id": "b", "message": "n"},
+                                                 {"id": "c", "message": "o"}]}]
+        ctl, g = self.ctl_with(hist, calls, (["12"], None))
+        self.assertEqual(ctl.flaky_fix(g, "abc"), "#12, #10 (already open)")
+        self.assertEqual([c[0]["ids"] for c in calls], [["a"]])
+        [ev] = self.fix_events()
+        self.assertEqual((ev["opened"], ev["already_open"]), (["12"], {"b": "10", "c": "10"}))
+        self.assertIn("already open", ev["event"])
 
 
 class FixAgentRoundUnits(LoopCase):

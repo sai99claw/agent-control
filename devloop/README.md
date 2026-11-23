@@ -49,7 +49,7 @@ Run them from the project (or set `AC_ROOT` to it).
 ## Project settings (`board/config.json`, key `devloop`)
 
 `release` is required (every project ships a release script; the controller only calls it, with
-`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS`, `DEVLOOP_RELEASE_DIR` set; it runs in a throwaway checkout that is removed afterwards, so anything it produces goes to `$DEVLOOP_RELEASE_DIR` = `<worktrees>/runs/release/<group>/`, which devloop never empties; its whole output is kept in `<worktrees>/runs/release/<group>.log`, named on the group as `release_log` and in the page) and is stopped after `release_timeout_seconds` (default 3600). Everything else has a default:
+`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS`, `DEVLOOP_RELEASE_DIR` set; it runs in a throwaway checkout that is removed afterwards, so anything it produces goes to `$DEVLOOP_RELEASE_DIR` = `<worktrees>/runs/release/<group>/`, which devloop never empties; its whole output is kept in `<worktrees>/runs/release/<group>.log`, named on the group as `release_log` and in the page) and is stopped after `release_timeout_seconds` (default 3600). A release that exits 1 at landing (the product failed a check) has the opener open a fix ticket for it (`ticket_creator.py --by controller --origin '{"kind": "release", "group": ..., "sha": ...}'`; none while a ticket opened this way is still open, its number goes on the page instead) and then runs once more on the same sha; the controller waits for that opener run (minutes) and the rerun decides the group's `release` and page; it changes nothing on main or in the release. Every other outcome runs once (see **Release exit codes**). Everything else has a default:
 `pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_group_size` 10 (a `together` ticket opens a new integration branch once the open one has this many members; no ticket that is not yet a member joins a group that is full, whichever path chose it), `max_rounds` 3,
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
@@ -220,7 +220,11 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   6 or more failing rows, or a rerun that cannot answer (rc 86 / 2): no rerun effect. Every report
   has `flaky` ([{"id", "message"}], [] when none); the controller writes a `flaky:` group event for
   a non-empty one, and the landed page, the release-failed page and both "still red after N fix
-  rounds" pages end with `flaky (passed when run again): <id> (<message>); ...`. The rerun is the
+  rounds" pages end with `flaky (passed when run again): <id> (<message>); ...`. Before such a page
+  (once per landing or stuck ending) the controller has the opener open one fix ticket (origin
+  `{"kind": "flaky", "group", "ids"}`) for the flaky ids no open fix ticket carries (open: any state
+  but landed or cancelled), writes one `flaky fix` group event, and the flaky line names the ticket:
+  `... - fix ticket: #12, #9 (already open)` (or `none opened (<problem>)`). The rerun is the
   gate's one second look, not a fix: agents still must not hide a flaky test with sleeps or
   retries in the test. The verifier writes its cases into existing test modules of the layer that covers the
   change, never one new file per ticket.
@@ -454,6 +458,10 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
 - **OS failures** (missing program, permission, disk full, broken JSON, git errors, timeouts) are
   caught in one place (`core/osx.py`, `core/gitx.py`) and end as a page or an exit code with one
   sentence, never a silent hang. Timed-out commands are stopped with their whole process group.
+- **Release exit codes**: 0 released · 1 the product failed a check (at landing: one fix ticket from
+  the opener, then one rerun on the same sha, issue #1) · 86 the environment (one decision page). Any
+  other code and a timeout count as 86: one decision page, no ticket, no rerun. `tickets.py release gN`
+  always runs once.
 - **A merged or landed ticket is frozen**: nobody revises or reopens it (`ticket_creator.py
   --revise` from any caller and `tickets.py ready` refuse with one line, D-089); overturning one takes a
   new ticket through `actl new --request "..."`, which may revert it.

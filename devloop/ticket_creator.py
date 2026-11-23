@@ -10,6 +10,9 @@
                                             # --decision effects, by defaults to main-session
     --decision anywhere else (another --from, or without --revise) is refused (exit 2).
     ... --via web                           # input typed into the dashboard: injection check first
+    ... --by controller --origin '{"kind": "release", ...}'   # the controller's fix ticket: the JSON
+                                            # object is written unchanged as 'origin' on every
+                                            # opened ticket (not opener-editable); not an object -> 2
 
 Opening: the prompt chain in devloop/prompts/creator/ (read in file-name order), the reference
 ticket devloop/prompts/ticket.example.json and the current DAG go to the opener agent. Its hand-in is
@@ -219,7 +222,7 @@ def split(row, ids):
     return shares
 
 
-def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None):
+def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None, origin=None):
     def change(tx):
         ids, mapping = [], {}
         nxt = int(tx.data.next_ticket_id())
@@ -232,6 +235,8 @@ def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None):
             row = {k: t[k] for k in fields if k in t}
             row.update({"id": ident, "state": "ready", "round": 0, "created": osx.now(),
                         "request": request[:4000], "feedback": [], "cases": None})
+            if origin is not None:
+                row["origin"] = origin
             event(row, "opened", **({"by": by} if by else {}))
             tx.put_ticket(row)
             node = dict(result["dag"][str(t["key"])])
@@ -260,15 +265,15 @@ def opener_live(cfg, title=None, revise=None, via="main"):
     return name
 
 
-def open_tickets(cfg, pool, request, via="main", by=None):
+def open_tickets(cfg, pool, request, via="main", by=None, origin=None):
     name = opener_live(cfg, title=inflight.title_of(request), via=via)
     try:
-        return _open_tickets(cfg, pool, request, via, by)
+        return _open_tickets(cfg, pool, request, via, by, origin)
     finally:
         inflight.drop(cfg, name)
 
 
-def _open_tickets(cfg, pool, request, via, by):
+def _open_tickets(cfg, pool, request, via, by, origin=None):
     snap = pool.snapshot()
     summary = [{"id": k, "title": v.get("title"), "state": v.get("state")}
                for k, v in sorted(snap.tickets.items(), key=lambda kv: dagmod._order_key(kv[0]))
@@ -327,7 +332,7 @@ def _open_tickets(cfg, pool, request, via, by):
         errors = check_new(hand.result, pool.snapshot(), cfg)
         if errors:
             continue
-        ids = write_new(pool, hand.result, request, editable(cfg), by=by, cost=rows)
+        ids = write_new(pool, hand.result, request, editable(cfg), by=by, cost=rows, origin=origin)
         titles = {i: pool.snapshot().tickets[i].get("title") for i in ids}
         pool.report("created", ",".join(ids), "opened " + "; ".join(
             "#%s %s" % (i, titles[i]) for i in ids))
@@ -534,7 +539,17 @@ def main(argv=None):
                     help="with --from user or main: what to do with the ticket (default revise)")
     ap.add_argument("--by", default=None, help="the name of the trusted user who submitted this")
     ap.add_argument("--page", help="the inbox page this answers; marked read when handled")
+    ap.add_argument("--origin", help="a JSON object written unchanged as 'origin' on every opened ticket")
     args = ap.parse_args(argv)
+    origin = None
+    if args.origin is not None:
+        try:
+            origin = json.loads(args.origin)
+        except ValueError:
+            origin = None
+        if not isinstance(origin, dict):
+            print("ticket_creator: --origin must be a JSON object", file=sys.stderr)
+            return 2
     if args.decision is not None and not (args.revise and args.source in ("user", "main")):
         print("ticket_creator: --decision only applies with --revise and --from user or main", file=sys.stderr)
         return 2
@@ -569,7 +584,7 @@ def main(argv=None):
         if not request or not request.strip():
             print("ticket_creator: give --request or --request-file", file=sys.stderr)
             return 2
-        return open_tickets(cfg, pool, request, via=args.via, by=args.by)
+        return open_tickets(cfg, pool, request, via=args.via, by=args.by, origin=origin)
     except OSError as exc:
         print("ticket_creator: %s" % osx.explain(exc, "cannot read the request"), file=sys.stderr)
         return 2

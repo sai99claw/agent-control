@@ -230,6 +230,11 @@ elif role == "creator":
               "note": "dropped item 2"})
         if action == "revised_hold":
             time.sleep(20)
+    elif action == "one_ticket":   # issue #1: exactly one ticket
+        hand({"kind": "tickets",
+              "tickets": [{"key": "new-1", "title": "fix", "objective": "o", "acceptance": ["a"],
+                           "needs_verifier": True, "complexity": "simple", "token_estimate": 200000}],
+              "dag": {"new-1": {"depends_on": [], "verify": "together"}}})
     elif action == "bad":
         hand({"kind": "tickets", "tickets": [{"key": "new-1"}], "dag": {}})
     else:
