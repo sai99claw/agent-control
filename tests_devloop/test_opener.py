@@ -374,6 +374,159 @@ class RequiredFields(LoopCase):
         self.assertIn('"vision" is required by this project', page)
 
 
+class T111Acceptance(LoopCase):
+    """#111: --decision is never silently ignored - --from main acts like --from user, every other
+    use of --decision is refused. Expected values come from the ticket's acceptance text."""
+
+    UNCHANGED = "cat >/dev/null; printf '{\"kind\": \"unchanged\", \"note\": \"n\"}' > \"$DEVLOOP_RESULT\""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        self.add(1, state="stuck", stuck={"reason": "decision", "text": "x"}, round=3)
+
+    # ------------------------------------------------------------ helpers
+
+    def creator_runs(self, ticket):
+        return os.path.exists(os.path.join(os.path.dirname(self.plan_path), "count-creator-%s" % ticket))
+
+    def ticket(self):
+        return self.snap().ticket("1")
+
+    def answers(self):
+        return [e for e in self.ticket().get("history") or [] if e.get("event") == "user answer"]
+
+    def tc(self, *args, rc=0):
+        res = self.run_py("ticket_creator.py", *args)
+        self.assertEqual(res.returncode, rc, res.stdout + res.stderr)
+        return res
+
+    def assert_ready_round_0(self):
+        t = self.ticket()
+        self.assertEqual((t.get("state"), t.get("round"), t.get("stuck")), ("ready", 0, None), t)
+
+    def assert_one_refusal_line(self, res):
+        lines = res.stderr.splitlines()
+        self.assertEqual(len(lines), 1, res.stderr)
+        self.assertTrue(lines[0].strip(), res.stderr)
+        self.assertTrue(lines[0].startswith("ticket_creator: "), lines[0])
+        self.assertIn("--decision", lines[0])
+
+    # ------------------------------------------------------------ acceptance 1
+
+    def test_main_retry_makes_the_ticket_ready_round_0(self):
+        self.tc("--revise", "1", "--via", "main", "--from", "main", "--decision", "retry", "--reason", "go")
+        self.assert_ready_round_0()
+        answers = self.answers()
+        self.assertTrue(answers, self.ticket().get("history"))
+        self.assertEqual((answers[-1].get("decision"), answers[-1].get("by")), ("retry", "main-session"))
+
+    # ------------------------------------------------------------ acceptance 2
+
+    def test_main_cancel_cancels_the_ticket(self):
+        self.tc("--revise", "1", "--from", "main", "--decision", "cancel", "--reason", "no")
+        self.assertEqual(self.ticket().get("state"), "cancelled")
+
+    # ------------------------------------------------------------ acceptance 3
+
+    def test_main_revise_with_a_revised_hand_in_makes_the_ticket_ready_with_the_new_acceptance(self):
+        self.plan(creator={"1": ["revised"]})
+        self.tc("--revise", "1", "--from", "main", "--decision", "revise", "--reason", "drop item 2")
+        self.assertTrue(self.creator_runs("1"), "the opener ran")
+        self.assert_ready_round_0()
+        self.assertEqual(self.ticket().get("acceptance"), ["a possible thing"])
+
+    def test_main_revise_with_an_unchanged_hand_in_makes_the_ticket_ready_unchanged(self):
+        self.config(agents=dict({r: AGENT for r in ROLES}, creator=["sh", "-c", self.UNCHANGED]))
+        self.tc("--revise", "1", "--from", "main", "--decision", "revise", "--reason", "drop item 2")
+        t = self.ticket()
+        self.assertEqual((t.get("state"), t.get("round")), ("ready", 0), t)
+        self.assertEqual(t.get("acceptance"), ["a"])
+
+    # ------------------------------------------------------------ acceptance 4
+
+    def test_main_without_decision_means_revise(self):
+        self.plan(creator={"1": ["revised"]})
+        self.tc("--revise", "1", "--from", "main", "--reason", "drop item 2")
+        self.assertEqual(self.ticket().get("state"), "ready")
+
+    def test_main_without_decision_and_without_reason_is_refused_like_user(self):
+        res = self.tc("--revise", "1", "--from", "main", rc=2)
+        self.assertIn("a revise decision needs the user's words", res.stderr)
+        self.assertFalse(self.creator_runs("1"))
+        self.assertEqual(self.ticket().get("state"), "stuck")
+        # the positive half: the same setup with a reason goes through to ready
+        self.plan(creator={"1": ["revised"]})
+        self.tc("--revise", "1", "--from", "main", "--reason", "drop item 2")
+        self.assertEqual(self.ticket().get("state"), "ready")
+
+    # ------------------------------------------------------------ acceptance 5
+
+    def page(self):
+        return self.pool.report("decision", "1", "#1 is stuck")
+
+    def test_by_name_is_the_answer_and_ack_name_for_main(self):
+        page = self.page()
+        self.tc("--revise", "1", "--from", "main", "--decision", "retry", "--reason", "go",
+                "--by", "alice", "--page", page)
+        self.assertEqual(self.answers()[-1].get("by"), "alice")
+        row = self.snap().inbox[page]
+        self.assertTrue(row.get("acked"), row)
+        self.assertEqual(row.get("acked_by"), "alice")
+
+    def test_main_without_by_is_main_session_for_answer_and_ack(self):
+        page = self.page()
+        self.tc("--revise", "1", "--from", "main", "--decision", "retry", "--reason", "go", "--page", page)
+        self.assertEqual(self.answers()[-1].get("by"), "main-session")
+        row = self.snap().inbox[page]
+        self.assertTrue(row.get("acked"), row)
+        self.assertEqual(row.get("acked_by"), "main-session")
+
+    def test_user_answer_by_unchanged(self):
+        self.tc("--revise", "1", "--from", "user", "--decision", "retry", "--reason", "go")
+        self.assertEqual(self.answers()[-1].get("by"), "user")
+        self.add(1, state="stuck", stuck={"reason": "decision", "text": "x"}, round=3)
+        page = self.page()
+        self.tc("--revise", "1", "--from", "user", "--decision", "retry", "--reason", "go",
+                "--by", "bob", "--page", page)
+        self.assertEqual(self.answers()[-1].get("by"), "bob")
+        self.assertEqual(self.snap().inbox[page].get("acked_by"), "bob")
+        # the --from main half of the same item (fails on code that ignores --decision for main)
+        self.add(1, state="stuck", stuck={"reason": "decision", "text": "x"}, round=3)
+        self.tc("--revise", "1", "--from", "main", "--decision", "retry", "--reason", "go", "--by", "carol")
+        self.assertEqual(self.answers()[-1].get("by"), "carol")
+
+    # ------------------------------------------------------------ acceptance 6
+
+    def test_decision_with_another_source_is_refused_and_changes_nothing(self):
+        self.plan(creator={"1": ["revised"]})
+        for source in ("worker", "verifier", "fixer", "someone"):
+            for decision in ("retry", "cancel", "revise"):
+                with self.subTest(source=source, decision=decision):
+                    before = json.dumps(self.ticket(), sort_keys=True)
+                    res = self.tc("--revise", "1", "--from", source, "--decision", decision,
+                                  "--reason", "go", rc=2)
+                    self.assert_one_refusal_line(res)
+                    self.assertFalse(self.creator_runs("1"), "no opener may start")
+                    self.assertEqual(json.dumps(self.ticket(), sort_keys=True), before)
+
+    # ------------------------------------------------------------ acceptance 7
+
+    def test_decision_without_revise_is_refused_and_opens_nothing(self):
+        path = os.path.join(self.tmp, "request.txt")
+        with open(path, "w") as fh:
+            fh.write("build two things\n")
+        for args in (("--request", "x", "--decision", "cancel"),
+                     ("--request-file", path, "--decision", "retry"),
+                     ("--request", "x", "--decision", "revise")):
+            with self.subTest(args=args):
+                res = self.tc(*args, rc=2)
+                self.assert_one_refusal_line(res)
+                self.assertEqual(sorted(self.snap().tickets), ["1"], "no ticket opened")
+                self.assertFalse(self.creator_runs("-"), "no opener may start")
+
+
 class T12Acceptance(LoopCase):
     """#12: the opener is told the full suite is the regression's, and is given the time limits."""
 
