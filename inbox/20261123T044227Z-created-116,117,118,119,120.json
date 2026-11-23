@@ -3,5 +3,7 @@
   "ref": "116,117,118,119,120",
   "text": "opened #116 The opener and memory consolidation start without a machine slot; run_tests.py outside a slot never waits for one (issue #7); #117 Groups form one chain: a group's regression waits until every earlier group has landed (issue #6, part 1); #118 A ticket's group is written when the ticket is opened, and the controller only follows it (issue #6, part 2); #119 The opener puts each new ticket in an open group or a new group at the end of the chain (issue #6, part 3); #120 The board's DAG tab, the idle page and a stuck group's page show where a group stands in the chain (issue #6, part 4)",
   "at": "2026-11-23T04:42:30Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-23T08:12:31Z"
 }
