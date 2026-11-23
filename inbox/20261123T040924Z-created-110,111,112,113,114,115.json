@@ -1,0 +1,7 @@
+{
+  "kind": "created",
+  "ref": "110,111,112,113,114,115",
+  "text": "opened #110 scripts/release.sh exits 86 when its tag cannot be made or pushed (issue #1, part 1); #111 --decision is never silently ignored: --from main acts like --from user, other uses are refused (issue #5); #112 A release that exits 1 at landing gets a fix ticket from the opener and one rerun on the same sha (issue #1, part 2); #113 Every flaky case gets a fix ticket from the opener, named on the group's page (issue #2); #114 A worker's blocked hand-in leaves a page unless its own revise escalation already wrote one (issue #4a); #115 A blocked hand-in's failing ids are run by devloop; when they pass, the worker runs again in a round that does not count (issue #4b)",
+  "at": "2026-11-23T04:09:24Z",
+  "acked": false
+}
