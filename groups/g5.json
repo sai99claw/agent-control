@@ -80,5 +80,19 @@
       "usd": 0.6524562000000002,
       "session_id": "9454968a-81d7-438c-832e-456a40a9a881"
     }
+  ],
+  "tests_changed": [
+    {
+      "test": "test_controller.PausedGroupPieces.test_forever_skips_a_paused_group_only",
+      "ticket": "117",
+      "acceptance": "A paused group (pr or fixing with a paused mark, not landed) holds the later groups.",
+      "round": 1
+    },
+    {
+      "test": "test_controller.T51Acceptance.test_2_3_4_forever_pauses_goes_on_and_rerun_lands",
+      "ticket": "117",
+      "acceptance": "A paused group (pr or fixing with a paused mark, not landed) holds the later groups.",
+      "round": 1
+    }
   ]
 }
