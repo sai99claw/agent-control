@@ -91,9 +91,21 @@ nothing until the group is due for its regression (pr or fixing, no job, not pau
 fix round (at `devloop.max_rounds`: stuck "main kept moving" and a decision page).
 
 A ticket's group is written when it is opened, and the controller only follows it (issue #6
-part 2). The tickets of one opener hand-in become the members of one new group at the end of the
-chain, in the same pool write as the tickets (`opened by the opener for #N, #M`); the opening makes
-no git branch, and `dag.json` keeps only `depends_on`. A ready ticket starts only in its own group
+part 2). The opener chooses it (issue #6 part 3): every DAG entry of its hand-in is
+`{"depends_on": [...], "group": G}`, G being an open group's id (the ticket is appended to its
+members, event `member #N added by the opener`) or a new-group placeholder `new-g<n>` (tickets naming
+the same placeholder share one new group; new groups are made at the end of the chain in the order
+their placeholder first appears in `tickets`, first event `opened by the opener for #N, #M`), all in
+the same pool write as the tickets; the opening makes no git branch, and `dag.json` keeps only
+`depends_on`. The opener's prompt has a `## Groups` section after `## Current DAG`: the chain, one
+line per group not landed or cancelled with its state, whether it takes new tickets and its members.
+A hand-in is refused, with nothing written, when an entry has no group, names a group that does not
+exist or is not open, or puts a ticket in a group before the group of a ticket it depends on (chain
+order: existing groups by number, then the new groups; a landed dependency or one without a group
+imposes nothing); the check runs on the snapshot and again inside the pool write (a group that went
+to pr meanwhile). The sentences go to the opener's one retry; a second refusal is the decision page
+`the opener could not produce valid tickets:`. A ticket's group is not an editable field: the
+reviser cannot change it. A ready ticket starts only in its own group
 while that group is open, once each dependency is landed or merged in the same group and, with a
 landed one, the group's branch contains main or does not exist yet; the controller makes the branch
 from main's current sha right before the first start and records that sha as the group's `base`.
@@ -195,7 +207,7 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 
 | Role | Script | When | Default models | Writes |
 |---|---|---|---|---|
-| `creator` | `ticket_creator.py` | for the main session's request, or for a worker that runs `--revise` | opus xhigh | hand-in `tickets` (tickets and DAG entries), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
+| `creator` | `ticket_creator.py` | for the main session's request, or for a worker that runs `--revise` | opus xhigh | hand-in `tickets` (tickets and DAG entries, each entry naming the ticket's `group`: an open group from the prompt's `## Groups` or a new `new-g<n>`; a group that cannot work is refused before anything is written), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
 | `worker` | `ticket_issuer.py` | for each ticket round (complex tickets) | opus medium | code and unit tests committed on the ticket branch; hand-in `done` or `blocked` (with optional `failing` test ids: devloop runs them on the ticket branch, and when they pass the worker runs again on the next command of its chain in a round that does not count; otherwise a `blocked` hand-in gets one decision page, unless the worker's revise escalated in that round: its page is the page) |
 | `worker_simple` | `ticket_issuer.py` | instead of `worker` when the ticket has `complexity: simple` | sonnet medium | the same as `worker` |
 | `verifier` | `ticket_issuer.py` | at the same time as the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases` |
