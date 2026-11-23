@@ -617,5 +617,91 @@ class LastFullSecondsUnit(unittest.TestCase):
         self.assertIn("took 30 seconds.", text)
 
 
+class OpenerGroupChoice(LoopCase):
+    """#119 (issue #6 part 3): ticket_creator.group_problems / write_new (implementer's unit cases)."""
+
+    @staticmethod
+    def ticket(key):
+        return {"key": key, "title": key, "objective": "o", "acceptance": ["a"], "needs_verifier": True,
+                "complexity": "simple", "token_estimate": 200000}
+
+    def group(self, gid, state, members):
+        def change(tx):
+            tx.put_group({"id": gid, "branch": "int/" + gid, "state": state, "members": list(members),
+                          "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z", "history": []})
+        self.pool.update(change, "test: group %s" % gid)
+
+    def test_a_placeholder_made_first_comes_first_in_the_chain(self):
+        import ticket_creator
+        result = {"kind": "tickets", "tickets": [self.ticket("new-1"), self.ticket("new-2")],
+                  "dag": {"new-1": {"depends_on": ["new-2"], "group": "new-g1"},
+                          "new-2": {"depends_on": [], "group": "new-g2"}}}
+        self.assertEqual(ticket_creator.check_new(result, self.snap()),
+                         ["new-1: group new-g1 comes before new-g2, the group of new-2 it depends on"])
+        result["dag"]["new-1"]["group"] = "new-g2"     # order is first appearance, not the number
+        result["dag"]["new-2"]["group"] = "new-g1"
+        self.assertEqual(ticket_creator.check_new(result, self.snap()),
+                         ["new-1: group new-g2 comes before new-g1, the group of new-2 it depends on"])
+        result["tickets"].reverse()
+        self.assertEqual(ticket_creator.check_new(result, self.snap()), [])
+
+    def test_a_landed_dependency_or_one_without_a_group_imposes_nothing(self):
+        import ticket_creator
+        self.add(1, group="g1", state="ready")
+        self.add(2, group="g2", state="landed")
+        self.add(3)
+        self.group("g1", "open", ["1"])
+        self.group("g2", "landed", ["2"])
+        result = {"kind": "tickets", "tickets": [self.ticket("new-1")],
+                  "dag": {"new-1": {"depends_on": ["2", "3"], "group": "g1"}}}
+        self.assertEqual(ticket_creator.check_new(result, self.snap()), [])
+
+    def test_the_write_refuses_a_group_that_stopped_being_open(self):
+        import ticket_creator
+        self.add(1, group="g1", state="ready")
+        self.group("g1", "open", ["1"])
+        result = {"kind": "tickets", "tickets": [self.ticket("new-1")],
+                  "dag": {"new-1": {"depends_on": [], "group": "g1"}}}
+        self.assertEqual(ticket_creator.check_new(result, self.snap()), [])
+        self.group("g1", "pr", ["1"])          # went to pr while the opener worked
+        before = self.pool.git.run("rev-parse", "HEAD").out.strip()
+        ids, errors = ticket_creator.write_new(self.pool, result, "req")
+        self.assertEqual((ids, errors), ([], ["new-1: group g1 is pr and takes no new tickets"]))
+        self.assertEqual(self.pool.git.run("rev-parse", "HEAD").out.strip(), before)
+        snap = self.snap()
+        self.assertEqual(sorted(snap.tickets), ["1"])
+        self.assertEqual(snap.groups["g1"]["members"], ["1"])
+
+    def test_the_write_appends_to_an_open_group_and_makes_new_ones(self):
+        import ticket_creator
+        self.add(1, group="g1", state="ready")
+        self.group("g1", "open", ["1"])
+        result = {"kind": "tickets", "tickets": [self.ticket("new-1"), self.ticket("new-2"), self.ticket("new-3")],
+                  "dag": {"new-1": {"depends_on": [], "group": "new-g2"},
+                          "new-2": {"depends_on": [], "group": "g1"},
+                          "new-3": {"depends_on": ["new-1"], "group": "new-g1"}}}
+        self.assertEqual(ticket_creator.check_new(result, self.snap()), [])
+        ids, errors = ticket_creator.write_new(self.pool, result, "req")
+        self.assertEqual((ids, errors), (["2", "3", "4"], []))
+        snap = self.snap()
+        self.assertEqual(sorted(snap.groups), ["g1", "g2", "g3"])
+        self.assertEqual(snap.groups["g1"]["members"], ["1", "3"])
+        self.assertEqual(snap.groups["g1"]["history"][-1]["event"], "member #3 added by the opener")
+        self.assertEqual(snap.groups["g2"]["members"], ["2"])
+        self.assertEqual(snap.groups["g3"]["members"], ["4"])
+        self.assertEqual([snap.tickets[i]["group"] for i in ("2", "3", "4")], ["g2", "g1", "g3"])
+        self.assertEqual(snap.dag["4"], {"depends_on": ["2"]})
+
+    def test_groups_section(self):
+        import ticket_creator
+        self.add(1, group="g1", state="ready")
+        self.add(2, group="g2", state="landed")
+        self.group("g1", "stuck", ["1"])
+        self.group("g2", "landed", ["2"])
+        self.assertEqual(ticket_creator.groups_section(self.snap()).split("\n")[2:],
+                         ["The chain, oldest first; a new group goes at the end.",
+                          "- g1 (stuck, takes no new tickets): #1 [ready] ticket 1"])
+
+
 if __name__ == "__main__":
     unittest.main()

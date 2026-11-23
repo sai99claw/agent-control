@@ -234,7 +234,7 @@ elif role == "creator":
         hand({"kind": "tickets",
               "tickets": [{"key": "new-1", "title": "fix", "objective": "o", "acceptance": ["a"],
                            "needs_verifier": True, "complexity": "simple", "token_estimate": 200000}],
-              "dag": {"new-1": {"depends_on": [], "verify": "together"}}})
+              "dag": {"new-1": {"depends_on": [], "group": "new-g1"}}})
     elif action == "bad":
         hand({"kind": "tickets", "tickets": [{"key": "new-1"}], "dag": {}})
     else:
@@ -243,5 +243,5 @@ elif role == "creator":
                            "needs_verifier": True, "complexity": "simple", "token_estimate": 200000},
                           {"key": "new-2", "title": "second", "objective": "o", "acceptance": ["a"],
                            "needs_verifier": True, "complexity": "complex", "token_estimate": 300000}],
-              "dag": {"new-1": {"depends_on": [], "verify": "together"},
-                      "new-2": {"depends_on": ["new-1"], "verify": "together"}}})
+              "dag": {"new-1": {"depends_on": [], "group": "new-g1"},
+                      "new-2": {"depends_on": ["new-1"], "group": "new-g1"}}})

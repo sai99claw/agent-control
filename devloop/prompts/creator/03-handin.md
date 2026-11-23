@@ -9,7 +9,7 @@ Tickets:
  "tickets": [{"key": "new-1", "title": "...", "objective": "...", "acceptance": ["..."],
               "outline": "...", "test_plan": "...", "needs_verifier": true, "complexity": "simple",
               "token_estimate": 400000, "token_basis": "..."}],
- "dag": {"new-1": {"depends_on": []}}}
+ "dag": {"new-1": {"depends_on": [], "group": "new-g1"}}}
 ```
 
 A question for the user (direction, business logic, user experience):

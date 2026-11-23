@@ -39,6 +39,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 import time
 
@@ -193,7 +194,66 @@ def check_new(result, snap, cfg=None):
     merged = dict(snap.dag)
     for key in keys:
         merged[key] = dag[key]
-    return dagmod.problems(merged, known_tickets=list(snap.tickets) + keys)
+    return dagmod.problems(merged, known_tickets=list(snap.tickets) + keys) or group_problems(result, snap)
+
+
+NEW_GROUP = re.compile(r"^new-g\d+$")
+
+
+def placeholders(result):
+    """The hand-in's new-group placeholders in the order they first appear in 'tickets'."""
+    out = []
+    for t in result["tickets"]:
+        g = (result["dag"].get(str(t["key"])) or {}).get("group")
+        if isinstance(g, str) and NEW_GROUP.match(g) and g not in out:
+            out.append(g)
+    return out
+
+
+def group_problems(result, snap):
+    """The 'group' of every new ticket, as refusal sentences: an open group's id or a 'new-g<n>'
+    placeholder, never a group before the group of a ticket it depends on. Chain order: existing
+    groups by number, then the new groups in creation order."""
+    dag = result["dag"]
+    news = placeholders(result)
+    groups = snap.groups
+
+    def pos(g):
+        if g in news:
+            return (1, news.index(g))
+        return (0, int(g[1:])) if re.fullmatch(r"g\d+", g) else None
+
+    out, valid = [], {}
+    for t in result["tickets"]:
+        key = str(t["key"])
+        g = (dag.get(key) or {}).get("group")
+        if not isinstance(g, str) or not g:
+            out.append('%s: "group" must be an open group\'s id or a new group like "new-g1"' % key)
+        elif g in news:
+            valid[key] = g
+        elif g not in groups:
+            out.append("%s: group %s does not exist" % (key, g))
+        elif (groups[g] or {}).get("state") != "open":
+            out.append("%s: group %s is %s and takes no new tickets" % (key, g, groups[g].get("state")))
+        else:
+            valid[key] = g
+    for t in result["tickets"]:
+        key = str(t["key"])
+        g = valid.get(key)
+        if g is None or pos(g) is None:
+            continue
+        for d in (dag.get(key) or {}).get("depends_on") or []:
+            d = str(d)
+            if d in valid:
+                h, label = valid[d], d
+            elif d in snap.tickets:
+                row = snap.tickets[d]
+                h, label = (None if row.get("state") == "landed" else row.get("group")), "#" + d
+            else:
+                continue
+            if h and pos(h) is not None and pos(g) < pos(h):
+                out.append("%s: group %s comes before %s, the group of %s it depends on" % (key, g, h, label))
+    return out
 
 
 SPLIT_INTS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
@@ -223,7 +283,12 @@ def split(row, ids):
 
 
 def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None, origin=None):
+    """Write the hand-in's tickets; returns (ids, refusals). The group check runs again on the
+    data inside the write: a refusal (a named group stopped being open) writes nothing."""
     def change(tx):
+        refused = group_problems(result, tx.data)
+        if refused:
+            return [], refused
         ids, mapping = [], {}
         nxt = int(tx.data.next_ticket_id())
         for t in result["tickets"]:
@@ -237,9 +302,16 @@ def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None, origin
                         "request": request[:4000], "feedback": [], "cases": None})
             if origin is not None:
                 row["origin"] = origin
+            node = result["dag"][str(t["key"])]
+            gid = node["group"]
+            if not NEW_GROUP.match(gid):
+                row["group"] = gid
+                g = tx.data.groups[gid]
+                g["members"] = list(g.get("members") or []) + [ident]
+                event(g, "member #%s added by the opener" % ident)
+                tx.put_group(g)
             event(row, "opened", **({"by": by} if by else {}))
             tx.put_ticket(row)
-            node = result["dag"][str(t["key"])]
             dag[ident] = {"depends_on": [mapping.get(str(d), str(d)) for d in node.get("depends_on") or []]}
             ids.append(ident)
         if cost:
@@ -253,10 +325,11 @@ def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None, origin
                 node.pop("verify", None)
                 node.pop("why_alone", None)
         tx.put_dag({"tickets": dag})
-        if ids:
-            ordered = sorted(ids, key=dagmod._order_key)
-            new_group(tx, ordered, "opened by the opener for " + ", ".join("#" + i for i in ordered))
-        return ids
+        for ph in placeholders(result):
+            members = [mapping[str(t["key"])] for t in result["tickets"]
+                       if result["dag"][str(t["key"])]["group"] == ph]
+            new_group(tx, members, "opened by the opener for " + ", ".join("#" + i for i in members))
+        return ids, []
     return pool.update(change, "tickets: open from a request")
 
 
@@ -278,6 +351,26 @@ def open_tickets(cfg, pool, request, via="main", by=None, origin=None):
         inflight.drop(cfg, name)
 
 
+def groups_section(snap):
+    """The chain the opener chooses a group from: every group not landed or cancelled, by number."""
+    lines = ["## Groups", "", "The chain, oldest first; a new group goes at the end."]
+    gids = sorted((k for k, g in snap.groups.items() if re.fullmatch(r"g\d+", k)
+                   and (g or {}).get("state") not in ("landed", "cancelled")), key=lambda k: int(k[1:]))
+    for gid in gids:
+        g = snap.groups[gid]
+        state = g.get("state")
+        head = ("- %s (open, takes new tickets): " % gid if state == "open"
+                else "- %s (%s, takes no new tickets): " % (gid, state))
+        members = []
+        for m in g.get("members") or []:
+            t = snap.tickets.get(str(m)) or {}
+            members.append("#%s [%s] %s" % (m, t.get("state"), t.get("title")))
+        lines.append(head + "; ".join(members))
+    if not gids:
+        lines.append("- none: every ticket goes into a new group")
+    return "\n".join(lines)
+
+
 def _open_tickets(cfg, pool, request, via, by, origin=None):
     snap = pool.snapshot()
     summary = [{"id": k, "title": v.get("title"), "state": v.get("state")}
@@ -293,6 +386,7 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
         limits_section(cfg),
         "## Tickets still open\n\n```json\n%s\n```" % json.dumps(summary, indent=2, ensure_ascii=False),
         "## Current DAG\n\n```json\n%s\n```" % json.dumps(snap.dag, indent=2, ensure_ascii=False),
+        groups_section(snap),
         "## The request\n\n%s" % guarded(request, via),
     ])
     errors, rows = [], []
@@ -337,7 +431,9 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
         errors = check_new(hand.result, pool.snapshot(), cfg)
         if errors:
             continue
-        ids = write_new(pool, hand.result, request, editable(cfg), by=by, cost=rows, origin=origin)
+        ids, errors = write_new(pool, hand.result, request, editable(cfg), by=by, cost=rows, origin=origin)
+        if errors:
+            continue
         titles = {i: pool.snapshot().tickets[i].get("title") for i in ids}
         pool.report("created", ",".join(ids), "opened " + "; ".join(
             "#%s %s" % (i, titles[i]) for i in ids))
