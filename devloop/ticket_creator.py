@@ -6,6 +6,9 @@
     python3 devloop/ticket_creator.py --revise 203 --from worker --reason "why the ticket is wrong"
     python3 devloop/ticket_creator.py --revise 203 --from user --decision revise|retry|cancel \
         --reason-file answer.txt --page <inbox page>                       # the user's answer
+    ... --from main ...                     # the main session answering for the user (D-094): same
+                                            # --decision effects, by defaults to main-session
+    --decision anywhere else (another --from, or without --revise) is refused (exit 2).
     ... --via web                           # input typed into the dashboard: injection check first
 
 Opening: the prompt chain in devloop/prompts/creator/ (read in file-name order), the reference
@@ -520,11 +523,14 @@ def main(argv=None):
     ap.add_argument("--reason", default="")
     ap.add_argument("--reason-file")
     ap.add_argument("--via", choices=("main", "web"), default="main")
-    ap.add_argument("--decision", choices=("revise", "retry", "cancel"), default="revise",
-                    help="with --from user: what to do with the ticket")
+    ap.add_argument("--decision", choices=("revise", "retry", "cancel"), default=None,
+                    help="with --from user or main: what to do with the ticket (default revise)")
     ap.add_argument("--by", default=None, help="the name of the trusted user who submitted this")
     ap.add_argument("--page", help="the inbox page this answers; marked read when handled")
     args = ap.parse_args(argv)
+    if args.decision is not None and not (args.revise and args.source in ("user", "main")):
+        print("ticket_creator: --decision only applies with --revise and --from user or main", file=sys.stderr)
+        return 2
     try:
         cfg = Config()
         pool = pool_for(cfg)
@@ -538,11 +544,13 @@ def main(argv=None):
             if frozen:
                 print("ticket_creator: %s" % frozen, file=sys.stderr)
                 return 2
-            if args.source == "user":
-                if args.decision == "revise" and not reason.strip():
+            if args.source in ("user", "main"):
+                decision = args.decision or "revise"
+                by = args.by or ("main-session" if args.source == "main" else None)
+                if decision == "revise" and not reason.strip():
                     print("ticket_creator: a revise decision needs the user's words", file=sys.stderr)
                     return 2
-                return decide(cfg, pool, str(args.revise), args.decision, reason, args.via, args.page, by=args.by)
+                return decide(cfg, pool, str(args.revise), decision, reason, args.via, args.page, by=by)
             if not reason.strip():
                 print("ticket_creator: --revise needs --reason", file=sys.stderr)
                 return 2
