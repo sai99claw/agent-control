@@ -219,7 +219,11 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   6 or more failing rows, or a rerun that cannot answer (rc 86 / 2): no rerun effect. Every report
   has `flaky` ([{"id", "message"}], [] when none); the controller writes a `flaky:` group event for
   a non-empty one, and the landed page, the release-failed page and both "still red after N fix
-  rounds" pages end with `flaky (passed when run again): <id> (<message>); ...`. The rerun is the
+  rounds" pages end with `flaky (passed when run again): <id> (<message>); ...`. Before such a page
+  (once per landing or stuck ending) the controller has the opener open one fix ticket (origin
+  `{"kind": "flaky", "group", "ids"}`) for the flaky ids no open fix ticket carries (open: any state
+  but landed or cancelled), writes one `flaky fix` group event, and the flaky line names the ticket:
+  `... - fix ticket: #12, #9 (already open)` (or `none opened (<problem>)`). The rerun is the
   gate's one second look, not a fix: agents still must not hide a flaky test with sleeps or
   retries in the test. The verifier writes its cases into existing test modules of the layer that covers the
   change, never one new file per ticket.
