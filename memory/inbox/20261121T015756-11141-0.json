@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "A test module that defines two classes with one name keeps only the last one: the loader never collects the first one's tests and nothing turns red. Before adding a class to a test file, grep the file for `class <Name>(`.",
-  "source": "request (opener)",
-  "at": "2026-11-21T01:57:56Z"
-}

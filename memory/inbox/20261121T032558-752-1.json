@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "git worktree add / remove / prune are not safe to run at once on one repository (a prune deletes another process's half-made .git/worktrees entry). All of them go through core/gitx.py under its worktree lock; do not call `git worktree` directly.",
-  "source": "group g2 fix r1",
-  "at": "2026-11-21T03:25:57Z"
-}
