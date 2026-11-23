@@ -33,6 +33,11 @@
       "at": "2026-11-23T05:17:53Z",
       "event": "dispatched",
       "target": "int/g5"
+    },
+    {
+      "at": "2026-11-23T05:17:57Z",
+      "event": "issuer started",
+      "target": "int/g5"
     }
   ],
   "cost": [
@@ -63,6 +68,11 @@
   ],
   "group": "g5",
   "target": "int/g5",
-  "run": null,
+  "run": {
+    "pid": 31954,
+    "host": "vm",
+    "boot": "de394030-423a-49b5-8f56-9acb60b7f1ba",
+    "started": "2026-11-23T05:17:57Z"
+  },
   "claimed_at": "2026-11-23T05:17:53Z"
 }
