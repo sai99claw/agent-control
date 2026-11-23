@@ -158,3 +158,27 @@ class T117Acceptance(LoopCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BehindLine(unittest.TestCase):
+    """#120: the stuck-group page line from core.chain.behind (the implementer's)."""
+
+    def snap(self, groups):
+        tickets = {"1": {"id": "1", "state": "merged", "group": "g1"}}
+        return Snapshot({"dag": {"tickets": {}}, "tickets": tickets,
+                         "groups": {gid: {"id": gid, "state": st, "members": ["1"] if gid == "g1" else []}
+                                    for gid, st in groups},
+                         "inbox": {}, "lessons": {}, "memory_state": {}})
+
+    def test_names_every_later_group_in_chain_order(self):
+        from core import chain
+        snap = self.snap([("g1", "stuck"), ("g12", "open"), ("g3", "pr"), ("g2", "landed")])
+        self.assertEqual(chain.behind_line(snap, "g1"), "later groups waiting for g1 to land: 2 (g3, g12)")
+        self.assertEqual(chain.with_behind("head", snap, "g1"),
+                         "head\nlater groups waiting for g1 to land: 2 (g3, g12)")
+
+    def test_nothing_behind_is_empty(self):
+        from core import chain
+        snap = self.snap([("g1", "stuck"), ("g0", "landed")])
+        self.assertEqual(chain.behind_line(snap, "g1"), "")
+        self.assertEqual(chain.with_behind("head", snap, "g1"), "head")

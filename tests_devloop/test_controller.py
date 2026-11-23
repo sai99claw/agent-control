@@ -1481,6 +1481,28 @@ class FollowMainUnits(LoopCase):
         self.assertIn("main kept moving", self.history())
         self.assertEqual(self.inbox_kinds(), ["decision"])
 
+    def caught_up_page(self, later):
+        """#120: the 'cannot catch up' page of g1 at max_rounds, with or without a later group g2."""
+        self.config(max_rounds=1)
+        self.add(1, state="merged", group="g1")
+        self.group(state="pr", fix_round=1)
+        if later:
+            self.add(2, group="g2")
+            self.group("g2", branch=False, members=["2"])
+        self.commit_on("int/g1", {"shared.txt": "group\n"})
+        self.commit_on("main", {"shared.txt": "main\n"})
+        self.ctl().advance_groups(self.snap())
+        pages = [r for r in self.snap().inbox.values() if r.get("kind") == "decision" and r.get("ref") == "g1"]
+        self.assertEqual(len(pages), 1, pages)
+        self.assertTrue(pages[0]["text"].startswith("group g1 cannot catch up with main"), pages[0]["text"])
+        return pages[0]["text"].split("\n")
+
+    def test_conflict_page_names_the_later_groups(self):
+        self.assertIn("later groups waiting for g1 to land: 1 (g2)", self.caught_up_page(True))
+
+    def test_conflict_page_without_later_groups_has_no_chain_line(self):
+        self.assertFalse([ln for ln in self.caught_up_page(False) if ln.startswith("later groups")])
+
     def test_a_pr_group_with_a_clean_merge_gets_its_regression(self):
         self.add(1)
         self.group(state="pr")

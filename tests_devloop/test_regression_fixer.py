@@ -1051,6 +1051,71 @@ class FixerOffBranchLoop(LoopCase):
         self.assertEqual(self.events(), [])
 
 
+    def off_branch_page(self, later):
+        """#120: the 'fixer left int/g1' page, with or without a later open group g2."""
+        if later:
+            self.add(2, group="g2")
+            self.pool.update(lambda tx: tx.put_group({"id": "g2", "state": "open", "branch": "int/g2",
+                                                      "members": ["2"]}), "test: g2")
+        self.fixer("git checkout -q --detach main\necho fixed > impl_1.txt\ngit add impl_1.txt\n"
+                   "git commit -q -m conflict")
+        pages = len(self.decisions())
+        res = self.run_fixer()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        new = [r for r in self.decisions() if r["text"].startswith("group g1: the fixer left int/g1")]
+        self.assertEqual(len(self.decisions()) - pages, 1)
+        self.assertEqual(len(new), 1, self.decisions())
+        return new[0]["text"].split("\n")
+
+    def test_off_branch_page_names_the_later_groups(self):
+        self.assertEqual(self.off_branch_page(True)[-1], "later groups waiting for g1 to land: 1 (g2)")
+
+    def test_off_branch_page_without_later_groups_has_no_chain_line(self):
+        self.assertFalse([ln for ln in self.off_branch_page(False) if ln.startswith("later groups")])
+
+
+class ChainLineOnStuckPages(LoopCase):
+    """#120 (the implementer's): the 'redder round dropped' and 'input from the web was NOT acted
+    on' pages of g1 end with the later-groups line when g2 waits behind g1, and lack it otherwise."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+
+    def page(self, later, start, **plan):
+        self.add(1)
+        if later:
+            self.add(2)
+        self.plan(worker={"1": ["red"]}, **plan)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        rows = [r for r in self.snap().inbox.values() if r.get("kind") == "decision" and r.get("ref") == "g1"
+                and r["text"].startswith(start)]
+        self.assertEqual(len(rows), 1, list(self.snap().inbox.values()))
+        return rows[0]["text"].split("\n")
+
+    def dropped(self, later):
+        self.config(max_rounds=1)
+        return self.page(later, "group g1 is still red after 1 fix rounds; the last round made it redder",
+                         fixer={"g1": ["worse"]})
+
+    def rejected(self, later):
+        return self.page(later, "group g1: input from the web was NOT acted on", fixer={"g1": ["rejected"]})
+
+    def test_dropped_round_page_names_the_later_groups(self):
+        self.assertEqual(self.dropped(True)[-1], "later groups waiting for g1 to land: 1 (g2)")
+
+    def test_dropped_round_page_alone_has_no_chain_line(self):
+        self.assertFalse([ln for ln in self.dropped(False) if ln.startswith("later groups")])
+
+    def test_rejected_page_names_the_later_groups(self):
+        self.assertEqual(self.rejected(True)[-1], "later groups waiting for g1 to land: 1 (g2)")
+
+    def test_rejected_page_alone_has_no_chain_line(self):
+        self.assertFalse([ln for ln in self.rejected(False) if ln.startswith("later groups")])
+
+
 class PageKeysHelper(LoopCase):
     def test_only_present_keys(self):
         import auto_fixer

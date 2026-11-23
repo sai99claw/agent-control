@@ -244,7 +244,7 @@ class T118Acceptance(LoopCase):
         heads = [el for el in lane.iter(NS + "text") if "lh" in (el.get("class") or "").split()]
         self.assertEqual(len(heads), 1)
         title = "".join(heads[0].itertext())
-        self.assertTrue(title.endswith(" · 2 張"), title)
+        self.assertTrue(title.endswith(" · 2 張 · 鏈上第 1 個"), title)
 
     # ------------------------------------------------------------ acceptance 14
 

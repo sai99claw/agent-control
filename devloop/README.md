@@ -33,7 +33,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + quick, if 
 | `python3 devloop/tickets.py init` | once per project: create the pool |
 | `python3 devloop/tickets.py lessons --layer L --name N --file F` | queue every bullet line of F as a lesson for that memory file (a project's own older memory) |
 | `python3 devloop/ticket_creator.py --request "..."` | the user wants something; `--revise N --from user --decision D [--page P] [--by NAME]` is the user's answer (`--from main` is the main session answering for the user, D-094: same `--decision` effects, `by` defaults to `main-session`; `--decision` anywhere else is refused with exit 2), recorded first as a 'user answer' event (decision, text, by, page) and refused for a running ticket |
-| `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching); a run that ends idle with tickets or groups left undone writes one idle page (ref `controller`, the same lines on stderr) saying what each waits for |
+| `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching); a run that ends idle with tickets or groups left undone writes one idle page (ref `controller`, the same lines on stderr) saying what each waits for; after a group's own line, each group that waits on an earlier one gets `<gid> waits for <gM> to land (place <k> in the chain)` |
 | `python3 devloop/tickets.py inbox` / `ack P [--by NAME]` | pages: created, landed, decision, env, cancelled, idle; `--by` sets acked_by and, for a page whose ref is a ticket or group, writes a 'page acknowledged' event on it (`ack --all --by NAME` only sets acked_by); a page with options also prints its question, each option with the command it runs, and the recommendation |
 | `python3 devloop/tickets.py wait [--timeout S] [--kind K,...]` | block until a page arrives that was not in the inbox at its start (new = not there then, not acked, kind listed in `--kind`), print it as inbox does, exit 0; exit 1 after `--timeout S` with no new page; exit 2 for a bad kind, a timeout <= 0 or no pool |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
@@ -383,6 +383,11 @@ every 30 s anyway when nobody types. When no record is running the tab says in o
 (`p.why`, `data-why`) why, the first that holds of: `none` (no work left, nothing waits for the user),
 `decision` (only cards for the user are left), `controller` (no live `controller.lock`), `deps` (every
 ready ticket waits for an unfinished dependency), `dispatch` (the controller picks it up next round).
+
+DAG draws one lane per group; the lane's title is the group id, its state, what runs for it, the
+last regression and the member count (`<n> 張`, `data-members`), and for a group in the chain
+(`core/chain.order()`: not landed or cancelled) its place in it, `鏈上第 <k> 個` (`data-place`), then,
+when an earlier group still holds the chain (`core/chain.waits_for()`), `等 <gM> 落地` (`data-waits`).
 
 Every row that waits for a machine slot (state `slot`; a regression waiting for the whole machine
 is not one) shows its place in the queue, `等機器名額:第 k 個(共 n 個在等)` (`data-queue="k/n"`, ordered by
