@@ -66,6 +66,13 @@ if role == "worker":
     if action == "blocked":
         hand({"kind": "blocked", "text": "need the user"})
         sys.exit(0)
+    if action == "revise_blocked":   # issue #4: revise (escalates when the creator plan says question), then hand in blocked
+        out = subprocess.run(["python3", os.path.join(os.environ["AC_HOME"], "devloop", "ticket_creator.py"),
+                              "--revise", ticket, "--from", "worker", "--reason", "acceptance 2 is impossible"],
+                             capture_output=True, text=True)
+        open(os.path.join(os.path.dirname(result_path), "revise.out"), "w").write(out.stdout + out.stderr)
+        hand({"kind": "blocked", "text": "waiting for the user's decision"})
+        sys.exit(0)
     open("impl_%s.txt" % ticket, "w").write("bad" if action == "wrong" else "ok")
     if action == "red":
         open("red.txt", "w").write("x")
