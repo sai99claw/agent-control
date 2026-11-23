@@ -38,6 +38,11 @@
       "at": "2026-11-23T04:16:59Z",
       "event": "dispatched",
       "target": "int/g4"
+    },
+    {
+      "at": "2026-11-23T04:17:01Z",
+      "event": "issuer started",
+      "target": "int/g4"
     }
   ],
   "cost": [
@@ -69,6 +74,11 @@
   ],
   "group": "g4",
   "target": "int/g4",
-  "run": null,
+  "run": {
+    "pid": 21978,
+    "host": "vm",
+    "boot": "de394030-423a-49b5-8f56-9acb60b7f1ba",
+    "started": "2026-11-23T04:17:01Z"
+  },
   "claimed_at": "2026-11-23T04:16:59Z"
 }
