@@ -70,6 +70,12 @@
     {
       "at": "2026-11-23T05:46:17Z",
       "event": "landed (release failed)"
+    },
+    {
+      "at": "2026-11-23T05:46:44Z",
+      "event": "page acknowledged",
+      "page": "20261123T054619Z-decision-g5",
+      "by": "main-session"
     }
   ],
   "main_tried": "4c0471b33f24d1d3e7b8a3e31ac4cbf09f33d7eb",
