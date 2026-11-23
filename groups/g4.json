@@ -47,6 +47,12 @@
     {
       "at": "2026-11-23T04:30:01Z",
       "event": "landed (release failed)"
+    },
+    {
+      "at": "2026-11-23T04:30:13Z",
+      "event": "page acknowledged",
+      "page": "20261123T043003Z-decision-g4",
+      "by": "main-session"
     }
   ],
   "main_tried": "2a0e6ef56f6254044355285a448647c48508b64f",
