@@ -2,7 +2,7 @@
   "id": "g4",
   "branch": "int/g4",
   "base": "7be8b0b682293e35e08c11dbc9fc375cfac68789",
-  "state": "verified",
+  "state": "landed",
   "alone": false,
   "members": [
     "110",
@@ -43,9 +43,16 @@
     {
       "at": "2026-11-23T04:29:56Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-23T04:30:01Z",
+      "event": "landed (release failed)"
     }
   ],
   "main_tried": "2a0e6ef56f6254044355285a448647c48508b64f",
   "last_regression": "green",
-  "verified_sha": "1a689598081775ea1554fb6c09a7c3587f2c1647"
+  "verified_sha": "1a689598081775ea1554fb6c09a7c3587f2c1647",
+  "landed_sha": "1a689598081775ea1554fb6c09a7c3587f2c1647",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g4.log"
 }
