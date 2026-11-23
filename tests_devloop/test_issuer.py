@@ -277,7 +277,7 @@ class PageSetsOfIssuerAndWriters(LoopCase):
         import ticket_issuer
         from core.config import Config
         issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "5", "int/g1")
-        for reason in ("rounds", "timeout", "target", "env", "error"):
+        for reason in ("rounds", "timeout", "target", "env", "error", "decision"):
             row = issuer.stuck_ask(reason)
             self.assertEqual(pages.problems("5", row), [], reason)
             self.assertEqual([o["action"] for o in row["options"]], ["retry", "revise", "cancel"])
