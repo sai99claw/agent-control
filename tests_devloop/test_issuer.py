@@ -332,6 +332,79 @@ class Revise(LoopCase):
         self.assertEqual(self.snap().tickets, {})
 
 
+class T114Acceptance(LoopCase):
+    """Ticket #114 (issue #4a): a ticket stuck on a worker's blocked hand-in always has a page: its
+    own, or the one its revise escalation wrote in the same round."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+
+    def run_loop(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap()
+
+    def decision_pages(self, snap):
+        return {name: row for name, row in snap.inbox.items()
+                if row.get("kind") == "decision" and row.get("ref") == "1"}
+
+    def assert_stuck_decision(self, snap):
+        t = snap.ticket("1")
+        self.assertEqual(t["state"], "stuck")
+        self.assertEqual(t["stuck"]["reason"], "decision")
+        return t
+
+    def assert_own_page(self, snap, text):
+        found = self.decision_pages(snap)
+        self.assertEqual(len(found), 1, "decision pages for #1: %r (all pages: %r)"
+                         % (found, sorted(r.get("kind") + " " + str(r.get("ref")) for r in snap.inbox.values())))
+        page = list(found.values())[0]
+        self.assertIn(text, page["text"])
+        self.assertEqual([o["action"] for o in page.get("options") or []], ["retry", "revise", "cancel"])
+        self.assertEqual(pages.problems("1", page), [])
+
+    @staticmethod
+    def escalated(t):
+        return [h for h in t.get("history") or [] if h.get("event") == "escalated"]
+
+    # ------------------------------------------------------------ acceptance 1
+
+    def test_1_a_blocked_hand_in_without_a_revise_leaves_one_decision_page(self):
+        self.add(1)
+        self.plan(worker={"1": ["blocked"]})
+        snap = self.run_loop()
+        self.assert_stuck_decision(snap)
+        self.assert_own_page(snap, "need the user")
+
+    # ------------------------------------------------------------ acceptance 2 and 3
+
+    def test_2_3_an_escalated_revise_records_its_page_and_is_the_only_decision_page(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_blocked"]}, creator={"1": ["question"]})
+        snap = self.run_loop()
+        t = self.assert_stuck_decision(snap)
+        found = self.decision_pages(snap)
+        self.assertEqual(len(found), 1, "decision pages for #1: %r" % found)
+        name, page = list(found.items())[0]
+        self.assertTrue(page["text"].startswith("#1 needs your decision (raised by the worker)"), page["text"])
+        events = self.escalated(t)
+        self.assertEqual(len(events), 1, "escalated events on #1: %r" % t.get("history"))
+        self.assertEqual(events[0].get("source"), "worker")
+        self.assertEqual(events[0].get("page"), name)
+
+    # ------------------------------------------------------------ acceptance 4
+
+    def test_4_an_escalation_from_an_earlier_run_does_not_count(self):
+        self.add(1, history=[{"event": "round start", "round": 1},
+                             {"event": "escalated", "source": "worker", "page": "old"}])
+        self.plan(worker={"1": ["blocked"]})
+        snap = self.run_loop()
+        self.assert_stuck_decision(snap)
+        self.assert_own_page(snap, "need the user")
+
+
 class FrozenWrites(LoopCase):
     """D-089: the pool writes of a revision refuse a merged or landed ticket inside the transaction."""
 
