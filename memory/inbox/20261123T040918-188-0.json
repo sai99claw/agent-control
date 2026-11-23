@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a ticket makes a script open tickets by itself on a failure, give it a dedupe rule over the still-open tickets of that mechanism from the start: the fix ticket's own landing meets the same failure, and without the rule every landing opens the next ticket.",
+  "source": "request (opener)",
+  "at": "2026-11-23T04:09:17Z"
+}
