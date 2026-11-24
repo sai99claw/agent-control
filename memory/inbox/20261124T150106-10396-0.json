@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py takes ids relative to tests_devloop (e.g. test_dag_edit.T141Acceptance), not tests_devloop.test_dag_edit...; the package-style id fails with ImportError.",
+  "source": "#141 r1 verifier",
+  "at": "2026-11-24T15:01:05Z"
+}
