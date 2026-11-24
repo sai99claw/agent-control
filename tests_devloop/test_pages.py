@@ -265,7 +265,8 @@ class T50Acceptance(LoopCase):
         self.assertEqual(g["notes"][-1]["by"], self.NAME, g["notes"])
         self.assertEqual(g["notes"][-1]["text"], "keep the newer output")
         self.assert_acked(snap.inbox["p1"], self.NAME, t0, t1)
-        self.assertFalse(snap.inbox["p2"]["acked"])
+        self.assert_acked(snap.inbox["p2"], "tickets ready", t0, t1)
+        p2 = snap.inbox["p2"]
         # without --by and --page: by 'user', no page touched
         self.pool.update(lambda tx: tx.put_group(dict(tx.data.groups["g1"], state="stuck", fix_round=3)),
                          "test: stuck again")
@@ -275,7 +276,7 @@ class T50Acceptance(LoopCase):
         g = snap.groups["g1"]
         self.assertEqual(g["history"][-1].get("by"), "user", g["history"][-1])
         self.assertEqual(g["notes"][-1]["by"], "user", g["notes"])
-        self.assertFalse(snap.inbox["p2"]["acked"])
+        self.assertEqual(snap.inbox["p2"], p2, "an acked page changed")
 
     # ------------------------------------------------ item 5: cancel gN --by --page
 
@@ -1066,6 +1067,198 @@ class T77Acceptance(LoopCase):
         self.assertIn("`actl tickets wait", poll[0])
         self.assertIn("背景", poll[0])
         self.assertEqual(len([ln for ln in claude if "頁的種類" in ln]), 1)
+
+
+class PagesCloseUnit(LoopCase):
+    """#123 (implementer's cases): core.pool.close_pages and the controller's 'superseded' moments."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+
+    def page(self, name, ref, kind="decision", **extra):
+        row = dict({"kind": kind, "ref": ref, "text": "t", "at": osx.now(), "acked": False}, **extra)
+        self.pool.update(lambda tx: tx.write("inbox/%s.json" % name, row), "test: page %s" % name)
+
+    def group(self, gid, members, state="open", **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": state, "members": list(members), "fix_round": 0,
+             "job": None}
+        g.update(fields)
+        self.pool.update(lambda tx: tx.put_group(g), "test: group %s" % gid)
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        return c
+
+    def acked_by(self, name):
+        row = self.snap().inbox[name]
+        return row.get("acked_by") if row.get("acked") else None
+
+    # ------------------------------------------------ acceptance 1: the terms
+
+    def test_close_pages_acks_only_unread_decision_and_env_pages_of_ref(self):
+        self.add(1)
+        for kind in ("decision", "env", "created", "landed", "cancelled", "idle"):
+            self.page("k-" + kind, "1", kind)
+        self.page("int-ref", 1)                         # str(ref) matches
+        self.page("other", "2")
+        self.page("old", "1", acked=True, acked_at="2026-01-01T00:00:00Z", acked_by="someone")
+        self.page("not-named", "1")
+        before_ticket = self.snap().tickets["1"]
+        names = {"k-decision", "k-env", "k-created", "int-ref", "old", "other"}
+        t0 = osx.now()
+        done = self.pool.update(lambda tx: pool_mod.close_pages(tx, "1", "X", names), "test: close")
+        t1 = osx.now()
+        self.assertEqual(sorted(done), ["int-ref", "k-decision", "k-env"])
+        inbox = self.snap().inbox
+        for name in done:
+            row = inbox[name]
+            self.assertEqual((row["acked"], row["acked_by"]), (True, "X"), row)
+            self.assertRegex(row["acked_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+            self.assertTrue(t0 <= row["acked_at"] <= t1)
+        for name in ("k-created", "k-landed", "k-cancelled", "k-idle", "other", "not-named"):
+            self.assertFalse(inbox[name]["acked"], name)
+        self.assertEqual(inbox["old"]["acked_by"], "someone")
+        self.assertEqual(inbox["old"]["acked_at"], "2026-01-01T00:00:00Z")
+        self.assertEqual(self.snap().tickets["1"], before_ticket, "close_pages wrote an event")
+        # without names: every page of the ref
+        done = self.pool.update(lambda tx: pool_mod.close_pages(tx, "1", "Y"), "test: close all")
+        self.assertEqual(done, ["not-named"])
+
+    # ------------------------------------------------ acceptance 7: superseded moments
+
+    def test_dispatch_acks_the_tickets_pages(self):
+        import ticket_controller
+        self.add(1)
+        self.group("g1", [])
+        self.page("p1", "1")
+        self.page("p2", "2")
+        self.page("pg", "g1")
+        c = self.ctl()
+        with mock.patch.object(ticket_controller.osx, "spawn", return_value=mock.Mock(pid=1)):
+            c.start_issuer("1", "g1")
+        self.assertEqual(self.state(1), "running")
+        self.assertEqual(self.acked_by("p1"), "superseded")
+        self.assertIsNone(self.acked_by("p2"))
+        self.assertIsNone(self.acked_by("pg"))
+
+    def test_regression_and_fixer_start_ack_the_groups_pages(self):
+        import ticket_controller
+        self.add(1, state="merged", group="g1")
+        self.group("g1", ["1"], state="pr")
+        self.group("g2", [], state="pr")
+        self.page("e1", "g1", "env")
+        self.page("pt", "1")
+        self.page("o", "g2")
+        c = self.ctl()
+        with mock.patch.object(ticket_controller.osx, "spawn", return_value=mock.Mock(pid=1)):
+            c.start_regression(self.snap().groups["g1"])
+            self.assertEqual(self.acked_by("e1"), "superseded")
+            self.page("d1", "g1")
+            c.set_group("g1", None, "test: no job", job=None)
+            self.assertIsNone(self.acked_by("d1"), "a plain set_group acked a page")
+            c.start_fixer("g1", os.path.join(self.tmp, "report.json"), 1)
+        self.assertEqual(self.acked_by("d1"), "superseded")
+        self.assertIsNone(self.acked_by("pt"))
+        self.assertIsNone(self.acked_by("o"))
+
+    def test_group_cancelled_acks_the_groups_pages(self):
+        self.group("g1", [], state="stuck")
+        self.group("g2", [])
+        self.page("a", "g1")
+        self.page("b", "g2", "env")
+        c = self.ctl()
+        c.set_group("g1", "cancelled", "no tickets left: group closed")
+        self.assertEqual(self.acked_by("a"), "superseded")
+        self.assertIsNone(self.acked_by("b"))
+        self.assertEqual(c.close_open("g2"), "cancelled")
+        self.assertEqual(self.acked_by("b"), "superseded")
+
+    def land_case(self):
+        sha = git(self.proj, "rev-parse", "HEAD")
+        git(self.proj, "branch", "int/g1", sha)
+        self.add(1, state="merged", group="g1", target="int/g1")
+        self.group("g1", ["1"], state="verified", verified_sha=sha)
+        self.page("pg", "g1")
+        self.page("pt", "1")
+        self.page("pc", "g1", "created")
+
+    def test_landing_acks_pages_that_existed_when_it_began(self):
+        self.land_case()
+        self.ctl().land(self.snap().groups["g1"])
+        snap = self.snap()
+        self.assertEqual((snap.groups["g1"]["state"], snap.tickets["1"]["state"]), ("landed", "landed"))
+        self.assertEqual(self.acked_by("pg"), "superseded")
+        self.assertEqual(self.acked_by("pt"), "superseded")
+        self.assertIsNone(self.acked_by("pc"))
+
+    def test_landing_leaves_its_own_push_failed_page_unread(self):
+        git(self.proj, "remote", "add", "nowhere", os.path.join(self.tmp, "no-such-remote.git"))
+        self.config(remote="nowhere")
+        self.land_case()
+        self.ctl().land(self.snap().groups["g1"])
+        self.assertEqual(self.snap().groups["g1"]["state"], "landed")
+        self.assertEqual(self.acked_by("pg"), "superseded")
+        pushed = [n for n, r in self.snap().inbox.items()
+                  if r.get("kind") == "decision" and r.get("ref") == "g1" and "push" in r.get("text", "")]
+        self.assertEqual(len(pushed), 1, self.snap().inbox)
+        self.assertIsNone(self.acked_by(pushed[0]))
+
+    def test_landing_leaves_its_release_failed_page_unread(self):
+        self.config(release="exit 2")
+        self.land_case()
+        self.ctl().land(self.snap().groups["g1"])
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        fresh = [n for n, r in self.snap().inbox.items()
+                 if r.get("kind") == "decision" and n not in ("pg", "pt")]
+        self.assertEqual(len(fresh), 1, self.snap().inbox)
+        self.assertIsNone(self.acked_by(fresh[0]))
+        self.assertEqual(self.acked_by("pg"), "superseded")
+
+    # ------------------------------------------------ acceptance 12: unchanged
+
+    def test_ack_inbox_wait_and_refusals_unchanged(self):
+        self.add(1, state="running")
+        self.page("p1", "1")
+        self.page("c1", "1", "created")
+        res = self.run_py("tickets.py", "inbox")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("p1", res.stdout)
+        self.assertIn("c1", res.stdout)
+        n = git(self.pool_path, "rev-list", "--count", "HEAD")
+        res = self.run_py("tickets.py", "ready", "1", "--page", "p1")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertEqual(git(self.pool_path, "rev-list", "--count", "HEAD"), n, "a refused action wrote")
+        self.assertIsNone(self.acked_by("p1"))
+        res = self.run_py("tickets.py", "ack", "p1")
+        self.assertEqual((res.returncode, res.stdout.strip()), (0, "acked 1"), res.stderr)
+        self.assertTrue(self.snap().inbox["p1"]["acked"])
+        self.assertFalse(self.snap().inbox["c1"]["acked"])
+        res = self.run_py("tickets.py", "ack", "--all")
+        self.assertEqual((res.returncode, res.stdout.strip()), (0, "acked 1"), res.stderr)
+        self.assertTrue(self.snap().inbox["c1"]["acked"])
+
+    # ------------------------------------------------ acceptance 13: README
+
+    def test_readme_bullet_follows_pages(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        section = text.split("\n## Contracts\n", 1)[1].split("\n## ", 1)[0]
+        bullets = re.split(r"\n(?=- )", section.strip())
+        heads = [b.split(":", 1)[0] for b in bullets]
+        i = heads.index("- **Pages**")
+        bullet = bullets[i + 1]
+        self.assertTrue(bullet.startswith("- **Pages close with their subject**:"), bullet)
+        flat = " ".join(bullet.split())
+        for word in ("tickets.py ready", "cancel", "rerun", "release", "ticket_creator.py --revise",
+                     "`tickets ready`", "`tickets cancel`", "`tickets rerun`", "`tickets release`",
+                     "`new --revise`", "`superseded`", "`answer`", "dispatches", "regression or fixer",
+                     "lands a group", "cancelled"):
+            self.assertIn(word, flat)
 
 
 class T101Acceptance(LoopCase):

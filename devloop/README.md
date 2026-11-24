@@ -520,6 +520,17 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
   group-ready, group-cancel, rerun, release (a group), ack (any page); each maps to one answer
   command that inbox prints. `Pool.report` checks the set when the page is written: a bad set is
   dropped and the text gets a last line `(options dropped: <the first problem>)`.
+- **Pages close with their subject**: an unread decision or env page whose `ref` is a ticket or group
+  is acked (`acked_at`, `acked_by`, no event) in the same pool write that handles that subject; the
+  `--page` page keeps `--by` (else `answer`). `tickets.py ready N|gN` acks as `tickets ready`,
+  `cancel N|gN` as `tickets cancel` (with each member ticket it cancels), `rerun gN` as `tickets rerun`,
+  `release gN` as `tickets release` (pages that existed when it started); `ticket_creator.py --revise N
+  --from user|main --decision retry|cancel`, and `revise` ending ready or escalated, as `new --revise`
+  (pages that existed when it started; its own question stays unread). The controller acks as
+  `superseded` when it dispatches a ready ticket (the ticket's pages), starts a regression or fixer
+  job for a group (the group's pages), lands a group (the group's and each landed ticket's pages that
+  existed when the landing began; its push-failed and release pages stay unread), and sets a group
+  cancelled (the group's pages). Created, landed, cancelled and idle pages are never acked this way.
 
 ## Tests
 

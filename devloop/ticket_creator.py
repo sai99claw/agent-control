@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import agents, inflight, memory, osx, pages  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.pool import event, frozen_reason, leave_group, new_group  # noqa: E402
+from core.pool import close_pages, event, frozen_reason, leave_group, new_group  # noqa: E402
 
 PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 TEXT_FIELDS = ("title", "objective", "outline", "test_plan", "notes")
@@ -70,16 +70,20 @@ def guarded(text, via):
     return agents.web_guarded(text)
 
 
-def ack(pool, page, by=None):
-    if not page:
+def ack(pool, page, by=None, ident=None, names=None):
+    """One write: --page acked as by (else 'answer'); with `ident`, the other pages of that ticket
+    among `names` (the inbox when the command started) acked as 'new --revise'."""
+    if not page and ident is None:
         return
 
     def change(tx):
-        row = tx.data.inbox.get(page)
+        row = tx.data.inbox.get(page) if page else None
         if row is not None and not row.get("acked"):
             row["acked"], row["acked_at"], row["acked_by"] = True, osx.now(), by or "answer"
             tx.write("inbox/%s.json" % page, row)
-    pool.update(change, "inbox: answered %s" % page)
+        if ident is not None:
+            close_pages(tx, ident, "new --revise", names)
+    pool.update(change, "inbox: answered %s" % (page or "#%s" % ident))
 
 
 def rejected(pool, ref, text, via, cost=None):
@@ -473,6 +477,7 @@ def user_reset(pool, ident, state, note, changes=None, cases_wrong=False, by=Non
 
 def decide(cfg, pool, ident, decision, text, via, page, by=None):
     """A user's answer to a page about one ticket: revise | retry | cancel."""
+    before = set(pool.snapshot().inbox)
     def record(tx):
         row = tx.ticket(ident)
         if row.get("state") == "running":
@@ -485,17 +490,17 @@ def decide(cfg, pool, ident, decision, text, via, page, by=None):
     pool.update(record, "#%s: user answer (%s)" % (ident, decision))
     if decision == "cancel":
         user_reset(pool, ident, "cancelled", text or "cancelled by the user", by=by)
-        ack(pool, page, by)
+        ack(pool, page, by, ident, before)
         print("CANCELLED #%s" % ident)
         return 0
     if decision == "retry":
         user_reset(pool, ident, "ready", text or "try again unchanged", by=by)
-        ack(pool, page, by)
+        ack(pool, page, by, ident, before)
         print("READY AGAIN #%s" % ident)
         return 0
     rc = revise(cfg, pool, ident, "user", text, via=via, by=by)
     if rc in (0, 3):
-        ack(pool, page, by)
+        ack(pool, page, by, ident, before)
     return rc
 
 

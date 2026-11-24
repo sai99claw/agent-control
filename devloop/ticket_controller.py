@@ -48,7 +48,7 @@ from core import dag as dagmod  # noqa: E402
 from core import agents, chain, codemap, host, memory, osx, pages, release  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
-from core.pool import event, leave_group, new_group  # noqa: E402
+from core.pool import close_pages, event, leave_group, new_group  # noqa: E402
 
 LOOP = os.path.dirname(os.path.abspath(__file__))
 LOST = "lost"   # merge_no_reverify: the branch moved under the compare-and-swap
@@ -401,6 +401,7 @@ class Controller:
                 g["state"], why = "stuck", "no ticket of the group got merged"
             else:
                 g["state"], why = "cancelled", "no tickets left: group closed"
+                close_pages(tx, gid, "superseded")
             event(g, why)
             tx.put_group(g)
             return g["state"]
@@ -411,7 +412,8 @@ class Controller:
         members = g.get("members") or []
         return bool(members) and all((snap.tickets.get(i) or {}).get("state") == "cancelled" for i in members)
 
-    def set_group(self, gid, state, why, drop=(), **fields):
+    def set_group(self, gid, state, why, drop=(), superseded=False, **fields):
+        """`superseded` (or state cancelled) also acks every page of gid as 'superseded'."""
         def change(tx):
             g = tx.data.groups[gid]
             if state is not None:
@@ -421,6 +423,8 @@ class Controller:
                 g.pop(key, None)
             event(g, why)
             tx.put_group(g)
+            if superseded or state == "cancelled":
+                close_pages(tx, gid, "superseded")
             return g
         return self.pool.update(change, "group %s: %s" % (gid, state or why))
 
@@ -450,7 +454,7 @@ class Controller:
         self.children["%s:%s" % (kind, gid)] = proc
         stamp = {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(), "started": osx.now()}
         self.set_group(gid, None, "%s started" % kind, job={"kind": kind, "stamp": stamp, "out": out},
-                       drop=("paused",) if kind == "regression" else ())
+                       drop=("paused",) if kind == "regression" else (), superseded=True)
 
     def pause(self, gid, reason, text):
         """Mark a group whose environment broke; a --forever controller leaves it alone until
@@ -615,6 +619,7 @@ class Controller:
 
     def land(self, g):
         gid, sha, main = g["id"], g.get("verified_sha"), self.cfg.main_branch
+        before = set(self.pool.snapshot().inbox)    # pages written by this landing stay unread
         if self.all_cancelled(self.pool.snapshot(), g):
             self.set_group(gid, "cancelled", "all tickets cancelled: group closed")
             return
@@ -686,6 +691,7 @@ class Controller:
                 t["cost_total"] = agents.total(t.get("cost"))
                 event(t, "landed", group=gid)
                 tx.put_ticket(t)
+                close_pages(tx, i, "superseded", before)
             grp = tx.data.groups[gid]
             grp["state"], grp["landed_sha"], grp["release"] = "landed", sha, "ok" if released else "failed"
             grp["release_log"] = rel_log
@@ -694,6 +700,7 @@ class Controller:
                 event(grp, "release rc 1, run once more", fix_tickets=rerun["fix_tickets"],
                       fix_open=rerun["fix_open"], rerun="ok" if released else "failed")
             tx.put_group(grp)
+            close_pages(tx, gid, "superseded", before)
         self.pool.update(change, "group %s landed" % gid)
         self.repo.remove_worktree(os.path.join(self.cfg.worktree_root, "fix-" + gid))
         if released:
@@ -1078,6 +1085,7 @@ class Controller:
             t["claimed_at"] = osx.now()
             event(t, "dispatched", target=branch)
             tx.put_ticket(t)
+            close_pages(tx, ident, "superseded")
             g = tx.data.groups[gid]
             if ident not in g["members"]:
                 g["members"].append(ident)
