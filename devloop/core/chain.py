@@ -69,8 +69,9 @@ def waits(snap):
 
 def after_edges(snap):
     """D-099: dag.json's well-formed `group_after` edges {A: [B, ...]} (A comes after each B),
-    all of them, landed or not; anything that is not a str key with a list of str is skipped."""
-    raw = (snap.raw.get("dag") or {}).get("group_after")
+    all of them, landed or not; anything that is not a str key with a list of str is skipped.
+    A snapshot without `raw` (a stand-in built by hand) has no edges."""
+    raw = ((getattr(snap, "raw", None) or {}).get("dag") or {}).get("group_after")
     if not isinstance(raw, dict):
         return {}
     return {a: [b for b in bs if isinstance(b, str)] for a, bs in raw.items()
