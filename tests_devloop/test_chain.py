@@ -78,6 +78,155 @@ class ChainHelpers(unittest.TestCase):
         self.assertEqual(list(chain.behind(snap, "g5")), [])
 
 
+def stamp(k):
+    return "2026-11-20T00:00:0%dZ" % k
+
+
+def dag_snap(groups, tickets):
+    """groups: [(gid, k, state, [member ids])]; tickets: {id: [ids it depends on]}, each ready in
+    the group that lists it."""
+    where = {m: gid for gid, _, _, members in groups for m in members}
+    return Snapshot({
+        "dag": {"tickets": {i: {"depends_on": list(deps)} for i, deps in tickets.items()}},
+        "tickets": {i: {"id": i, "state": "ready", "group": where[i]} for i in tickets},
+        "groups": {gid: {"id": gid, "state": state, "members": list(members), "created": stamp(k)}
+                   for gid, k, state, members in groups},
+        "inbox": {}, "lessons": {}, "memory_state": {}})
+
+
+class T122Acceptance(LoopCase):
+    """#122 (GitHub issue #13), verifier's cases: acceptance 3 (pure Snapshot fixtures F1-F5),
+    5 (a group id that is not g<N>) and 6 (end to end: a dependency pulls its group ahead).
+    Every expected value is copied from the ticket text."""
+
+    GSTAMP = "2026-11-23T00:00:00Z"
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k)
+
+    def chain(self, *names):
+        self.assertIsNotNone(importlib.util.find_spec("core.chain"), "devloop/core/chain.py is missing")
+        mod = importlib.import_module("core.chain")
+        for name in ("order", "waits_for", "behind") + names:
+            self.assertTrue(callable(getattr(mod, name, None)), "core.chain.%s is missing" % name)
+        return mod
+
+    def group(self, gid, members, state="open"):
+        def change(tx):
+            tx.put_group({"id": gid, "branch": "int/" + gid, "state": state, "members": list(members),
+                          "fix_round": 0, "job": None, "created": self.GSTAMP,
+                          "history": [{"at": self.GSTAMP, "event": "opened by the opener for "
+                                       + ", ".join("#" + m for m in members)}]})
+        self.pool.update(change, "test: group %s" % gid)
+
+    def out(self, res):
+        return res.stdout[-2000:] + res.stderr[-2000:]
+
+    # ------------------------------------------------------------ acceptance 3
+
+    def test_f1_a_dependency_pulls_its_group_ahead(self):
+        chain = self.chain()
+        snap = dag_snap([("g1", 1, "open", ["1"]), ("g2", 2, "open", ["2"]), ("g3", 3, "open", ["3"])],
+                        {"1": ["2"], "2": [], "3": []})
+        self.assertEqual(chain.order(snap), ["g2", "g1", "g3"])
+        self.assertEqual(chain.waits_for(snap, "g1"), "g2")
+
+    def test_f2_the_issue_case_g75_before_g63(self):
+        chain = self.chain()
+        snap = dag_snap([("g63", 1, "open", ["1"]), ("g64", 2, "open", ["2"]), ("g75", 3, "open", ["3"])],
+                        {"1": ["3"], "2": [], "3": []})
+        self.assertEqual(chain.order(snap), ["g75", "g63", "g64"])
+        self.assertEqual(list(chain.behind(snap, "g75")), ["g63", "g64"])
+
+    def test_f3_creation_before_number(self):
+        chain = self.chain()
+        snap = dag_snap([("g10", 1, "open", []), ("g9", 2, "open", [])], {})
+        self.assertEqual(chain.order(snap), ["g10", "g9"])
+
+    def test_f4_a_cycle_is_reported_and_order_does_not_raise(self):
+        chain = self.chain("cycle")
+        snap = dag_snap([("g1", 1, "open", ["1", "4"]), ("g2", 2, "open", ["2", "3"])],
+                        {"1": [], "2": [], "3": ["1"], "4": ["2"]})
+        self.assertEqual(chain.cycle(snap), ["g1", "g2", "g1"])
+        got = chain.order(snap)
+        self.assertEqual(sorted(got), ["g1", "g2"], got)
+
+    def test_f4_no_cycle_is_none(self):
+        chain = self.chain("cycle")
+        snap = dag_snap([("g1", 1, "open", ["1"]), ("g2", 2, "open", ["2"]), ("g3", 3, "open", ["3"])],
+                        {"1": ["2"], "2": [], "3": []})
+        self.assertIsNone(chain.cycle(snap))
+
+    def test_f5_sequence_puts_landed_and_cancelled_first_by_creation(self):
+        chain = self.chain("sequence")
+        snap = dag_snap([("g1", 3, "landed", []), ("g2", 1, "cancelled", []), ("g3", 2, "open", [])], {})
+        self.assertEqual(chain.sequence(snap), ["g2", "g1", "g3"])
+
+    # ------------------------------------------------------------ acceptance 5
+
+    def g62a(self):
+        self.add(1, needs_verifier=False, group="g62a")
+        self.group("g62a", ["1"])
+
+    def test_list_prints_a_group_that_is_not_g_n(self):
+        self.g62a()
+        res = self.run_py("tickets.py", "list")
+        self.assertEqual(res.returncode, 0, self.out(res))
+        self.assertTrue(any(ln.startswith("g62a") for ln in res.stdout.splitlines()), res.stdout)
+
+    def test_board_tickets_tab_shows_a_group_that_is_not_g_n(self):
+        self.g62a()
+        page = os.path.join(self.tmp, "board.html")
+        res = self.run_py("board.py", "html", "--out", page, "--query", "tab=tickets")
+        self.assertEqual(res.returncode, 0, self.out(res))
+        with open(page) as fh:
+            self.assertIn("g62a", fh.read())
+
+    def test_controller_lands_a_group_that_is_not_g_n(self):
+        self.g62a()
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, self.out(res))
+        snap = self.snap()
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(snap.groups["g62a"].get("state"), "landed", events(snap, "g62a"))
+
+    def test_cancel_a_group_that_is_not_g_n(self):
+        self.g62a()
+        res = self.run_py("tickets.py", "cancel", "g62a", "--why", "w")
+        self.assertEqual(res.returncode, 0, self.out(res))
+        self.assertEqual(self.snap().groups["g62a"].get("state"), "cancelled")
+
+    def test_ready_and_rerun_route_a_non_number_to_the_group_path(self):
+        self.g62a()
+        res = self.run_py("tickets.py", "rerun", "g62a", "--why", "w")
+        self.assertNotIn("not for ticket g62a", self.out(res))
+        res = self.run_py("tickets.py", "ready", "g62a", "--why", "w")
+        self.assertNotIn("no ticket g62a", self.out(res))
+        res = self.run_py("tickets.py", "rerun", "1", "--why", "w")
+        self.assertIn("rerun is for a group g<N>, not for ticket 1", self.out(res))
+
+    # ------------------------------------------------------------ acceptance 6
+
+    def test_a_ticket_depending_on_a_later_group_lands_in_its_own_group(self):
+        self.add(1, deps=[2], needs_verifier=False, group="g1")
+        self.add(2, needs_verifier=False, group="g2")
+        self.group("g1", ["1"])
+        self.group("g2", ["2"])
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, self.out(res))
+        snap = self.snap()
+        self.assertEqual((self.state(1), self.state(2)), ("landed", "landed"))
+        self.assertEqual(snap.ticket("1").get("group"), "g1")
+        self.assertEqual(snap.groups["g1"].get("state"), "landed", events(snap, "g1"))
+        self.assertEqual(set(snap.groups), {"g1", "g2"})
+        g2_landed = landed_at(snap, "g2")
+        self.assertIsNotNone(g2_landed, events(snap, "g2"))
+        self.assertTrue(started(snap, "g1"), events(snap, "g1"))
+        self.assertGreaterEqual(started(snap, "g1")[0], g2_landed, events(snap, "g1"))
+
+
 class T117Acceptance(LoopCase):
     """Acceptance 3, 4, 5 (end to end through the controller) and 9 (README)."""
 
