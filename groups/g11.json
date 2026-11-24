@@ -5,7 +5,9 @@
   "members": [
     "134",
     "135",
-    "136"
+    "136",
+    "137",
+    "138"
   ],
   "fix_round": 0,
   "job": null,
@@ -30,6 +32,14 @@
     {
       "at": "2026-11-24T14:33:56Z",
       "event": "main moved to 22af64f016c0: fast-forwarded int/g11 to it"
+    },
+    {
+      "at": "2026-11-24T14:34:18Z",
+      "event": "member #137 added by the opener"
+    },
+    {
+      "at": "2026-11-24T14:34:18Z",
+      "event": "member #138 added by the opener"
     }
   ],
   "base": "52bb7cd4cd8f0b1556e46c4fc2be3d72409b2ab5",
