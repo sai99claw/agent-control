@@ -641,7 +641,13 @@ class T127Acceptance(LoopCase):
 
     @staticmethod
     def without_history(t):
-        return {k: v for k, v in t.items() if k != "history"}
+        """The ticket's fields and state: 'history' (events) and 'cost' rows are run records, left out (#127, #59)."""
+        return {k: v for k, v in t.items() if k not in ("history", "cost")}
+
+    def assertCostKept(self, t0, t1):
+        """The opener run's cost row stays even when the revision is refused: no earlier row is dropped (#59)."""
+        old = t0.get("cost") or []
+        self.assertEqual((t1.get("cost") or [])[:len(old)], old)
 
     # ------------------------------------------------------------ (a)
 
@@ -685,6 +691,7 @@ class T127Acceptance(LoopCase):
         self.assertEqual(self.without_history(t1), self.without_history(t0))
         self.assertEqual(t1.get("state"), "stuck")
         self.assertEqual(dict(after.dag.get("1") or {}), dag0)
+        self.assertCostKept(t0, t1)
         old = t0.get("history") or []
         new = t1.get("history") or []
         self.assertEqual(new[:len(old)], old)
@@ -711,6 +718,7 @@ class T127Acceptance(LoopCase):
         t1 = after.ticket("1")
         self.assertEqual(self.without_history(t1), self.without_history(t0))
         self.assertEqual(dict(after.dag.get("1") or {}), dag0)
+        self.assertCostKept(t0, t1)
 
 
 class LastFullSecondsUnit(unittest.TestCase):
