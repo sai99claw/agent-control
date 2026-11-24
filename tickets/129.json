@@ -23,7 +23,7 @@
   "removes": "The dead test ids in board/config.json: test_testiface in tests.unittest.base and in 5 map rows, test_actl in the bin/actl row, and the scripts/session-hook.sh map row whose only id was test_actl. Adds one guard case (acceptance 5) that keeps dead ids from coming back.",
   "id": "129",
   "state": "running",
-  "round": 0,
+  "round": 1,
   "created": "2026-11-24T13:01:29Z",
   "request": "# board/config.json lists a test module that no longer exists: test_testiface\n\nThe user asked for this (2026-11-24: 「先修掉他」). Found by #128's opener: board/config.json `tests.unittest` names `test_testiface` in `base` and in several `map` rows, but tests/test_testiface.py was deleted in c5024c7 (D-085, \"Make devloop agent-control's loop; remove the old loop\"). Every run that selects it gets one ImportError row that belongs to no ticket.\n\nWanted:\n- Remove every `test_testiface` id from board/config.json (base and map rows). Do not add a replacement id unless a module that exists today covers what the map row was for; say which in the notes.\n- Update what still names the module as if it existed: tests/test_adapter_unittest.py `test_several_files_are_deduped_in_order` expects \"test_testiface\" in the selected ids (its expectation follows the config); the comment at the top of tests/fixtures/project/scripts/ac-tests.sh says \"A's tests/test_testiface.py drives it\". Leave history (docs/HANDOFF.md, docs/design/*) as written.\n- Check whether any other id in the config's tests section names a module that does not exist in tests/ or tests_devloop/; fix those the same way and list them in the notes.\n- Consider a guard: a case (in the config's own test file, e.g. tests/test_project_config.py, or wherever config checks live) that fails when an id in tests.unittest names no module under the roots. Add it only if it is cheap and fits an existing test file.\n- removes: the dead test id(s) in board/config.json.\n",
   "feedback": [],
@@ -42,6 +42,11 @@
       "at": "2026-11-24T13:01:47Z",
       "event": "issuer started",
       "target": "int/g9"
+    },
+    {
+      "at": "2026-11-24T13:01:50Z",
+      "event": "round start",
+      "round": 1
     }
   ],
   "cost": [
