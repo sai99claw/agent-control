@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "board/config.json tests.unittest.map is read only by `actl test select`; devloop's own runs use tests.unittest.base (every worker's base command) and the full suite. A dead or wrong map id changes no devloop run, while a dead base id makes every worker's base run red.",
+  "source": "request (opener)",
+  "at": "2026-11-24T13:01:25Z"
+}
