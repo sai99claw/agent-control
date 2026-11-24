@@ -112,6 +112,11 @@ def idle_lines(snap):
         elif g.get("paused") and state not in ("landed", "cancelled"):
             mark = g["paused"]
             out.append("%s paused (%s): %s" % (gid, mark.get("reason") or "?", _first_line(mark.get("text"))))
+        elif state == "open":
+            held = [i for i in g.get("members") or [] if (snap.tickets.get(i) or {}).get("state") == "stuck"
+                    and snap.tickets[i].get("group") == gid and chain.stuck_holds(snap, i, gid)]
+            if held:
+                out.append("%s waits for the decision on #%s" % (gid, ", #".join(held)))
         chain_order, earlier = chain.order(snap), chain.waits_for(snap, gid)
         if earlier is not None:
             out.append("%s waits for %s to land (place %d in the chain)" % (gid, earlier, chain_order.index(gid) + 1))
@@ -363,10 +368,13 @@ class Controller:
         self.start_fixer(gid, report, rnd + 1)
 
     def open_stays(self, data, g):
-        """An open group stays open while a member runs or a ready member can still start."""
+        """An open group stays open while a member runs, a ready member can still start, or a
+        stuck member holds it (chain.stuck_holds, D-097)."""
         for i in g.get("members") or []:
             t = data.tickets.get(i) or {}
             if t.get("state") == "running":
+                return True
+            if t.get("state") == "stuck" and t.get("group") == g["id"] and chain.stuck_holds(data, i, g["id"]):
                 return True
             if t.get("state") == "ready" and t.get("group") == g["id"] and self.can_still_start(data, i, g):
                 return True
@@ -374,12 +382,22 @@ class Controller:
 
     def close_open(self, gid):
         """An open group with no running member and no ready member that can still start goes on,
-        decided on the data this pool update reads: each ready member leaves it, then it becomes
+        decided on the data this pool update reads: each stuck member leaves it (none holds it,
+        D-097) and has no group, then each ready member leaves it, then it becomes
         pr (a merged member remains), stuck (other members remain) or cancelled (none remains)."""
         def change(tx):
             g = tx.data.groups.get(gid)
             if not g or g.get("state") != "open" or self.open_stays(tx.data, g):
                 return None
+            for i in list(g.get("members") or []):
+                t = tx.data.tickets.get(i) or {}
+                if t.get("state") != "stuck" or t.get("group") != gid:
+                    continue
+                t["group"] = t["target"] = None
+                tx.put_ticket(t)
+                g["members"] = [m for m in g["members"] if m != i]
+                event(g, "member #%s left: stuck, nothing depends on it and the rest of %s is merged (D-097)"
+                      % (i, gid))
             for i in list(g.get("members") or []):
                 t = tx.data.tickets.get(i) or {}
                 if t.get("state") != "ready":
@@ -1056,7 +1074,8 @@ class Controller:
 
     def can_still_start(self, data, ident, group):
         """Every dependency is landed, or ready, running or merged in this group or in a group
-        earlier in chain.order, and, with a landed one, main_ok."""
+        earlier in chain.order, or stuck in such a group that is open (it waits for the decision,
+        D-097), and, with a landed one, main_ok."""
         gid, landed, chain_order = group["id"], False, chain.order(data)
         for d in dagmod.deps(data.dag, ident):
             dt = data.tickets.get(d) or {}
@@ -1065,7 +1084,8 @@ class Controller:
                 continue
             dgid = dt.get("group") or ""
             dg = data.groups.get(dgid)
-            if (dt.get("state") in ("ready", "running", "merged") and dg
+            if ((dt.get("state") in ("ready", "running", "merged")
+                 or (dt.get("state") == "stuck" and (dg or {}).get("state") == "open")) and dg
                     and (dgid == gid or (dgid in chain_order and gid in chain_order
                                          and chain_order.index(dgid) < chain_order.index(gid)))):
                 continue

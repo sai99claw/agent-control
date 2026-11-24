@@ -22,9 +22,15 @@ Pure functions of a core.pool Snapshot:
   behind(snap, gid)    when gid holds the chain, the ids after it in order(snap), else []
   behind_line(snap, gid)  the stuck-group page line naming behind(snap, gid), or "" when empty
   with_behind(text, snap, gid)  text with behind_line appended as its last line when not empty
+  stuck_holds(snap, ident, gid)  D-097: stuck ticket `ident` holds its open group gid (the group
+                       waits for the decision on it) while a ticket not cancelled depends on it
+                       directly, or another member of gid is neither merged nor cancelled, or no
+                       other member is merged
 """
 
 import re
+
+from . import dag as dagmod
 
 DONE = ("landed", "cancelled")
 
@@ -144,3 +150,14 @@ def behind_line(snap, gid):
 def with_behind(text, snap, gid):
     line = behind_line(snap, gid)
     return text + "\n" + line if line else text
+
+
+def stuck_holds(snap, ident, gid):
+    for n, t in snap.tickets.items():
+        if t.get("state") != "cancelled" and str(ident) in dagmod.deps(snap.dag, n):
+            return True
+    others = [(snap.tickets.get(m) or {}).get("state")
+              for m in snap.groups[gid].get("members") or [] if m != str(ident)]
+    if any(s not in ("merged", "cancelled") for s in others):
+        return True
+    return "merged" not in others
