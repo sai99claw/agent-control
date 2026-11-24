@@ -24,7 +24,12 @@
     "round 1: verifier cases: 1 failing:\n- test_issuer.T136Acceptance.test_2_a_lone_ticket_names_its_group_and_none_after AssertionError ",
     "round 2: the ticket was revised during this round and the revision threw out the verifier's cases (cases_wrong); the verifier writes them again next round and the worker works on the revised ticket"
   ],
-  "cases": null,
+  "cases": {
+    "branch": "t/136-cases",
+    "run": [
+      "test_issuer.T136Acceptance"
+    ]
+  },
   "history": [
     {
       "at": "2026-11-24T14:06:01Z",
@@ -81,6 +86,10 @@
       "at": "2026-11-24T14:48:58Z",
       "event": "round start",
       "round": 3
+    },
+    {
+      "at": "2026-11-24T14:53:59Z",
+      "event": "cases ready"
     }
   ],
   "cost": [
