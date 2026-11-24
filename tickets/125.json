@@ -37,6 +37,11 @@
       "at": "2026-11-24T03:31:58Z",
       "event": "dispatched",
       "target": "int/g7"
+    },
+    {
+      "at": "2026-11-24T03:32:00Z",
+      "event": "issuer started",
+      "target": "int/g7"
     }
   ],
   "cost": [
@@ -69,6 +74,11 @@
   ],
   "group": "g7",
   "target": "int/g7",
-  "run": null,
+  "run": {
+    "pid": 29179,
+    "host": "vm",
+    "boot": "5a7dfba0-49b8-4f1b-9b63-ab62db5b769f",
+    "started": "2026-11-24T03:32:00Z"
+  },
   "claimed_at": "2026-11-24T03:31:58Z"
 }
