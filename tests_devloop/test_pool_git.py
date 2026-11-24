@@ -143,6 +143,84 @@ class GitRules(GitIsolatedCase):
         self.assertEqual(git(tmp, "status", "--porcelain"), "?? cache.pyc")
 
 
+class ReplayUnits(GitIsolatedCase):
+    """Git.own_commits and Git.replay (D-098): a ticket branch replayed on its target's head."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="loop-replay-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        git(self.tmp, "init", "-q", "-b", "main")
+        self.commit("a.txt", "a", "init")
+        from core.gitx import Git
+        self.g = Git(self.tmp)
+
+    def commit(self, path, text, subject, author=None):
+        with open(os.path.join(self.tmp, path), "w") as fh:
+            fh.write(text)
+        git(self.tmp, "add", "-A")
+        extra = ["--author", author] if author else []
+        git(self.tmp, "commit", "-q", "-m", subject, *extra)
+        return git(self.tmp, "rev-parse", "HEAD")
+
+    def subjects(self, rng):
+        return git(self.tmp, "log", "--format=%s", rng).splitlines()
+
+    def test_own_commits_skip_merges_and_what_they_brought_in(self):
+        git(self.tmp, "checkout", "-q", "-b", "target")
+        self.commit("t.txt", "t", "target 1")
+        git(self.tmp, "checkout", "-q", "-b", "t/1")
+        mine = self.commit("m.txt", "m", "mine 1")
+        git(self.tmp, "checkout", "-q", "target")
+        self.commit("o.txt", "o", "other ticket")
+        git(self.tmp, "checkout", "-q", "t/1")
+        git(self.tmp, "merge", "-q", "--no-ff", "--no-edit", "target")
+        mine2 = self.commit("m.txt", "m2", "mine 2")
+        self.assertEqual(self.g.own_commits("t/1", ["target", "main"]), [mine, mine2])
+
+    def test_a_linear_branch_on_its_start_is_not_rewritten(self):
+        start = git(self.tmp, "rev-parse", "HEAD")
+        git(self.tmp, "checkout", "-q", "-b", "t/1")
+        self.commit("m.txt", "m", "mine 1")
+        head = self.commit("m.txt", "m2", "mine 2")
+        own = self.g.own_commits("t/1", [start])
+        self.assertEqual(self.g.replay(start, own), (True, ""))
+        self.assertEqual(git(self.tmp, "rev-parse", "HEAD"), head)
+
+    def test_no_own_commits_ends_at_the_start(self):
+        git(self.tmp, "checkout", "-q", "-b", "target")
+        start = self.commit("t.txt", "t", "target 1")
+        git(self.tmp, "checkout", "-q", "-b", "t/1", "main")
+        self.assertEqual(self.g.replay(start, []), (True, ""))
+        self.assertEqual(git(self.tmp, "rev-parse", "t/1"), start)
+        self.assertEqual(git(self.tmp, "status", "--porcelain"), "")
+
+    def test_replay_drops_a_change_already_in_the_target_and_keeps_authors(self):
+        git(self.tmp, "checkout", "-q", "-b", "target")
+        start = self.commit("same.txt", "same", "target has it")
+        git(self.tmp, "checkout", "-q", "-b", "t/1", "main")
+        self.commit("same.txt", "same", "already there")
+        self.commit("m.txt", "m", "mine", author="Ann <ann@x>")
+        own = self.g.own_commits("t/1", [start])
+        self.assertEqual(len(own), 2)
+        self.assertEqual(self.g.replay(start, own), (True, ""))
+        self.assertEqual(self.subjects(start + "..HEAD"), ["mine"])
+        self.assertEqual(git(self.tmp, "log", "-1", "--format=%an <%ae>|%cn <%ce>"),
+                         "Ann <ann@x>|devloop <devloop@localhost>")
+
+    def test_a_conflict_is_reported_and_the_branch_is_put_back(self):
+        git(self.tmp, "checkout", "-q", "-b", "target")
+        start = self.commit("a.txt", "target", "target a")
+        git(self.tmp, "checkout", "-q", "-b", "t/1", "main")
+        head = self.commit("a.txt", "mine", "mine a")
+        ok, why = self.g.replay(start, self.g.own_commits("t/1", [start]))
+        self.assertFalse(ok)
+        self.assertIn("a.txt", why)
+        self.assertEqual(git(self.tmp, "rev-parse", "HEAD"), head)
+        self.assertEqual(git(self.tmp, "symbolic-ref", "--short", "HEAD"), "t/1")
+        self.assertEqual(git(self.tmp, "status", "--porcelain"), "")
+
+
 class NotifyUnits(LoopCase):
     def test_absent_notify_never_spawns(self):
         from unittest import mock

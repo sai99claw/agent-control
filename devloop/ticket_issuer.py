@@ -8,6 +8,8 @@ free - and at most 2 x max_rounds rounds in all; whole run at most
 devloop.issuer_timeout_seconds (time waiting for a machine slot or for a usage limit to reset
 not counted)):
 
+  0. t/<N>-cases and t/<N> are put on the target's current head with only the ticket's own
+     commits (uncommitted tracked changes committed first; branch_base and 'rebased', D-098)
   1. worker (+ verifier while the ticket has no cases yet) work in their own worktrees
   2. the verifier's branch is merged into the ticket branch
   3. hard_block check on what the ticket changes
@@ -242,6 +244,7 @@ class Issuer:
                                       start=self.repo.sha(self.target))
             except worktrees.SetupFailed as exc:
                 raise Stuck("env", str(exc))
+        t = self.rebase_round(t, r)
         work = None if self.worker_ok else self.start("worker", "worker.md", t, r, self.wt)
         ver = self.start("verifier", "verifier.md", t, r, self.cwt) if need_cases else None
         hands = []
@@ -330,6 +333,82 @@ class Issuer:
         if failed:
             return failed, costs
         return self.integrate(g, t), costs
+
+    def rebase_round(self, t, r):
+        """Before a round's agents (D-098): t/<N>-cases and t/<N> are put on the target's current
+        head with only the ticket's own commits replayed. Uncommitted tracked changes in their
+        worktrees become a devloop commit first. Records branch_base and a 'rebased' event per
+        branch that moved; returns the ticket. When a replay fails both branches go back to the
+        heads they had right before it and nothing is recorded."""
+        self.owned(self.ticket())
+        self.remake_tree(self.wt, self.branch)
+        target = self.repo.sha(self.target)
+        base = t.get("branch_base") or {}
+        olds = [h["target"] for h in t.get("history") or []
+                if h.get("event") == "issuer started" and h.get("target")]
+        olds = [b for b in dict.fromkeys(olds) if self.repo.sha("refs/heads/" + b)]
+
+        def exclude(branch, *more):
+            recorded = [base[branch]] if base.get(branch) and self.repo.sha(base[branch]) else []
+            return recorded + olds + [target] + list(more)
+
+        has_cases = self.repo.sha("refs/heads/" + self.cases_branch) is not None
+        throwaway = os.path.join(self.cfg.worktree_root, "rebase-t%s-cases" % self.id)
+        cwt = None
+        if has_cases:
+            if worktrees._exists(self.cwt):
+                cwt = self.cwt
+            else:
+                cwt = throwaway
+                self.repo.remove_worktree(throwaway)
+                self.repo.worktree(throwaway, self.cases_branch)
+        trees = [(self.cases_branch, cwt)] if has_cases else []
+        trees.append((self.branch, self.wt))
+        heads, own, after = {}, {}, {}
+        try:
+            for branch, path in trees:
+                g = Git(path)
+                for op in ("merge", "rebase", "cherry-pick", "revert"):
+                    g.run(op, "--abort", check=False)
+                if g.dirty():
+                    who = {"GIT_AUTHOR_NAME": "devloop", "GIT_AUTHOR_EMAIL": "devloop@localhost",
+                           "GIT_COMMITTER_NAME": "devloop", "GIT_COMMITTER_EMAIL": "devloop@localhost"}
+                    g.run("commit", "-q", "-a", "-m", "devloop: uncommitted changes in %s at the "
+                          "start of round %d" % (branch, r), env=who)
+                heads[branch] = g.sha("HEAD")
+            ok, why, start = True, "", target
+            if has_cases:
+                own[self.cases_branch] = Git(cwt).own_commits(heads[self.cases_branch],
+                                                              exclude(self.cases_branch))
+                ok, why = Git(cwt).replay(target, own[self.cases_branch])
+                after[self.cases_branch] = Git(cwt).sha("HEAD")
+                if ok and self.repo.is_ancestor(heads[self.cases_branch], heads[self.branch]):
+                    start = after[self.cases_branch]
+            if ok:
+                more = [heads[self.cases_branch]] if has_cases else []
+                own[self.branch] = Git(self.wt).own_commits(heads[self.branch],
+                                                            exclude(self.branch, *more))
+                ok, why = Git(self.wt).replay(start, own[self.branch])
+                after[self.branch] = Git(self.wt).sha("HEAD")
+            if not ok and has_cases and after.get(self.cases_branch) != heads[self.cases_branch]:
+                # interim (D-098) until the conflict round: the cases branch goes back too
+                self.repo.move_ref(self.cases_branch, heads[self.cases_branch],
+                                   after[self.cases_branch])
+                if cwt != throwaway:
+                    Git(cwt).run("reset", "--hard", heads[self.cases_branch])
+        finally:
+            if cwt == throwaway:
+                self.repo.remove_worktree(throwaway)
+        if not ok:
+            return t
+
+        def mutate(x):
+            x["branch_base"] = dict(x.get("branch_base") or {}, **{b: target for b in heads})
+            for b in heads:
+                if after[b] != heads[b]:
+                    event(x, "rebased", branch=b, onto=self.target, base=target,
+                          replayed=len(own[b]))
+        return self.save(mutate, "rebased on %s" % self.target)
 
     def blocked_check(self, work, text, ids):
         """A blocked worker named failing test ids: run them on the ticket branch. Green -> the
