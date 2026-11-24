@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py takes ids relative to the test directory (test_agents_quota.T133Acceptance), not package paths (tests_devloop.test_agents_quota...), which fail as an ImportError.",
+  "source": "#133 r1 verifier",
+  "at": "2026-11-24T14:13:13Z"
+}
