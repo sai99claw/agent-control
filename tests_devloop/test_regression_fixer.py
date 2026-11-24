@@ -1055,8 +1055,11 @@ class FixerOffBranchLoop(LoopCase):
         """#120: the 'fixer left int/g1' page, with or without a later open group g2."""
         if later:
             self.add(2, group="g2")
+            # #122: groups are ordered by creation key ('created', missing = '', then id), so g2
+            # gets g1's stamp to stay after g1 (tie broken by id: g1 < g2).
+            created = self.snap().groups["g1"]["created"]
             self.pool.update(lambda tx: tx.put_group({"id": "g2", "state": "open", "branch": "int/g2",
-                                                      "members": ["2"]}), "test: g2")
+                                                      "members": ["2"], "created": created}), "test: g2")
         self.fixer("git checkout -q --detach main\necho fixed > impl_1.txt\ngit add impl_1.txt\n"
                    "git commit -q -m conflict")
         pages = len(self.decisions())
