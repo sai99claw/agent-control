@@ -377,7 +377,8 @@ controller's stderr and sampling carries on; the thread stops with the controlle
 ## Dashboard
 
 `board.py` reads the pool only: the four VISION numbers (tokens and time per landed ticket,
-first-pass share, user interventions per ticket, what waits for the user), every ticket, every
+first-pass share, user interventions per ticket, what waits for the user: the unread pages other than
+`created` ones, plus stuck tickets), every ticket, every
 integration branch, unread pages, memory files. Unknown numbers show as 「未知」, never 0.
 The page has six tabs, chosen by `?tab=`: 要你判 (`?tab=decide`), 進行中 (`?tab=live`), 票
 (`?tab=tickets`; everything above but the four numbers, which every tab shows), DAG (`?tab=dag`),
