@@ -8,16 +8,7 @@
     "127"
   ],
   "fix_round": 1,
-  "job": {
-    "kind": "regression",
-    "stamp": {
-      "pid": 9467,
-      "host": "vm",
-      "boot": "5a7dfba0-49b8-4f1b-9b63-ab62db5b769f",
-      "started": "2026-11-24T04:24:30Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g7/result-1795494270.json"
-  },
+  "job": null,
   "created": "2026-11-24T03:00:16Z",
   "history": [
     {
@@ -73,6 +64,10 @@
           "message": "AssertionError: 'full' not found in ['quick'] : ['quick']"
         }
       ]
+    },
+    {
+      "at": "2026-11-24T04:31:46Z",
+      "event": "regression green"
     }
   ],
   "base": "5564e9b5086bad099feabad440a6477d3edc18d7",
@@ -107,5 +102,6 @@
       "round": 1
     }
   ],
-  "fix_end_sha": "bb80f6b1a53adc593698b38ce3ed71b5deb89d3f"
+  "fix_end_sha": "bb80f6b1a53adc593698b38ce3ed71b5deb89d3f",
+  "last_regression": "green"
 }
