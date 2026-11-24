@@ -3,5 +3,7 @@
   "ref": "121,122,123,124,125,126,127",
   "text": "opened #121 A regression's time limit starts when it has the machine (GitHub issue #8); #122 The chain orders groups by the DAG and any group id works (GitHub issue #13); #123 A page closes when its ticket or group is handled from any path (GitHub issue #10); #124 A regression that ends without a result gets a page naming what happened to it (GitHub issue #11); #125 `actl dag` lets the main session change a ready ticket's dependencies and group (GitHub issues #9, #12; D-096); #126 The board's waiting count leaves out created pages (GitHub issue #10); #127 `actl new --revise N` can also change N's dependencies and group (GitHub issue #9)",
   "at": "2026-11-24T03:00:21Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-24T04:48:20Z"
 }
