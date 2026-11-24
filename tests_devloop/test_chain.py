@@ -9,7 +9,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from loop_harness import HOME, LOOP, LoopCase  # noqa: E402,F401
+from loop_harness import HOME, LOOP, LoopCase, git  # noqa: E402,F401
 from core.pool import Snapshot  # noqa: E402
 
 
@@ -308,6 +308,156 @@ class T117Acceptance(LoopCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class T139Acceptance(LoopCase):
+    """#139 (D-099), verifier's cases: dag.json's `group_after` edges order the group chain.
+    Acceptance 2, 3, 4, 6(a), 6(b), 7(a), 7(b), 8 and 9; every expected value is copied from the
+    ticket text."""
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k)
+
+    @staticmethod
+    def snap_of(groups, tickets=None, after=None):
+        """groups: [(gid, k, state)]; tickets: {id: (gid, state, [deps])}; after: group_after."""
+        tickets = tickets or {}
+        dag = {"tickets": {i: {"depends_on": list(d)} for i, (_, _, d) in tickets.items()}}
+        if after is not None:
+            dag["group_after"] = after
+        return Snapshot({
+            "dag": dag,
+            "tickets": {i: {"id": i, "state": st, "group": g} for i, (g, st, _) in tickets.items()},
+            "groups": {gid: {"id": gid, "state": st, "created": stamp(k),
+                             "members": [i for i, (g, _, _) in tickets.items() if g == gid]}
+                       for gid, k, st in groups},
+            "inbox": {}, "lessons": {}, "memory_state": {}})
+
+    def out(self, res):
+        return res.stdout[-2000:] + res.stderr[-2000:]
+
+    def edge(self, after):
+        self.pool.update(lambda tx: tx.put_dag(dict(tx.data.raw["dag"], group_after=after)), "test: edge")
+
+    # ------------------------------------------------------------ acceptance 2
+
+    def test_item2_pull_ahead_not_kahn(self):
+        from core import chain
+        snap = self.snap_of([("g1", 1, "open"), ("g2", 2, "open"), ("g3", 3, "open")], after={"g1": ["g3"]})
+        self.assertEqual(chain.order(snap), ["g3", "g1", "g2"])
+        self.assertEqual(chain.waits_for(snap, "g1"), "g3")
+        self.assertEqual(list(chain.behind(snap, "g3")), ["g1", "g2"])
+
+    # ------------------------------------------------------------ acceptance 3
+
+    def test_item3_edges_to_landed_cancelled_unknown_order_nothing(self):
+        from core import chain
+        after = {"g1": ["g3", "g4", "g5"], "g9": ["g1"]}
+        snap = self.snap_of([("g1", 1, "open"), ("g2", 2, "open"), ("g3", 3, "landed"),
+                             ("g4", 4, "cancelled"), ("g5", 5, "open")], after=after)
+        self.assertEqual(chain.order(snap), ["g5", "g1", "g2"])
+        self.assertEqual(chain.sequence(snap), ["g3", "g4", "g5", "g1", "g2"])
+        self.assertEqual(snap.raw["dag"]["group_after"], {"g1": ["g3", "g4", "g5"], "g9": ["g1"]})
+
+    # ------------------------------------------------------------ acceptance 4
+
+    def test_item4_cycle_through_a_dependency_and_an_edge(self):
+        from core import chain
+        snap = self.snap_of([("g1", 1, "open"), ("g2", 2, "open")],
+                            {"1": ("g1", "ready", ["2"]), "2": ("g2", "ready", [])}, after={"g2": ["g1"]})
+        self.assertEqual(chain.cycle(snap), ["g1", "g2", "g1"])
+        got = chain.order(snap)
+        self.assertEqual(sorted(got), ["g1", "g2"], got)
+
+    # ------------------------------------------------------------ acceptance 6
+
+    def test_item6a_dag_edit_refuses_a_cycle_through_an_edge(self):
+        def groups(tx):
+            for gid, m in (("g1", "1"), ("g2", "2")):
+                tx.put_group({"id": gid, "branch": "int/" + gid, "state": "open", "members": [m],
+                              "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z"})
+        self.pool.update(groups, "test: groups")
+        self.add(1, group="g1", target="int/g1")
+        self.add(2, group="g2", target="int/g2")
+        self.edge({"g2": ["g1"]})
+        head = git(self.pool_path, "rev-parse", "HEAD")
+        res = self.run_py("dag_edit.py", "dep", "1", "--add", "2", "--reason", "r", timeout=120)
+        self.assertEqual(res.returncode, 2, self.out(res))
+        lines = [ln for ln in res.stderr.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, res.stderr)
+        self.assertIn("the group order would be a cycle: g1 -> g2 -> g1", lines[0])
+        self.assertEqual(git(self.pool_path, "rev-parse", "HEAD"), head, "pool written")
+
+    def test_item6b_opener_refuses_a_cycle_through_an_edge(self):
+        import ticket_creator
+        snap = self.snap_of([("g1", 1, "open"), ("g2", 2, "open")],
+                            {"1": ("g1", "ready", []), "2": ("g2", "ready", [])}, after={"g2": ["g1"]})
+        result = {"tickets": [{"key": "new-1"}], "dag": {"new-1": {"depends_on": ["2"], "group": "g1"}}}
+        self.assertEqual(ticket_creator.group_problems(result, snap),
+                         ["new-1: group g1 makes the group order a cycle: g1 -> g2 -> g1"])
+
+    # ------------------------------------------------------------ acceptance 7
+
+    def test_item7a_board_lanes_follow_the_edge(self):
+        import board
+        snap = self.snap_of([("g1", 1, "open"), ("g2", 2, "open"), ("g3", 3, "open")],
+                            {"1": ("g1", "ready", []), "2": ("g2", "ready", []), "3": ("g3", "ready", [])},
+                            after={"g1": ["g3"]})
+        self.assertEqual([gid for gid, _ in board.dag_lanes(snap, {"1", "2", "3"})], ["g3", "g1", "g2"])
+
+    def test_item7b_idle_lines_follow_the_edge(self):
+        import ticket_controller
+        snap = self.snap_of([("g1", 1, "pr"), ("g2", 2, "open"), ("g3", 3, "open")],
+                            {"1": ("g1", "merged", []), "2": ("g2", "ready", []), "3": ("g3", "ready", [])},
+                            after={"g1": ["g3"]})
+        lines = ticket_controller.idle_lines(snap)
+        self.assertIn("g1 waits for g3 to land (place 2 in the chain)", lines)
+        self.assertIn("g2 waits for g1 to land (place 3 in the chain)", lines)
+
+    # ------------------------------------------------------------ acceptance 8
+
+    def test_item8_controller_lands_the_group_named_by_the_edge_first(self):
+        self.add(1, needs_verifier=False, group="g1", target="int/g1")
+        self.add(2, needs_verifier=False, group="g2", target="int/g2")
+        for gid, k in (("g1", 1), ("g2", 2)):
+            at = "2026-11-23T00:00:0%dZ" % k
+            num = gid[1:]
+            self.pool.update(lambda tx, gid=gid, at=at, num=num: tx.put_group(
+                {"id": gid, "branch": "int/" + gid, "state": "open", "members": [num], "fix_round": 0,
+                 "job": None, "created": at, "history": [{"at": at, "event": "opened by the opener for #" + num}]}),
+                "test: group %s" % gid)
+        self.edge({"g1": ["g2"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, self.out(res))
+        snap = self.snap()
+        self.assertEqual((self.state(1), self.state(2)), ("landed", "landed"))
+        self.assertEqual(len(started(snap, "g1")), 1, events(snap, "g1"))
+        g2_landed = landed_at(snap, "g2")
+        self.assertIsNotNone(g2_landed, events(snap, "g2"))
+        self.assertGreaterEqual(started(snap, "g1")[0], g2_landed, events(snap, "g1"))
+        sha = snap.groups["g2"].get("landed_sha") or ""
+        self.assertTrue(sha, snap.groups["g2"])
+        moved = "main moved to %s: merged it into int/g1" % sha[:12]
+        evs = [ev for _, ev in events(snap, "g1")]
+        self.assertIn(moved, evs, evs)
+        self.assertLess(evs.index(moved), evs.index("regression started"), evs)
+        self.assertEqual(snap.raw["dag"].get("group_after"), {"g1": ["g2"]})
+
+    # ------------------------------------------------------------ acceptance 9
+
+    def test_item9_docs_name_group_after(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            paras = re.split(r"\n\s*\n", fh.read())
+        para = next((p for p in paras if p.startswith("Groups form one chain")), None)
+        self.assertIsNotNone(para, "no README paragraph starts with 'Groups form one chain'")
+        self.assertIn("group_after", para)
+        self.assertIn("D-099", para)
+        with open(os.path.join(HOME, "devloop", "core", "chain.py")) as fh:
+            doc = ast.get_docstring(ast.parse(fh.read())) or ""
+        self.assertIn("group_after", doc)
+        self.assertIn("D-099", doc)
 
 
 class BehindLine(unittest.TestCase):
