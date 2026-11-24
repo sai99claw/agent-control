@@ -9,16 +9,7 @@
     "126"
   ],
   "fix_round": 0,
-  "job": {
-    "kind": "regression",
-    "stamp": {
-      "pid": 4861,
-      "host": "vm",
-      "boot": "5a7dfba0-49b8-4f1b-9b63-ab62db5b769f",
-      "started": "2026-11-24T03:44:27Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g6/result-1795491867.json"
-  },
+  "job": null,
   "created": "2026-11-24T03:00:16Z",
   "history": [
     {
@@ -40,8 +31,13 @@
     {
       "at": "2026-11-24T03:44:28Z",
       "event": "regression started"
+    },
+    {
+      "at": "2026-11-24T03:51:33Z",
+      "event": "regression green"
     }
   ],
   "base": "5564e9b5086bad099feabad440a6477d3edc18d7",
-  "main_tried": "1891a258210268f393a9d70106c4b6daad9d7906"
+  "main_tried": "1891a258210268f393a9d70106c4b6daad9d7906",
+  "last_regression": "green"
 }
