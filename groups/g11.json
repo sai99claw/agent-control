@@ -95,5 +95,24 @@
   "last_regression": "4 failing:\n- test_board_dag.DagTabUnit.test_dag_svg_draws_wait_lines_marks_and_lane_lines AttributeError \n- test_board_dag.DagTabUnit.test_lanes_in_group_number_order_ungrouped_last AttributeError \n- test_board_dag.DagTabUnit.test_node_live_lines_grow_the_node AttributeError \n- test_board_dag.DagTabUnit.test_svg_escapes_titles AttributeError ",
   "fix_report": "/home/user/agent-control-devloop/runs/regression/g11/result-1795532533.json",
   "fix_agent_round": 1,
-  "fix_start_sha": "1f717cbe0418f37e3c530cac33b72b51316a9ace"
+  "fix_start_sha": "1f717cbe0418f37e3c530cac33b72b51316a9ace",
+  "cost": [
+    {
+      "role": "fixer",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": null,
+      "seconds": 2611.4,
+      "at": "2026-11-24T15:53:59Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/fix/g11/r1",
+      "input_tokens": 12,
+      "output_tokens": 1715,
+      "cache_read_tokens": 334007,
+      "cache_write_tokens": 1964,
+      "usd": 0.5635686000000001,
+      "session_id": "6c123677-49f1-4d23-87ca-84401d870942"
+    }
+  ]
 }
