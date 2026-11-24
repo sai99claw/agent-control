@@ -16,7 +16,7 @@
     "Case for (a): stuck #1 with decision page p1; the test writes #1 back to ready directly through pool.update (state 'ready', stuck None, round 0), leaving p1 unread; one controller run lands #1 and p1 is acked as 'superseded'.",
     "Case for (c), in process: main and branch int/g1 at the same sha S, ticket #1 merged in g1, group g1 {state 'verified', verified_sha S, branch 'int/g1', members ['1']}, decision pages pg (ref 'g1') and pt (ref '1'); ticket_controller.Controller(Config(proj), pool).land(snapshot.groups['g1']) leaves g1 and #1 landed and pg and pt acked as 'superseded'. With devloop.remote naming a git remote whose push fails (added with a URL that does not exist), the push-failed decision page of g1 that landing writes stays unread.",
     "Unchanged: `tickets.py ack` (one page or --all) works as today; `tickets.py inbox` and `wait` list every unread page, created ones included; a refused action writes nothing.",
-    "Old case changed in place (implementer): tests_devloop/test_pages.py T50Acceptance.test_item4_ready_group_by_and_page_in_one_commit asserts twice that p2 (a second decision page of g1) stays unread after `ready g1`; now p2 is acked with acked_by 'tickets ready' by the first `ready g1` and the second `ready g1` leaves it unchanged; both asserts are replaced by those. Every other existing assert that a page stays unread is about a refused or unhandled action and stays (checked: test_pages.py lines 222, 243, 837, 850; test_controller.py 229, 406; test_board_decide.py 1246, 1258, 1399; test_board_server.py 86; test_issuer.py 1047; test_regression_fixer.py 662, 1348); name any other that changes in the hand-in.",
+    "Old cases changed in place (implementer), two of them. (1) tests_devloop/test_pages.py T50Acceptance.test_item4_ready_group_by_and_page_in_one_commit asserts twice that p2 (a second decision page of g1) stays unread after `ready g1`; now p2 is acked with acked_by 'tickets ready' by the first `ready g1` and the second `ready g1` leaves it unchanged; both asserts are replaced by those. (2) tests_devloop/test_board_decide.py T57Acceptance.test_item5_a_finished_action_shows_done_and_leaves_only_ack presses group-ready on g1 with page '' and relied on pg1 staying unread to keep a g1 card; now that `ready g1` acks pg1 as 'tickets ready'. Keep the press, the wait_rc == '0' assert and every assert on the cards; between wait_rc and reading the decide tab add: assert pg1 acked_by 'tickets ready'; then write a new decision page of g1 raw through self.pool.update (inbox/pg1b.json: kind 'decision', ref 'g1', text 'page pg1b', at osx.now(), acked False) - a page that arrives after the action finished, as a later red regression would write - and change the assertIn message to 'pg1b is unread: g1 still has a card'. The g1 card (now pg1b's) still has last_act ['上次的動作:<what> · <B> · 完成'] and only 知道了 (g1 is pr, neither stuck nor paused), and #1's card still has no last-act line; no card assert is dropped. Every other existing assert that a page stays unread is about a refused or unhandled action and stays (checked: test_pages.py lines 222, 243, 837, 850; test_controller.py 229, 406; test_board_decide.py 1246, 1258, 1399; test_board_server.py 86; test_issuer.py 1047; test_regression_fixer.py 662, 1348); name any other that changes in the hand-in.",
     "devloop/README.md '## Contracts' gets one bullet right after the '**Pages**' bullet, starting '**Pages close with their subject**:', naming each command and its acked_by value and the four superseded moments."
   ],
   "needs_verifier": true,
@@ -51,6 +51,16 @@
       "at": "2026-11-24T03:04:32Z",
       "event": "round start",
       "round": 1
+    },
+    {
+      "at": "2026-11-24T03:20:42Z",
+      "event": "revised",
+      "source": "worker",
+      "fields": [
+        "acceptance"
+      ],
+      "cases_wrong": false,
+      "run": "revise-2026-11-24T031856Z"
     }
   ],
   "cost": [
