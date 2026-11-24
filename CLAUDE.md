@@ -18,6 +18,7 @@
   `actl new --revise N --from user --decision revise|retry|cancel --reason "…"`,或 `actl tickets ready N` / `cancel N --why …`。
 - 主線可以讀票後用 `actl dag` 重排(只動依賴與群組,不動票的內容,D-096):「先跑 X 再跑 Y」就是 `actl dag dep Y --add X --reason "…"`;
   把票移到別的群組是 `actl dag move N --to gK|new --reason "…"`。
+  把整組排到另一組後面是 `actl dag after gA --add gB --reason "…"`(票已合入的組也可以)。
 - agent-control 自己也是一個專案:它的改動一樣開票、走 devloop(票要填 `vision` 與 `removes`)。使用者明說「直接改」才例外。
 
 ## 不可違反的

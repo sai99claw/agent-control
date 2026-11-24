@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""dag_edit : the main session changes a ready ticket's dependencies or group (D-096).
+"""dag_edit : the main session changes a ready ticket's dependencies or group (D-096), or the group order (D-099).
 
     python3 devloop/dag_edit.py dep N --add M --reason "..." [--by NAME]    # N waits for M
     python3 devloop/dag_edit.py dep N --drop M --reason "..." [--by NAME]
     python3 devloop/dag_edit.py move N --to gK|new --reason "..." [--by NAME]
+    python3 devloop/dag_edit.py after gA --add gB --reason "..." [--by NAME]  # group gA comes after gB
+    python3 devloop/dag_edit.py after gA --drop gB --reason "..." [--by NAME]
 
 One pool write (core/dagedit.py checks it on the data it reads); the last stdout line is the group
 chain after the change. A refusal is one stderr line, exit 2, nothing written. CLI only (`actl dag`).
@@ -34,26 +36,40 @@ def main(argv=None):
     p.add_argument("--to", required=True)
     p.add_argument("--reason", default=None)
     p.add_argument("--by", default="main-session")
+    p = sub.add_parser("after")
+    p.add_argument("id")
+    one = p.add_mutually_exclusive_group(required=True)
+    one.add_argument("--add")
+    one.add_argument("--drop")
+    p.add_argument("--reason", default=None)
+    p.add_argument("--by", default="main-session")
     args = ap.parse_args(argv)
     change = ({"to": args.to} if args.cmd == "move" else
               {"add": args.add} if args.add is not None else {"drop": args.drop})
     out = {}
 
     def write(tx):
-        out["refused"] = dagedit.apply(tx, args.id, args.by, args.reason, **change)
+        if args.cmd == "after":
+            out["refused"] = dagedit.after_apply(tx, args.id, args.by, args.reason, **change)
+        else:
+            out["refused"] = dagedit.apply(tx, args.id, args.by, args.reason, **change)
         out["chain"] = chain.order(tx.data)
     try:
         pool = pool_for(Config())
-        what = ("moved to %s" % args.to if args.cmd == "move" else
-                "depends on #%s" % args.add if args.add is not None else "no longer depends on #%s" % args.drop)
-        pool.update(write, "dag: #%s %s (%s)" % (args.id, what, args.by))
+        if args.cmd == "after":
+            what = "after %s" % args.add if args.add is not None else "no longer after %s" % args.drop
+        else:
+            what = ("moved to %s" % args.to if args.cmd == "move" else
+                    "depends on #%s" % args.add if args.add is not None else "no longer depends on #%s" % args.drop)
+        subject = args.id if args.cmd == "after" else "#" + args.id
+        pool.update(write, "dag: %s %s (%s)" % (subject, what, args.by))
     except osx.OSFailure as exc:
         print("dag: %s" % str(exc).replace("\n", " "), file=sys.stderr)
         return 2
     if out["refused"]:
         print("dag: %s" % out["refused"], file=sys.stderr)
         return 2
-    print("#%s %s" % (args.id, what))
+    print("%s %s" % (subject, what))
     print("chain: " + ", ".join(out["chain"]))
     return 0
 

@@ -2,6 +2,7 @@
 scheduling, not ticket content, so these changes never touch a ticket's text.
 
     apply(tx, ident, by, why, add=M | drop=M | to=G|"new")
+    after_apply(tx, a, by, why, add=B | drop=B)    D-099: group a comes after group b, or no longer
 
 runs inside one pool write (Pool.update). Every check runs on the data `tx` read, on an in-memory
 copy of the changed dag.json entry and group fields, before anything is written. Returns the
@@ -192,6 +193,59 @@ def apply(tx, n, by, why, add=None, drop=None, to=None, mentions=True):
     t["group"], t["target"] = gid, None
     event(t, "dag: moved from %s to %s" % (old_name, gid), by=by, why=why)
     tx.put_ticket(t)
+    return None
+
+
+def after_check(data, a, b, why, add):
+    """D-099: the refusal line for putting group a after group b (add) or dropping that edge, or None."""
+    if not str(why or "").strip():
+        return "--reason is required and must not be blank"
+    for gid in (a, b):
+        if gid not in data.groups:
+            return "group %s does not exist" % gid
+    if a == b:
+        return "%s cannot be after itself" % a
+    ga, gb = data.groups[a], data.groups[b]
+    if (ga.get("job") or {}).get("kind") == "regression":
+        return "group %s has a regression running: its order no longer changes" % a
+    if ga.get("state") in ("verified",) + DONE:
+        return "group %s is %s: its order no longer changes" % (a, ga.get("state"))
+    have = chain.after_edges(data).get(a, [])
+    if not add:
+        return None if b in have else "%s is not set after %s" % (a, b)
+    if b in have:
+        return "%s is already set after %s" % (a, b)
+    if gb.get("state") in DONE:
+        return "group %s is %s: %s cannot wait for it" % (b, gb.get("state"), a)
+    snap = Snapshot(copy.deepcopy(data.raw))
+    snap.raw["dag"].setdefault("group_after", {}).setdefault(a, []).append(b)
+    loop = chain.cycle(snap)
+    if loop:
+        return "the group order would be a cycle: " + " -> ".join(loop)
+    return None
+
+
+def after_apply(tx, a, by, why, add=None, drop=None):
+    """Check, then write group a after group add (or drop that edge) with an event on both groups.
+    Returns the refusal line, or None when written."""
+    b = add if add is not None else drop
+    bad = after_check(tx.data, a, b, why, add is not None)
+    if bad:
+        return bad
+    dag = tx.data.raw["dag"]
+    edges = dag.setdefault("group_after", {})
+    if add is not None:
+        edges.setdefault(a, []).append(b)
+    else:
+        edges[a] = [x for x in edges[a] if x != b]
+        if not edges[a]:
+            del edges[a]
+    tx.put_dag(dag)
+    what = "dag: %s %s %s" % (a, "after" if add is not None else "no longer after", b)
+    for gid in (a, b):
+        g = tx.data.groups[gid]
+        event(g, what, by=by, why=why)
+        tx.put_group(g)
     return None
 
 
