@@ -153,7 +153,7 @@ class Select(unittest.TestCase):
         done = self.select("scripts/project_config.py", "scripts/adapter-unittest.py", "docs/zzz.unknownext")
         self.assertEqual(done.stdout.splitlines(),
                          ["test_project_config", "test_project_config_cases", "test_adapter_unittest",
-                          "test_adapter_cases", "test_testiface", "unmapped docs/zzz.unknownext"])
+                          "test_adapter_cases", "unmapped docs/zzz.unknownext"])
 
     def test_first_match_wins_and_empty_ids_is_not_unmapped(self):
         """**Mutation m3** (#173): let a later matching row add its ids too → the first assert is red."""
@@ -205,6 +205,16 @@ class Select(unittest.TestCase):
         done = adapter("select", "--mode", "base", env=self.env())
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.splitlines(), base)
+
+    def test_every_config_id_names_a_module_under_the_roots(self):
+        """A module deleted while the config still named it (c5024c7) must not stay in the config."""
+        unit = unit_config()
+        ids = [("base", i) for i in unit["base"]] + [(r["match"], i) for r in unit["map"] for i in r["ids"]]
+        self.assertGreater(len(ids), 20, "precondition: the config ids were read")
+        dead = [(w, i) for w, i in ids
+                if not any(os.path.isfile(os.path.join(ROOT, root, i.split(".")[0] + ".py"))
+                           for root in unit["roots"])]
+        self.assertEqual(dead, [])
 
 
 class Fixture(unittest.TestCase):

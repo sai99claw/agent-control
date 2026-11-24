@@ -1,6 +1,6 @@
 #!/bin/sh
 # The fixture project's command adapter (D-071 §4 shape): every tests.* key in board/config.json
-# that is not null points here. A's tests/test_testiface.py drives it through test-only knobs:
+# that is not null points here. tests/control_harness.py's Sandbox starts a sandbox from this fixture project when a case sets `fixture = True` or the run sets AC_TEST_FIXTURE=1; no case of A sets the test-only knobs listed below it today:
 #
 #   AC_TEST_FAKE_PREFLIGHT  unset → rc 0 · `broken` → rc 1 (the probe itself crashed)
 #                           · anything else → rc 86 + one declared row whose why names the value

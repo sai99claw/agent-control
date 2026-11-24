@@ -23,8 +23,7 @@
       ],
       "base": [
         "test_project_config",
-        "test_no_project_names",
-        "test_testiface"
+        "test_no_project_names"
       ],
       "map": [
         {
@@ -112,7 +111,12 @@
           "match": "bin/actl",
           "ids": [
             "test_project_config",
-            "test_actl"
+            "test_project_config_cases",
+            "test_controller",
+            "test_dag_edit",
+            "test_groups",
+            "test_pages",
+            "test_release"
           ]
         },
         {
@@ -125,7 +129,6 @@
         {
           "match": "scripts/testiface.py",
           "ids": [
-            "test_testiface",
             "test_agents_quota",
             "test_board_dag",
             "test_board_decide",
@@ -154,28 +157,19 @@
           "match": "scripts/adapter-unittest.py",
           "ids": [
             "test_adapter_unittest",
-            "test_adapter_cases",
-            "test_testiface"
+            "test_adapter_cases"
           ]
         },
         {
           "match": "scripts/status.py",
           "ids": [
-            "test_testiface",
             "test_adapter_unittest"
           ]
         },
         {
           "match": "scripts/event.py",
           "ids": [
-            "test_testiface",
             "test_adapter_unittest"
-          ]
-        },
-        {
-          "match": "scripts/session-hook.sh",
-          "ids": [
-            "test_actl"
           ]
         },
         {
@@ -188,7 +182,6 @@
         {
           "match": "tests/fixtures/project/*",
           "ids": [
-            "test_testiface",
             "test_no_project_names"
           ]
         },
