@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "A controller's jobs are its child processes until it exits: a stop that ends a process tree by parent pid also ends every regression, fixer and issuer that controller started (jobs an earlier controller started, now reparented, survive), while SIGTERM or SIGINT to the controller alone leaves them all running and the next controller adopts them (measured 2026-11-24).",
-  "source": "request (opener)",
-  "at": "2026-11-24T03:00:13Z"
-}

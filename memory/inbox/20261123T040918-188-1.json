@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "ticket_creator.apply_unapplied skips only revise dirs whose revise.json source is 'user'; any new answering source (main session, board) must keep 'user' there or be added to that skip, or the next issuer applies the same answer a second time.",
-  "source": "request (opener)",
-  "at": "2026-11-23T04:09:17Z"
-}

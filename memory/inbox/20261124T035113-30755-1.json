@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "A pool Tx writes files at once and pool.update has no rollback: reset --hard leaves new untracked files such as groups/gN.json. A change that can be refused halfway must run first on an in-memory copy (dagedit.Dry) and only then on the real tx.",
-  "source": "#127 r1 worker",
-  "at": "2026-11-24T03:51:13Z"
-}

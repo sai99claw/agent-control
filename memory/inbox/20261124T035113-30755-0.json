@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "Every --revise run records the opener's cost row on the ticket before the hand-in is applied (#59), so 'the ticket is unchanged' after a refused revision always means everything except history and cost.",
-  "source": "#127 r1 worker",
-  "at": "2026-11-24T03:51:13Z"
-}

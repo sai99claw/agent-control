@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "run_tests.py ids for tests_devloop are module-relative (test_issuer.T115Acceptance), not package-qualified (tests_devloop.test_issuer...); the qualified form reports an ImportError.",
-  "source": "#115 r1 verifier",
-  "at": "2026-11-23T04:22:18Z"
-}

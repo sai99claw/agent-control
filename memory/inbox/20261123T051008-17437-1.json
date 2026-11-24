@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "A group with no members (and no job) is cancelled by the controller (#118), so a fixture that builds a pr, fixing or stuck group with members [] to exercise advance_groups must give it a member ticket whose 'group' names it.",
-  "source": "#118 r1 worker",
-  "at": "2026-11-23T05:10:08Z"
-}

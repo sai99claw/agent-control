@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "run_tests.py ids are module paths relative to the unittest roots in board/config.json (tests, tests_devloop): write test_opener.Class, not tests_devloop.test_opener.Class, which fails as ImportError.",
-  "source": "#111 r1 verifier",
-  "at": "2026-11-23T04:11:14Z"
-}

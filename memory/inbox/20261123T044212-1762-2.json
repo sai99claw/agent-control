@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "The loop test harness's add() writes a ticket with no group and passes unknown keyword arguments through as ticket fields (group=... is a plain field, not a membership); fixtures that need a group write the group record themselves.",
-  "source": "request (opener)",
-  "at": "2026-11-23T04:42:11Z"
-}
