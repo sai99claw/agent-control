@@ -139,7 +139,7 @@ _model = model_of   # older name, still imported in places
 # ---------------------------------------------------------------- running
 
 def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None, round_no=None,
-          chain_role=None, on_quota=None, first=0):
+          chain_role=None, on_quota=None, first=0, before_spawn=None):
     """Start an agent without waiting. Returns a Pending. `chain_role` picks the commands when
     they differ from the role's (a simple ticket's worker uses "worker_simple"). `first` starts
     the chain at that index; a quota wait then restarts from that command too.
@@ -147,7 +147,10 @@ def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None,
     `on_quota(phase, row=None, until=None, text=None)`: when given, a run whose last command is
     out of quota waits for the reset instead of ending. Before the wait it is called with phase
     "wait", the run's cost row (outcome "quota"), the epoch the wait ends and an excerpt of the
-    CLI's message; after the wait with phase "over". Without it the run ends as before."""
+    CLI's message; after the wait with phase "over". Without it the run ends as before.
+
+    `before_spawn()`: when given, called right before every command start of the chain (the
+    first, each fall-through, each restart after a quota wait); what it raises leaves launch()."""
     osx.makedirs(run_dir)
     result_path = os.path.join(run_dir, "result.json")
     osx.atomic_write(os.path.join(run_dir, "prompt.md"), prompt)
@@ -157,7 +160,7 @@ def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None,
     extra = extra_env or {}
     p = Pending(role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg,
                 on_quota=on_quota, chain_role=chain_role, ticket=extra.get("DEVLOOP_TICKET"),
-                group=extra.get("DEVLOOP_GROUP"), first=first)
+                group=extra.get("DEVLOOP_GROUP"), first=first, before_spawn=before_spawn)
     p.launch()
     return p
 
@@ -174,11 +177,12 @@ class Interrupted(Exception):
 
 class Pending:
     def __init__(self, role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg=None,
-                 on_quota=None, chain_role=None, ticket=None, group=None, first=0):
+                 on_quota=None, chain_role=None, ticket=None, group=None, first=0, before_spawn=None):
         self.role, self.chain, self.prompt, self.cwd, self.env = role, chain, prompt, cwd, env
         self.run_dir, self.result_path, self.timeout, self.round_no = run_dir, result_path, timeout, round_no
         self.cfg = cfg
         self.on_quota = on_quota
+        self.before_spawn = before_spawn
         self.full_chain = list(chain)
         # index, in the role's whole chain, of the command running now (its hand-in is the one
         # finish() collects); the chain given here starts at index `first`
@@ -251,6 +255,8 @@ class Pending:
         env = self.env
         if self.slot is not None and self.slot.held:
             env = dict(self.env, **{slots.ENV: self.slot.path})
+        if self.before_spawn is not None:
+            self.before_spawn()
         while self.chain:
             argv = self.chain.pop(0)
             self.popped += 1

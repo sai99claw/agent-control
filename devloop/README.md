@@ -191,6 +191,13 @@ group's `fix_agent_round`, set right before the agent starts, is not its `fix_ro
 counted, no regression starts, the group is paused with one "env" page saying why, and the rerun
 starts the fixer again.
 
+Right before each command of an issuer agent's chain starts (the first, each fall-through, each
+restart after a quota wait), a missing worktree `t<id>` (branch `t/<id>`) or `t<id>-cases` (branch
+`t/<id>-cases`) is made again from its branch head and set up like any new worktree, with the
+ticket event "worktree made again" (path, branch; uncommitted work in it is lost); when the branch
+is gone or making it fails, the ticket is stuck with reason `env` and a text that starts
+`worktree missing: <path>`.
+
 `devloop.prices` (default null; `{}` is the same): maps a model name (the row's `model`: the value
 after `--model`, else the command's file name) to `{"input": n, "cached_input": n, "output": n}`,
 US dollars per million tokens, each a number >= 0. A codex agent run's cost row sums the

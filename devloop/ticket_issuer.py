@@ -477,10 +477,27 @@ class Issuer:
         p = agents.start(self.cfg, role, agents.render(template, values), cwd, run_dir, timeout,
                          extra_env={"DEVLOOP_TICKET": self.id, "AC_CODE_ROOT": cwd},
                          effort=t.get("effort") if role == "worker" else None, round_no=r,
-                         chain_role=chain, on_quota=self.on_quota, first=first)
+                         chain_role=chain, on_quota=self.on_quota, first=first,
+                         before_spawn=lambda: self.remake_tree(cwd, self.cases_branch if cwd == self.cwt
+                                                               else self.branch))
         self.pending.append(p)
         self.started_agents.append(p)
         return p
+
+    def remake_tree(self, path, branch):
+        """Right before an agent command starts: a worktree that vanished is made again from its
+        branch (uncommitted work in it is lost); when it cannot be, the ticket is stuck (env)."""
+        if worktrees._exists(path):
+            return
+        if self.repo.sha("refs/heads/" + branch) is None:
+            raise Stuck("env", "worktree missing: %s (branch %s does not exist)" % (path, branch))
+        try:
+            worktrees.branch_tree(self.cfg, self.repo, path, branch)
+        except osx.OSFailure as exc:
+            raise Stuck("env", "worktree missing: %s (making it again from %s failed: %s)"
+                        % (path, branch, exc))
+        self.save(lambda t: event(t, "worktree made again", path=path, branch=branch),
+                  "worktree made again")
 
     def on_quota(self, phase, row=None, until=None, text=None):
         """An agent's last command hit the usage limit (phase "wait") or its wait is over
