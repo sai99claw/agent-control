@@ -1010,6 +1010,86 @@ class T22Acceptance(LoopCase):
                          rows)
 
 
+class T131Acceptance(LoopCase):
+    """#131: an issuer whose ticket is no longer its own (released to ready, or claimed under another
+    stamp) while its worker runs stops without writing anything, moves no branch and exits 2."""
+
+    FIELDS = ("state", "run", "round", "feedback", "cost", "cases", "history")
+
+    def setUp(self):
+        super().setUp()
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(k, None)
+
+    def take_away(self, change):
+        self.add(1, state="running", target="int/g1", group="g1", needs_verifier=False)
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "open", "members": ["1"],
+                                                  "branch": "int/g1", "job": None}), "test: group g1")
+        git(self.proj, "branch", "int/g1", "main")
+        hold = os.path.join(self.tmp, "hold.sh")
+        mark = os.path.join(self.tmp, "held")
+        with open(hold, "w") as fh:
+            fh.write("#!/bin/sh\nif [ ! -e %s ]; then touch %s; sleep 8; fi\nexec python3 %s\n"
+                     % (mark, mark, os.path.join(HERE, "fake_agent.py")))
+        self.config(agents={r: ["sh", hold] for r in ("worker", "worker_simple", "verifier", "reviewer")})
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_issuer.py"), "--id", "1",
+                                 "--target", "int/g1"], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and osx.kill_tree(proc.pid, grace=1))
+        log = os.path.join(self.tmp, "wt", "runs", "1", "r1-worker", "agent-1.log")
+        deadline = time.time() + 30
+        while not os.path.exists(log):
+            if proc.poll() is not None:
+                out, err = proc.communicate()
+                self.fail("issuer exited (rc %s) before its worker ran: %s" % (proc.returncode, out + err))
+            if time.time() > deadline:
+                self.fail("the worker never started (no %s)" % log)
+            time.sleep(0.1)
+        self.assertIsNone(proc.poll(), "the issuer ended before the test's write")
+        start = git(self.proj, "rev-parse", "int/g1")
+
+        def write(tx):
+            t = tx.ticket("1")
+            change(t)
+            tx.put_ticket(t)
+        self.pool.update(write, "test: take #1 away from its issuer")
+        after = self.snap().ticket("1")
+        out, err = proc.communicate(timeout=90)
+        return proc.returncode, out, err, start, after
+
+    def check(self, rc, out, err, start, after, event):
+        self.assertEqual(rc, 2, "issuer rc %s; stdout: %s; stderr: %s" % (rc, out, err))
+        lines = [ln for ln in err.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, "stderr should be exactly one non-empty line: %r" % err)
+        self.assertIn("#1 is no longer this issuer's ticket", lines[0])
+        now = self.snap().ticket("1")
+        for f in self.FIELDS:
+            self.assertEqual(now.get(f), after.get(f), "ticket field %r changed after the test's write" % f)
+        self.assertEqual((now.get("history") or [{}])[-1].get("event"), event, now.get("history"))
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), start, "int/g1 moved")
+        about = [r for r in self.snap().inbox.values() if str(r.get("ref")) == "1"]
+        self.assertEqual(about, [], "pages about #1: %r" % about)
+
+    def test_1_released_to_ready_under_a_live_issuer(self):
+        def release(t):   # what Controller._release_orphan writes
+            t["state"], t["run"] = "ready", None
+            t.setdefault("history", []).append({"event": "released by the test"})
+        rc, out, err, start, after = self.take_away(release)
+        self.assertEqual((after.get("state"), after.get("run")), ("ready", None))
+        self.check(rc, out, err, start, after, "released by the test")
+
+    def test_2_run_replaced_by_another_stamp_under_a_live_issuer(self):
+        other = {"pid": 1, "host": "another-host", "boot": "b", "started": osx.now()}
+
+        def claim(t):
+            t["run"] = dict(other)
+            t.setdefault("history", []).append({"event": "claimed by the test"})
+        rc, out, err, start, after = self.take_away(claim)
+        self.assertEqual((after.get("state"), after.get("run")), ("running", other))
+        self.check(rc, out, err, start, after, "claimed by the test")
+        self.assertEqual(self.snap().ticket("1").get("run"), other)
+
+
 class T27Acceptance(LoopCase):
     """D-089 item 2: a merged or landed ticket is frozen for every caller (#27)."""
 
