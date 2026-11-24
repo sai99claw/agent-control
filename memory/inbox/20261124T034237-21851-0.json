@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py ids are relative to the test roots (test_pages.T123Acceptance), not package paths (tests_devloop.test_pages...); the package form fails with an ImportError.",
+  "source": "#123 r1 verifier",
+  "at": "2026-11-24T03:42:36Z"
+}
