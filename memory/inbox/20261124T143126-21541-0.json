@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "An open group holds the chain (core/chain.py holds), so any new rule that keeps a group open also stops every later group from landing; check the chain effect before widening what keeps a group open.",
+  "source": "#134 r1 worker",
+  "at": "2026-11-24T14:31:26Z"
+}
