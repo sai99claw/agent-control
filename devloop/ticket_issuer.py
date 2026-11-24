@@ -31,9 +31,10 @@ An agent whose last command hits the account's usage limit does not lose the rou
 waits for the reset (agents.quota_wait), its ticket stays "running" with a "waiting" mark and the
 run's cost row (outcome "quota"), and the agent runs again (D-091).
 
-Exit: 0 merged · 1 stuck (reported) · 2 refused (wrong state / usage), or the ticket is no
-longer this issuer's (not running under the stamp written at the claim: nothing more is written,
-no branch moves) · 4 interrupted (left "ready" so the controller dispatches it again).
+Exit: 0 merged · 1 stuck (reported) · 2 refused (wrong state / usage / another issuer of the
+ticket holds its lock <worktrees>/locks/issuer-<N>.lock), or the ticket is no longer this issuer's
+(not running under the stamp written at the claim: nothing more is written, no branch moves) ·
+4 interrupted (left "ready" so the controller dispatches it again).
 """
 
 import argparse
@@ -46,7 +47,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, inflight, memory, osx, pages, slots, testrun, worktrees  # noqa: E402
+from core import agents, inflight, memory, osx, pages, slots, testrun, ticketlock, worktrees  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -673,6 +674,11 @@ def main(argv=None):
 
     try:
         cfg = Config()
+        lock = ticketlock.take(cfg, args.id)    # held until main returns; the kernel frees it on exit
+        if lock is None:
+            print("ticket_issuer: #%s already has a live issuer: lock %s is held; nothing done"
+                  % (args.id, ticketlock.path(cfg, args.id)), file=sys.stderr)
+            return 2
         issuer = Issuer(cfg, pool_for(cfg), args.id, args.target)
     except osx.OSFailure as exc:
         print("ticket_issuer: %s" % exc, file=sys.stderr)

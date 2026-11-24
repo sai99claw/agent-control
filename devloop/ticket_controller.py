@@ -45,7 +45,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import agents, chain, codemap, host, memory, osx, pages, release  # noqa: E402
+from core import agents, chain, codemap, host, memory, osx, pages, release, ticketlock  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import close_pages, event, leave_group, new_group  # noqa: E402
@@ -221,6 +221,8 @@ class Controller:
             if proc is None and not t.get("run") and osx.age(t.get("claimed_at")) < 120:
                 continue                       # just claimed; the issuer has not stamped yet
             self.children.pop(key, None)
+            if ticketlock.held(self.cfg, t["id"]):
+                continue                       # an issuer holds the ticket's lock: it lives, whatever the stamp says
             self._release_orphan(t["id"])
         for key, proc in list(self.children.items()):
             if key.startswith("issuer:") and proc.poll() is not None:
@@ -992,6 +994,8 @@ class Controller:
             g = snap.groups.get(t.get("group") or "")
             if not g or g.get("state") != "open" or not self.can_start_now(snap, ident, g):
                 continue
+            if ticketlock.held(self.cfg, ident):
+                continue                       # its last issuer has not exited yet: a later tick starts it
             self.make_branch(g)
             self.start_issuer(ident, g["id"])
             snap = self.pool.snapshot()
