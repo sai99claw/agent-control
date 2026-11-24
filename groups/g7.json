@@ -1,23 +1,14 @@
 {
   "id": "g7",
   "branch": "int/g7",
-  "state": "fixing",
+  "state": "pr",
   "members": [
     "122",
     "125",
     "127"
   ],
   "fix_round": 1,
-  "job": {
-    "kind": "fixer",
-    "stamp": {
-      "pid": 27507,
-      "host": "vm",
-      "boot": "5a7dfba0-49b8-4f1b-9b63-ab62db5b769f",
-      "started": "2026-11-24T03:57:01Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g7/main-moved.json"
-  },
+  "job": null,
   "created": "2026-11-24T03:00:16Z",
   "history": [
     {
@@ -51,6 +42,10 @@
     {
       "at": "2026-11-24T03:57:05Z",
       "event": "fixer agent started (round 1)"
+    },
+    {
+      "at": "2026-11-24T04:24:26Z",
+      "event": "fixer done (rc 0): verify again"
     }
   ],
   "base": "5564e9b5086bad099feabad440a6477d3edc18d7",
@@ -84,5 +79,6 @@
       "acceptance": "core/chain.py: ... order(snap) lists the groups ... by creation key - the group's 'created' (missing = ''), then its id in natural order ... (#122 acceptance 1; acceptance 7 asks for any other old case that changes to be named in the hand-in: this one)",
       "round": 1
     }
-  ]
+  ],
+  "fix_end_sha": "bb80f6b1a53adc593698b38ce3ed71b5deb89d3f"
 }
