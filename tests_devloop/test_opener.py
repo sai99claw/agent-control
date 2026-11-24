@@ -936,6 +936,37 @@ class OpenerGroupChoice(LoopCase):
         self.assertEqual([snap.tickets[i]["group"] for i in ("2", "3", "4")], ["g2", "g1", "g3"])
         self.assertEqual(snap.dag["4"], {"depends_on": ["2"]})
 
+    def test_the_write_keeps_the_other_top_level_keys_of_dag_json(self):
+        """#140: only `tickets` is replaced; first_ticket_id and group_after stay."""
+        import ticket_creator
+        self.group("g1", "open", [])
+        self.pool.update(lambda tx: tx.put_dag({"tickets": {}, "first_ticket_id": 100,
+                                                "group_after": {"g1": ["g2"]}}), "test: dag")
+        result = {"kind": "tickets", "tickets": [self.ticket("new-1")],
+                  "dag": {"new-1": {"depends_on": [], "group": "g1"}}}
+        self.assertEqual(ticket_creator.write_new(self.pool, result, "req"), (["100"], []))
+        self.assertEqual(self.snap().raw["dag"], {"tickets": {"100": {"depends_on": []}},
+                                                  "first_ticket_id": 100, "group_after": {"g1": ["g2"]}})
+
+    def test_the_write_drops_verify_and_why_alone_but_keeps_group_after(self):
+        import ticket_creator
+        self.group("g1", "open", [])
+        self.pool.update(lambda tx: tx.put_dag({"tickets": {"7": {"depends_on": [], "verify": "alone",
+                                                                  "why_alone": "w"}},
+                                                "group_after": {"g1": ["g2"]}}), "test: dag")
+        result = {"kind": "tickets", "tickets": [self.ticket("new-1")],
+                  "dag": {"new-1": {"depends_on": [], "group": "g1"}}}
+        ticket_creator.write_new(self.pool, result, "req")
+        dag = self.snap().raw["dag"]
+        self.assertEqual(dag["tickets"]["7"], {"depends_on": []})
+        self.assertEqual(dag["group_after"], {"g1": ["g2"]})
+
+    def test_the_harness_add_keeps_group_after(self):
+        self.pool.update(lambda tx: tx.put_dag({"tickets": {}, "group_after": {"g1": ["g2"]}}), "test: dag")
+        self.add(1)
+        self.assertEqual(self.snap().raw["dag"], {"tickets": {"1": {"depends_on": []}},
+                                                  "group_after": {"g1": ["g2"]}})
+
     def test_groups_section(self):
         import ticket_creator
         self.add(1, group="g1", state="ready")

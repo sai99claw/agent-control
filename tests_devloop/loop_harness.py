@@ -125,7 +125,7 @@ class LoopCase(GitIsolatedCase):
             tx.put_ticket(t)
             dag = tx.data.dag
             dag[str(ident)] = {"depends_on": [str(d) for d in deps]}
-            tx.put_dag({"tickets": dag})
+            tx.put_dag(dict(tx.data.raw["dag"], tickets=dag))
         self.pool.update(change, "test: add #%s" % ident)
 
     def run_py(self, script, *args, timeout=240):

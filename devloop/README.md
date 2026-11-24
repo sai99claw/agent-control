@@ -100,7 +100,7 @@ members, event `member #N added by the opener`) or a new-group placeholder `new-
 the same placeholder share one new group; new groups are made at the end of the chain in the order
 their placeholder first appears in `tickets`, first event `opened by the opener for #N, #M`), all in
 the same pool write as the tickets; the opening makes no git branch, and `dag.json` keeps only
-`depends_on`. The opener's prompt has a `## Groups` section after `## Current DAG`: the chain, one
+`depends_on` per ticket and keeps the file's other top-level keys (`first_ticket_id`, `group_after`). The opener's prompt has a `## Groups` section after `## Current DAG`: the chain, one
 line per group not landed or cancelled with its state, whether it takes new tickets and its members.
 A hand-in is refused, with nothing written, when an entry has no group, names a group that does not
 exist or is not open, or places a ticket so that the group order becomes a cycle (the pool's tickets plus the
