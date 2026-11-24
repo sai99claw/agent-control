@@ -1,7 +1,7 @@
 {
   "id": "g9",
   "branch": "int/g9",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "129"
   ],
@@ -36,9 +36,16 @@
     {
       "at": "2026-11-24T13:10:59Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-24T13:11:04Z",
+      "event": "landed (release failed)"
     }
   ],
   "base": "b5564f9614719dd695b81d3be948d30194091969",
   "last_regression": "green",
-  "verified_sha": "e7dcd4bccfbb992f3893313e4b3df9496f6de2d8"
+  "verified_sha": "e7dcd4bccfbb992f3893313e4b3df9496f6de2d8",
+  "landed_sha": "e7dcd4bccfbb992f3893313e4b3df9496f6de2d8",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g9.log"
 }
