@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py takes unittest ids relative to the configured roots (test_dag_edit, not tests_devloop.test_dag_edit); the package-qualified form fails with ImportError.",
+  "source": "#125 r1 verifier",
+  "at": "2026-11-24T03:39:30Z"
+}
