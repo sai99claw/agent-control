@@ -106,17 +106,20 @@ class T119Acceptance(LoopCase):
         self.assertIn("## Your previous hand-in was rejected", second)
         self.assertIn("new-1: group g1 is pr and takes no new tickets", second)
 
-    def test_a_group_before_the_group_of_a_dependency_is_refused(self):
+    def test_a_ticket_after_a_later_group_moves_its_group_behind(self):
+        """#122: the DAG orders the groups, so g1 moves behind g2 instead of the hand-in being refused."""
+        from core import chain
         self.add(1, group="g1", state="ready")
         self.add(2, group="g2", state="ready")
         self.group("g1", "open", ["1"])
         self.group("g2", "open", ["2"])
         res = self.open_with("into_g1_after_2")
-        self.refused(res, "- new-1: group g1 comes before g2, the group of #2 it depends on")
+        self.assertEqual(res.returncode, 0, self.out(res))
         snap = self.snap()
-        self.assertNotIn("3", snap.tickets)
+        self.assertEqual(snap.ticket("3").get("group"), "g1")
         self.assertEqual(set(snap.groups), {"g1", "g2"})
-        self.assertEqual(snap.groups["g1"]["members"], ["1"])
+        self.assertEqual(snap.groups["g1"]["members"], ["1", "3"])
+        self.assertEqual(chain.order(snap), ["g2", "g1"])
 
     def test_a_dag_entry_without_group_is_refused(self):
         res = self.open_with("no_group")

@@ -28,5 +28,6 @@ Every ticket gets a DAG entry with two fields:
 - `group`: the group this ticket joins (see `## Groups`). An open group whose tickets are logically
   closest to this one or least likely to conflict with it; when no open group fits, a new group
   `"new-g1"` (`"new-g2"`, ... for more than one; tickets naming the same placeholder share one new
-  group, made at the end of the chain). Never a group that comes before a group of a ticket it
-  depends on. Say in the ticket's `notes` why this group.
+  group, made at the end of the chain). The DAG orders the groups: a group comes after every
+  group holding a ticket its own tickets depend on, so a choice must never make the group order a
+  cycle. Say in the ticket's `notes` why this group.

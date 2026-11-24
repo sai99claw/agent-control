@@ -17,7 +17,7 @@ ticket_issuer.py
   2 x max_rounds rounds in all)
   worker thinks the ticket is wrong -> it runs ticket_creator.py --revise itself
 group complete (= one PR, a local mark) -> regression.py (preflight + quick, if declared + full suite)
-  groups form one chain (core/chain.py, group-number order): the regression (or a fix round)
+  groups form one chain (core/chain.py, ordered by the DAG): the regression (or a fix round)
     starts only when every earlier group is landed or cancelled; a stuck group with no merged
     ticket holds no one
   quick or full red with 1-5 failing cases -> those ids run once more (`run <ids>`); the ones that
@@ -100,9 +100,10 @@ the same pool write as the tickets; the opening makes no git branch, and `dag.js
 `depends_on`. The opener's prompt has a `## Groups` section after `## Current DAG`: the chain, one
 line per group not landed or cancelled with its state, whether it takes new tickets and its members.
 A hand-in is refused, with nothing written, when an entry has no group, names a group that does not
-exist or is not open, or puts a ticket in a group before the group of a ticket it depends on (chain
-order: existing groups by number, then the new groups; a landed dependency or one without a group
-imposes nothing); the check runs on the snapshot and again inside the pool write (a group that went
+exist or is not open, or places a ticket so that the group order becomes a cycle (the pool's tickets plus the
+new tickets in their groups, new groups made last; the sentence is `<key>: group <g> makes the group
+order a cycle: g1 -> g2 -> g1`; a landed or cancelled dependency or one without a group imposes
+nothing); the check runs on the snapshot and again inside the pool write (a group that went
 to pr meanwhile). The sentences go to the opener's one retry; a second refusal is the decision page
 `the opener could not produce valid tickets:`. A ticket's group is not an editable field: the
 reviser cannot change it. A ready ticket starts only in its own group
@@ -118,7 +119,12 @@ ready in an open group; first event `opened for #N, which had no open group`), s
 the same holds for a ticket that left its group. The group-size setting and the DAG's `verify` are
 gone; a config or `dag.json` that still has them is accepted.
 
-Groups form one chain (issue #6), in group-number order (g5 before g10). A group in pr or fixing
+Groups form one chain (issue #6), ordered by the DAG (issue #13), so a group id is only a name.
+Group B waits for group A when a ticket of B depends directly on a ticket of A, neither ticket nor
+group landed or cancelled. Taking the groups by creation key (`created`, then the id in natural
+order: g2 < g10, g62 < g62a < g63), each group comes after every group it waits for that is not
+placed yet (pulled ahead, recursively), so a dependency moves its group ahead (g75 before g63); a
+cycle (only hand edits make one) is broken without an error. A group in pr or fixing
 starts its regression, a main-moved fix round or a retried fix round only when
 every earlier group is landed or cancelled, so a group that waited merges main once and runs its regression once;
 following main goes on while it waits, and landing a verified group is not gated. A stuck group

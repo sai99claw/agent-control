@@ -631,17 +631,16 @@ class OpenerGroupChoice(LoopCase):
                           "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z", "history": []})
         self.pool.update(change, "test: group %s" % gid)
 
-    def test_a_placeholder_made_first_comes_first_in_the_chain(self):
+    def test_new_groups_that_depend_on_each_other_without_a_cycle_are_accepted(self):
+        """#122: the DAG orders the groups, so a new group depending on a later new group is no cycle."""
         import ticket_creator
         result = {"kind": "tickets", "tickets": [self.ticket("new-1"), self.ticket("new-2")],
                   "dag": {"new-1": {"depends_on": ["new-2"], "group": "new-g1"},
                           "new-2": {"depends_on": [], "group": "new-g2"}}}
-        self.assertEqual(ticket_creator.check_new(result, self.snap()),
-                         ["new-1: group new-g1 comes before new-g2, the group of new-2 it depends on"])
-        result["dag"]["new-1"]["group"] = "new-g2"     # order is first appearance, not the number
+        self.assertEqual(ticket_creator.check_new(result, self.snap()), [])
+        result["dag"]["new-1"]["group"] = "new-g2"
         result["dag"]["new-2"]["group"] = "new-g1"
-        self.assertEqual(ticket_creator.check_new(result, self.snap()),
-                         ["new-1: group new-g2 comes before new-g1, the group of new-2 it depends on"])
+        self.assertEqual(ticket_creator.check_new(result, self.snap()), [])
         result["tickets"].reverse()
         self.assertEqual(ticket_creator.check_new(result, self.snap()), [])
 

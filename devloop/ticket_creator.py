@@ -36,6 +36,7 @@ Exit: 0 done · 1 the opener's hand-in stayed unusable (reported) · 3 a questio
 """
 
 import argparse
+import copy
 import glob
 import json
 import os
@@ -46,9 +47,10 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import agents, inflight, memory, osx, pages  # noqa: E402
+from core import chain as chainmod  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.pool import event, frozen_reason, leave_group, new_group  # noqa: E402
+from core.pool import Snapshot, event, frozen_reason, leave_group, new_group  # noqa: E402
 
 PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 TEXT_FIELDS = ("title", "objective", "outline", "test_plan", "notes")
@@ -212,16 +214,12 @@ def placeholders(result):
 
 def group_problems(result, snap):
     """The 'group' of every new ticket, as refusal sentences: an open group's id or a 'new-g<n>'
-    placeholder, never a group before the group of a ticket it depends on. Chain order: existing
-    groups by number, then the new groups in creation order."""
+    placeholder, and no placement that makes the group order (core/chain.py, ordered by the DAG)
+    a cycle. The check runs on a copy of the snapshot holding the pool's tickets plus the new
+    tickets in their groups, the new groups made last in creation order."""
     dag = result["dag"]
     news = placeholders(result)
     groups = snap.groups
-
-    def pos(g):
-        if g in news:
-            return (1, news.index(g))
-        return (0, int(g[1:])) if re.fullmatch(r"g\d+", g) else None
 
     out, valid = [], {}
     for t in result["tickets"]:
@@ -237,22 +235,23 @@ def group_problems(result, snap):
             out.append("%s: group %s is %s and takes no new tickets" % (key, g, groups[g].get("state")))
         else:
             valid[key] = g
+    trial = Snapshot(copy.deepcopy(snap.raw))
+    for k, g in enumerate(news):
+        trial.groups[g] = {"id": g, "state": "open", "created": "~%06d" % k}
+    for t in result["tickets"]:
+        key = str(t["key"])
+        trial.dag[key] = {"depends_on": [str(d) for d in (dag.get(key) or {}).get("depends_on") or []]}
+    before = chainmod.cycle(trial)
     for t in result["tickets"]:
         key = str(t["key"])
         g = valid.get(key)
-        if g is None or pos(g) is None:
+        if g is None:
             continue
-        for d in (dag.get(key) or {}).get("depends_on") or []:
-            d = str(d)
-            if d in valid:
-                h, label = valid[d], d
-            elif d in snap.tickets:
-                row = snap.tickets[d]
-                h, label = (None if row.get("state") == "landed" else row.get("group")), "#" + d
-            else:
-                continue
-            if h and pos(h) is not None and pos(g) < pos(h):
-                out.append("%s: group %s comes before %s, the group of %s it depends on" % (key, g, h, label))
+        trial.tickets[key] = {"id": key, "state": "ready", "group": g}
+        found = chainmod.cycle(trial)
+        if found and found != before:
+            out.append("%s: group %s makes the group order a cycle: %s" % (key, g, " -> ".join(found)))
+            del trial.tickets[key]
     return out
 
 
@@ -352,10 +351,9 @@ def open_tickets(cfg, pool, request, via="main", by=None, origin=None):
 
 
 def groups_section(snap):
-    """The chain the opener chooses a group from: every group not landed or cancelled, by number."""
+    """The chain the opener chooses a group from: every group not landed or cancelled, in chain order."""
     lines = ["## Groups", "", "The chain, oldest first; a new group goes at the end."]
-    gids = sorted((k for k, g in snap.groups.items() if re.fullmatch(r"g\d+", k)
-                   and (g or {}).get("state") not in ("landed", "cancelled")), key=lambda k: int(k[1:]))
+    gids = chainmod.order(snap)
     for gid in gids:
         g = snap.groups[gid]
         state = g.get("state")

@@ -21,13 +21,12 @@ Opening tickets is ticket_creator.py; moving them is ticket_controller.py.
 import argparse
 import json
 import os
-import re
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, memory  # noqa: E402
+from core import agents, chain, memory  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core import osx, pages, release  # noqa: E402
 from core.gitx import Git  # noqa: E402
@@ -44,7 +43,7 @@ def cmd_list(pool, args):
         extra = t.get("stuck", {}).get("reason") if t.get("state") == "stuck" else (t.get("target") or "")
         print("#%-5s %-9s r%-2s %-12s %s" % (ident, shown_state(t.get("state")), t.get("round", 0), extra or "",
                                              t.get("title", "")))
-    for g in sorted(snap.groups.values(), key=lambda g: int(g["id"][1:])):
+    for g in [snap.groups[gid] for gid in chain.sequence(snap)]:
         if args.all or g.get("state") not in ("landed", "cancelled"):
             print("%-6s %-9s %-10s fix %s  #%s" % (g["id"], g.get("state"), g.get("branch"),
                                                    g.get("fix_round", 0), " #".join(g.get("members") or [])))
@@ -72,6 +71,11 @@ def ack_in(tx, page, by=None):
             row["acked_by"] = "answer"
         tx.write("inbox/%s.json" % page, row)
     return row
+
+
+def _is_ticket_id(ident):
+    """Ticket ids are whole numbers; any other id names a group."""
+    return str(ident).isdigit()
 
 
 def _set(pool, ident, state, why, by=None, page=None):
@@ -371,16 +375,16 @@ def main(argv=None):
             memory.seed(cfg, pool, models)
             print("pool ready at %s" % pool.path)
             return 0
-        if args.cmd == "ready" and args.note is not None and not re.fullmatch(r"g\d+", args.id):
+        if args.cmd == "ready" and args.note is not None and _is_ticket_id(args.id):
             print("tickets: --note is for a group (ready g<N> --note ...), not for ticket %s" % args.id,
                   file=sys.stderr)
             return 2
-        if args.cmd == "ready" and re.fullmatch(r"g\d+", args.id):
+        if args.cmd == "ready" and not _is_ticket_id(args.id):
             return cmd_ready_group(pool, cfg, args.id, args.why, args.note, args.by, args.page, args.via)
-        if args.cmd == "cancel" and re.fullmatch(r"g\d+", args.id):
+        if args.cmd == "cancel" and not _is_ticket_id(args.id):
             return cmd_cancel_group(pool, args.id, args.why, args.by, args.page)
         if args.cmd == "rerun":
-            if not re.fullmatch(r"g\d+", args.id):
+            if _is_ticket_id(args.id):
                 print("tickets: rerun is for a group g<N>, not for ticket %s" % args.id, file=sys.stderr)
                 return 2
             return cmd_rerun_group(pool, args.id, args.why, args.by, args.page)

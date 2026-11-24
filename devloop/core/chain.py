@@ -2,9 +2,20 @@
 earlier group still holds the chain, so a group that waited takes main once and runs its
 regression once.
 
+The chain is ordered by the DAG (issue #13), so a group id is only a name. Group B waits for
+group A when a ticket of B depends directly on a ticket of A (A != B), neither ticket landed or
+cancelled, neither group landed or cancelled. Taking the open groups by creation key (the
+group's 'created', missing = '', then its id in natural order: g2 < g10, g62 < g62a < g63), each
+group is placed after every group it waits for that is not placed yet (pulled ahead
+recursively, by the same key). A cycle (only hand edits make one) never raises: a group already
+being placed is skipped.
+
 Pure functions of a core.pool Snapshot:
 
-  order(snap)          ids of the groups not landed or cancelled, in group-number order
+  order(snap)          ids of the groups not landed or cancelled, in that order
+  sequence(snap)       the landed and cancelled groups by creation key, then order(snap)
+  cycle(snap)          None, or one cycle of the waits-for relation as group ids, each waiting
+                       for the next, last == first, starting at the smallest creation key on one
   holds(snap, gid)     gid is in the chain and is not a stuck group without a merged member
                        (a stuck group with no merged ticket has nothing to verify or land)
   waits_for(snap, gid) the nearest earlier group that holds the chain, or None
@@ -13,16 +24,83 @@ Pure functions of a core.pool Snapshot:
   with_behind(text, snap, gid)  text with behind_line appended as its last line when not empty
 """
 
+import re
+
 DONE = ("landed", "cancelled")
 
 
-def _gnum(gid):
-    digits = "".join(c for c in str(gid) if c.isdigit())
-    return (int(digits) if digits else 0, str(gid))
+def _natural(gid):
+    return tuple((0, int(run), "") if run.isdigit() else (1, 0, run)
+                 for run in re.findall(r"\d+|\D+", str(gid)))
+
+
+def created_key(snap, gid):
+    """The creation key: the group's 'created' (missing = ''), then its id in natural order."""
+    return (str((snap.groups.get(gid) or {}).get("created") or ""), _natural(gid))
+
+
+def waits(snap):
+    """{gid: set of group ids it waits for}, over the groups not landed or cancelled."""
+    live = {gid for gid, g in snap.groups.items() if (g or {}).get("state") not in DONE}
+    out = {gid: set() for gid in live}
+    for ident, t in snap.tickets.items():
+        b = (t or {}).get("group")
+        if b not in live or t.get("state") in DONE:
+            continue
+        for d in (snap.dag.get(str(ident)) or {}).get("depends_on") or []:
+            dt = snap.tickets.get(str(d)) or {}
+            a = dt.get("group")
+            if a in live and a != b and dt.get("state") not in DONE:
+                out[b].add(a)
+    return out
 
 
 def order(snap):
-    return sorted((gid for gid, g in snap.groups.items() if g.get("state") not in DONE), key=_gnum)
+    rel = waits(snap)
+    placed, busy, out = set(), set(), []
+
+    def place(gid):
+        if gid in placed or gid in busy:
+            return
+        busy.add(gid)
+        for a in sorted(rel[gid], key=lambda x: created_key(snap, x)):
+            place(a)
+        busy.discard(gid)
+        placed.add(gid)
+        out.append(gid)
+
+    for gid in sorted(rel, key=lambda x: created_key(snap, x)):
+        place(gid)
+    return out
+
+
+def sequence(snap):
+    done = sorted((gid for gid, g in snap.groups.items() if (g or {}).get("state") in DONE),
+                  key=lambda x: created_key(snap, x))
+    return done + order(snap)
+
+
+def cycle(snap):
+    rel = waits(snap)
+    key = lambda x: created_key(snap, x)
+
+    def path_back(start):
+        seen, stack = set(), [(start, [start])]
+        while stack:
+            gid, path = stack.pop()
+            for a in sorted(rel[gid], key=key, reverse=True):
+                if a == start:
+                    return path + [a]
+                if a not in seen:
+                    seen.add(a)
+                    stack.append((a, path + [a]))
+        return None
+
+    for gid in sorted(rel, key=key):
+        found = path_back(gid)
+        if found:
+            return found
+    return None
 
 
 def _has_merged_member(snap, gid):

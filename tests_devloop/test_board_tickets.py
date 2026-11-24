@@ -940,7 +940,7 @@ class BoardTicketFilters(LoopCase):
 
     def test_render_filters_marks_the_current_query(self):
         from unittest import mock
-        snap = mock.Mock(groups={"g10": {}, "g2": {}, "g1": {}})
+        snap = mock.Mock(groups={"g10": {}, "g2": {}, "g1": {}}, tickets={}, dag={})
         page = self.board.render_filters(snap, self.f(state="stuck", group="g10", cat="env", q='a"b', done="1"))
         self.assertIn('<option value="stuck" selected>卡住</option>', page)
         self.assertIn('<option value="g10" selected>', page)

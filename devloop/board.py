@@ -898,11 +898,6 @@ def group_shown(snap, g, f):
     return True
 
 
-def group_order(ident):
-    digits = str(ident)[1:]
-    return (0, int(digits), "") if digits.isdigit() else (1, 0, str(ident))
-
-
 def render_filters(snap, f):
     """The filter form; its controls show the filters f."""
     def select(name, label, options):
@@ -913,7 +908,7 @@ def render_filters(snap, f):
         out.append("</select></label>")
         return "".join(out)
 
-    groups = sorted(snap.groups, key=group_order)
+    groups = chainmod.sequence(snap)
     parts = ['<form method="get" class="filters"><input type="hidden" name="tab" value="tickets">',
              select("state", "狀態", [("", "全部")] + [(s, STATE_TEXT.get(s, s)) for s in FILTER_STATES]),
              select("group", "整合分支", [("", "全部")] + [(g, g) for g in groups] + [("none", "未分組")]),
@@ -982,7 +977,7 @@ def render_tickets_tab(cfg, snap, key, query, now):
 
     out.append('<section><h2>整合分支(一條 = 一個 PR)</h2><div class="scroll"><table><tr><th>組</th><th>狀態</th><th>原因</th>'
                '<th>分支</th><th>票</th><th>修補輪</th><th>最後一次 regression</th><th>發版</th></tr>')
-    for g in sorted(snap.groups.values(), key=lambda g: int(g["id"][1:]), reverse=True):
+    for g in [snap.groups[gid] for gid in reversed(chainmod.sequence(snap))]:
         if not group_shown(snap, g, f):
             continue
         out.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='num'>%s</td><td>%s</td><td>%s</td></tr>" % (

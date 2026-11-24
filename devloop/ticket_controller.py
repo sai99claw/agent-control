@@ -7,7 +7,7 @@ Each tick, in this order:
   2. groups       - main is merged into every waiting integration branch first (#72: clean ->
                     no state change; a conflict -> the fixer once the group is due for its
                     regression); an open group whose tickets are all merged or stuck becomes a
-                    PR; groups form one chain (core/chain.py, in group-number order): a PR
+                    PR; groups form one chain (core/chain.py, ordered by the DAG): a PR
                     gets a regression (or a fix round) only when
                     every earlier group is landed or cancelled - a stuck group with no merged ticket holds no one; red -> auto_fixer (at most devloop.max_rounds);
                     green -> main fast-forwards to the integration branch (a main that moved
@@ -73,11 +73,6 @@ class Stop(Exception):
         self.code = code
 
 
-def _gnum(gid):
-    digits = "".join(c for c in str(gid) if c.isdigit())
-    return (int(digits) if digits else 0, str(gid))
-
-
 def _first_line(text):
     lines = str(text or "").strip().splitlines()
     return lines[0].strip() if lines else ""
@@ -85,10 +80,10 @@ def _first_line(text):
 
 def idle_lines(snap):
     """What each ticket or group left undone waits for, one line each (empty = nothing left).
-    Tickets in numeric id order, then groups in number order; landed, cancelled and merged
+    Tickets in numeric id order, then groups in chain.sequence order; landed, cancelled and merged
     tickets and landed or cancelled groups get no line."""
     out = []
-    for ident in sorted(snap.tickets, key=_gnum):
+    for ident in sorted(snap.tickets, key=dagmod._order_key):
         t = snap.tickets[ident]
         state = t.get("state")
         if state == "stuck":
@@ -108,7 +103,7 @@ def idle_lines(snap):
                 else:
                     waits.append("#%s %s" % (d, dt.get("state")))
             out.append("#%s ready, waits for: %s" % (ident, ", ".join(waits) or "nothing found"))
-    for gid in sorted(snap.groups, key=_gnum):
+    for gid in chain.sequence(snap):
         g = snap.groups[gid]
         state = g.get("state")
         if state == "stuck":
@@ -263,7 +258,7 @@ class Controller:
     # ------------------------------------------------------------ 2. groups
 
     def advance_groups(self, snap):
-        for g in sorted(snap.groups.values(), key=lambda x: int(x["id"][1:])):
+        for g in [snap.groups[gid] for gid in chain.sequence(snap)]:
             state = g.get("state")
             if state not in ("landed", "cancelled") and not g.get("job") and self.all_cancelled(snap, g):
                 self.set_group(g["id"], "cancelled", "all tickets cancelled: group closed")
@@ -1026,9 +1021,9 @@ class Controller:
         return not landed or self.main_ok(group)
 
     def can_still_start(self, data, ident, group):
-        """Every dependency is landed, or ready, running or merged in this group or in an earlier
-        group that is not cancelled, and, with a landed one, main_ok."""
-        gid, landed = group["id"], False
+        """Every dependency is landed, or ready, running or merged in this group or in a group
+        earlier in chain.order, and, with a landed one, main_ok."""
+        gid, landed, chain_order = group["id"], False, chain.order(data)
         for d in dagmod.deps(data.dag, ident):
             dt = data.tickets.get(d) or {}
             if dt.get("state") == "landed":
@@ -1037,7 +1032,8 @@ class Controller:
             dgid = dt.get("group") or ""
             dg = data.groups.get(dgid)
             if (dt.get("state") in ("ready", "running", "merged") and dg
-                    and (dgid == gid or (_gnum(dgid) < _gnum(gid) and dg.get("state") != "cancelled"))):
+                    and (dgid == gid or (dgid in chain_order and gid in chain_order
+                                         and chain_order.index(dgid) < chain_order.index(gid)))):
                 continue
             return False
         return not landed or self.main_ok(group)

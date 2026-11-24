@@ -208,7 +208,7 @@ class GroupFollowUnits(LoopCase):
     def test_can_still_start(self):
         self.add(1, group="g1")                       # ready in an earlier group
         self.add(2, state="running", group="g1")
-        self.add(3, state="merged", group="g3")       # merged in a later group
+        self.add(3, state="merged", group="g3")       # merged in g3, which #13 pulls ahead of g2 (#122)
         self.add(4, state="stuck", group="g1")
         self.add(5, state="merged", group="g9")       # merged in a cancelled earlier group
         self.add(6, state="ready")                    # ready without a group
@@ -224,7 +224,7 @@ class GroupFollowUnits(LoopCase):
         snap = self.snap()
         got = {i: c.can_still_start(snap, i, snap.groups[snap.tickets[i]["group"]])
                for i in ("11", "12", "13", "14", "15", "16")}
-        self.assertEqual(got, {"11": True, "12": True, "13": False, "14": False, "15": False, "16": False})
+        self.assertEqual(got, {"11": True, "12": True, "13": True, "14": False, "15": False, "16": False})
 
     def test_adoption_counts_a_group_made_earlier_in_the_same_write(self):
         self.add(1)

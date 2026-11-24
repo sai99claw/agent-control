@@ -182,3 +182,111 @@ class BehindLine(unittest.TestCase):
         snap = self.snap([("g1", "stuck"), ("g0", "landed")])
         self.assertEqual(chain.behind_line(snap, "g1"), "")
         self.assertEqual(chain.with_behind("head", snap, "g1"), "head")
+
+
+class DagOrderUnits(unittest.TestCase):
+    """#122: core.chain order / sequence / cycle edge cases and the call sites (the implementer's)."""
+
+    def snap(self, groups, tickets=(), deps=None):
+        """groups: (gid, state, created or None); tickets: (id, group, state)."""
+        gs = {}
+        for gid, state, created in groups:
+            gs[gid] = {"id": gid, "state": state, "members": []}
+            if created is not None:
+                gs[gid]["created"] = created
+        ts = {i: {"id": i, "state": st, "group": g} for i, g, st in tickets}
+        dag = {i: {"depends_on": d} for i, d in (deps or {}).items()}
+        return Snapshot({"dag": {"tickets": dag}, "tickets": ts, "groups": gs,
+                         "inbox": {}, "lessons": {}, "memory_state": {}})
+
+    def test_natural_id_order_when_nothing_else_differs(self):
+        from core import chain
+        snap = self.snap([(g, "open", None) for g in ("gx", "g10", "g63", "g62a", "g2", "g62")])
+        self.assertEqual(chain.order(snap), ["g2", "g10", "g62", "g62a", "g63", "gx"])
+
+    def test_a_missing_created_sorts_first(self):
+        from core import chain
+        snap = self.snap([("g1", "open", "2026-11-20T00:00:01Z"), ("g2", "open", None)])
+        self.assertEqual(chain.order(snap), ["g2", "g1"])
+
+    def test_edges_of_landed_or_cancelled_tickets_and_groups_are_ignored(self):
+        from core import chain
+        groups = [("g1", "open", "a"), ("g2", "open", "b")]
+        for t1, t2, want in (("ready", "ready", ["g2", "g1"]), ("ready", "landed", ["g1", "g2"]),
+                             ("cancelled", "ready", ["g1", "g2"]), ("ready", "cancelled", ["g1", "g2"])):
+            snap = self.snap(groups, [("1", "g1", t1), ("2", "g2", t2)], {"1": ["2"]})
+            self.assertEqual(chain.order(snap), want, (t1, t2))
+        snap = self.snap([("g1", "open", "a"), ("g2", "cancelled", "b"), ("g3", "open", "c")],
+                         [("1", "g1", "ready"), ("2", "g2", "merged")], {"1": ["2"]})
+        self.assertEqual(chain.order(snap), ["g1", "g3"])
+        self.assertEqual(chain.sequence(snap), ["g2", "g1", "g3"])
+
+    def test_prerequisites_are_pulled_ahead_recursively(self):
+        from core import chain
+        snap = self.snap([("g1", "open", "a"), ("g2", "open", "b"), ("g3", "open", "c"), ("g4", "open", "d")],
+                         [("1", "g1", "ready"), ("3", "g3", "ready"), ("4", "g4", "merged")],
+                         {"1": ["3"], "3": ["4"]})
+        self.assertEqual(chain.order(snap), ["g4", "g3", "g1", "g2"])
+        self.assertEqual(chain.waits_for(snap, "g2"), "g1")
+        self.assertIsNone(chain.cycle(snap))
+
+    def test_cycle_starts_at_the_smallest_key_on_one(self):
+        from core import chain
+        snap = self.snap([("g1", "open", "a"), ("g2", "open", "b"), ("g3", "open", "c")],
+                         [("1", "g1", "ready"), ("2", "g2", "ready"), ("3", "g3", "ready")],
+                         {"1": ["2"], "2": ["3"], "3": ["1"]})
+        self.assertEqual(chain.cycle(snap), ["g1", "g2", "g3", "g1"])
+        self.assertEqual(sorted(chain.order(snap)), ["g1", "g2", "g3"])
+        snap = self.snap([("g1", "open", "a"), ("g2", "open", "b"), ("g3", "open", "c")],
+                         [("1", "g1", "ready"), ("2", "g2", "ready"), ("3", "g3", "ready"), ("4", "g3", "ready")],
+                         {"1": ["2"], "3": ["2"], "2": ["4"]})
+        self.assertEqual(chain.cycle(snap), ["g2", "g3", "g2"])
+
+    def test_the_opener_refuses_a_cycle_among_new_groups(self):
+        import ticket_creator
+        snap = self.snap([])
+        result = {"tickets": [{"key": k} for k in ("new-1", "new-2", "new-3")],
+                  "dag": {"new-1": {"depends_on": ["new-2"], "group": "new-g1"},
+                          "new-2": {"depends_on": ["new-3"], "group": "new-g2"},
+                          "new-3": {"depends_on": [], "group": "new-g1"}}}
+        self.assertEqual(ticket_creator.group_problems(result, snap),
+                         ["new-3: group new-g1 makes the group order a cycle: new-g1 -> new-g2 -> new-g1"])
+        self.assertEqual(snap.groups, {}, "the check runs on a copy")
+
+    def test_a_cycle_already_in_the_pool_refuses_nothing_new(self):
+        import ticket_creator
+        snap = self.snap([("g1", "open", "a"), ("g2", "open", "b")],
+                         [("1", "g1", "ready"), ("2", "g2", "ready"), ("3", "g2", "ready")],
+                         {"1": ["2"], "3": ["1"]})
+        result = {"tickets": [{"key": "new-1"}], "dag": {"new-1": {"depends_on": ["1"], "group": "g1"}}}
+        self.assertEqual(ticket_creator.group_problems(result, snap), [])
+
+    def test_tickets_routes_every_non_number_to_the_group_path(self):
+        import tickets
+        self.assertEqual([tickets._is_ticket_id(i) for i in ("12", "g12", "g62a", "x")],
+                         [True, False, False, False])
+
+    def test_no_code_sorts_groups_by_the_digits_of_the_id(self):
+        root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "devloop")
+        hits = []
+        for base, _, files in os.walk(root):
+            for name in files:
+                if name.endswith(".py"):
+                    with open(os.path.join(base, name)) as fh:
+                        for n, line in enumerate(fh, 1):
+                            if re.search(r"int\([^)]*\[1:\]\)|_gnum|group_order", line) \
+                                    and "next_group_id" not in line and 'k[1:]) for k in self.groups' not in line:
+                                hits.append("%s:%d" % (name, n))
+        self.assertEqual(hits, [])
+
+    def test_texts_name_the_dag_order(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "devloop", "prompts", "creator", "02-rules.md")) as fh:
+            rules = " ".join(fh.read().split("# Rules for the DAG", 1)[1].split())
+        self.assertNotIn("Never a group that comes before", rules)
+        self.assertIn("cycle", rules)
+        with open(os.path.join(root, "devloop", "README.md")) as fh:
+            readme = " ".join(fh.read().split())
+        for old in ("group-number order", "chain order: existing groups by number"):
+            self.assertNotIn(old, readme)
+        self.assertIn("makes the group order a cycle", readme)
