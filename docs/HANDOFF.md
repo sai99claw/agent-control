@@ -374,7 +374,7 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
   - #12、#9:新增 `actl dag dep N --add|--drop M --reason …`、`actl dag move N --to gK|new --reason …`(只給主線用，看板沒有);
     `actl new --revise N` 交件可帶 `dag` 改相依與組。CLAUDE.md「怎麼做事」已加這兩行。
 - g8(#128,main = b7bb3b7):g7 的 regression 出現一個偶發(test_a7),#2 的機制自動開了 #128。開題者實測 10 次錯 5 次，是測試的競態，不是產品的;
-  改成在 stage 的指令裡複製 live record,10 次全綠。這是 #2 第一次自己走完一輪。
+  改成在 stage 的指令裡複製 live record,10 次全綠。
 - #8–#13 已留言(含 commit)並關閉。#3(花費用每週額度百分比)還開著，等使用者決定。
 - 雲端發版照舊推 tag 403(rc 86),g6、g7、g8 的頁已 ack。目前沒有 `actl run` 在跑，也沒有未完成的票。
 - 小事:`board/config.json` 的 tests 列了 `test_testiface`,但這個檔不存在(#128 的開題者看到的);還沒開票。
