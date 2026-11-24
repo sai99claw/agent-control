@@ -63,6 +63,12 @@
       "at": "2026-11-24T04:47:55Z",
       "event": "landed",
       "group": "g8"
+    },
+    {
+      "at": "2026-11-24T04:48:22Z",
+      "event": "page acknowledged",
+      "page": "20261124T043905Z-created-128",
+      "by": "main-session"
     }
   ],
   "cost": [
