@@ -633,6 +633,105 @@ class FreeRounds(LoopCase):
                          "conflict, 1 revision); last feedback:\nround 4: last")
 
 
+class NotOwnedWrites(LoopCase):
+    """Issuer.save() and integrate() write nothing and move nothing once the ticket is no longer
+    running under the issuer's claim stamp; _go() turns that into one stderr line and exit 2."""
+
+    def setUp(self):
+        super().setUp()
+        import ticket_issuer
+        from core.config import Config
+        self.ti = ticket_issuer
+        self.add(1, state="running", target="int/g1", group="g1")
+        self.issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1")
+        self.issuer.claim()
+
+    def take_away(self, **fields):
+        def change(tx):
+            row = tx.ticket("1")
+            row.update(fields)
+            row.setdefault("history", []).append({"event": "taken away by the test"})
+            tx.put_ticket(row)
+        self.pool.update(change, "test: #1 taken away")
+        return self.snap().ticket("1")
+
+    def assert_refused(self, fn, before):
+        with self.assertRaises(self.ti.NotOwned) as ctx:
+            fn()
+        self.assertEqual(self.snap().ticket("1"), before)
+        return str(ctx.exception)
+
+    def test_claim_keeps_the_stamp_it_wrote_and_its_own_ticket_is_still_written(self):
+        self.assertEqual(self.snap().ticket("1")["run"], self.issuer.run_stamp)
+        self.issuer.save(lambda t: t.__setitem__("round", 1), "round start")
+        self.assertEqual(self.snap().ticket("1")["round"], 1)
+
+    def test_a_released_ticket_takes_no_write(self):
+        before = self.take_away(state="ready", run=None)
+        msg = self.assert_refused(lambda: self.issuer.save(lambda t: t.__setitem__("round", 9), "x"),
+                                  before)
+        self.assertEqual(msg, "#1 is no longer this issuer's ticket (state ready)")
+        self.assert_refused(lambda: self.issuer.stuck("env", "broken"), before)
+        self.assert_refused(lambda: self.issuer.release("signal 15", [{"role": "worker"}]), before)
+        self.assertEqual([p for p in self.snap().inbox.values() if str(p.get("ref")) == "1"], [])
+
+    def test_another_stamp_takes_no_write(self):
+        other = {"pid": 1, "host": "another-host", "boot": "b", "started": osx.now()}
+        before = self.take_away(run=other)
+        self.assert_refused(lambda: self.issuer.on_quota("wait", row={"role": "worker"},
+                                                         until=time.time() + 60), before)
+        self.assert_refused(lambda: self.issuer.on_quota("over"), before)
+        self.assert_refused(lambda: self.issuer.save(lambda t: self.issuer._merged(t, []), "merged"),
+                            before)
+
+    def test_a_merged_ticket_is_not_turned_into_stuck(self):
+        before = self.take_away(state="merged", run=None)
+        msg = self.assert_refused(lambda: self.issuer.stuck("rounds", "x"), before)
+        self.assertIn("(state merged)", msg)
+
+    def fake_git(self, behind):
+        repo, g = mock.Mock(), mock.Mock()
+        repo.sha.return_value = "old"
+        g.is_ancestor.return_value = not behind
+        g.merge.return_value = (True, "")
+        g.sha.return_value = "new"
+        self.issuer.repo = repo
+        return repo, g
+
+    def test_integrate_neither_merges_nor_moves_a_ticket_that_is_not_its_own(self):
+        before = self.take_away(state="ready", run=None)
+        for behind in (True, False):
+            repo, g = self.fake_git(behind)
+            self.assert_refused(lambda: self.issuer.integrate(g, before), before)
+            g.merge.assert_not_called()
+            repo.move_ref.assert_not_called()
+
+    def test_integrate_moves_the_target_of_its_own_ticket(self):
+        repo, g = self.fake_git(False)
+        repo.move_ref.return_value = True
+        self.assertIsNone(self.issuer.integrate(g, self.snap().ticket("1")))
+        repo.move_ref.assert_called_once_with("int/g1", "new", "old")
+
+    def run_go(self, issuer):
+        err = io.StringIO()
+        with mock.patch.object(sys, "stderr", err):
+            rc = self.ti._go(issuer)
+        return rc, [line for line in err.getvalue().splitlines() if line.strip()]
+
+    def test_go_ends_a_stuck_or_interrupted_issuer_whose_ticket_is_gone_with_one_line_and_2(self):
+        before = self.take_away(state="ready", run=None)
+        for raised in (self.ti.Stuck("env", "broken"), self.ti.Interrupted("signal 15")):
+            def go(exc=raised):
+                raise exc
+            with mock.patch.object(self.issuer, "go", go):
+                rc, lines = self.run_go(self.issuer)
+            self.assertEqual(rc, 2)
+            self.assertEqual(lines, ["ticket_issuer: #1 is no longer this issuer's ticket (state "
+                                     "ready); stopped without writing"])
+            self.assertEqual(self.snap().ticket("1"), before)
+            self.assertEqual([p for p in self.snap().inbox.values() if str(p.get("ref")) == "1"], [])
+
+
 class T115Acceptance(LoopCase):
     """Ticket #115 (issue #4b): a blocked hand-in's failing ids are run by devloop; when they pass,
     the worker runs again in a round that does not count. Expected values come from the ticket and
@@ -1010,6 +1109,86 @@ class T22Acceptance(LoopCase):
                          rows)
 
 
+class T131Acceptance(LoopCase):
+    """#131: an issuer whose ticket is no longer its own (released to ready, or claimed under another
+    stamp) while its worker runs stops without writing anything, moves no branch and exits 2."""
+
+    FIELDS = ("state", "run", "round", "feedback", "cost", "cases", "history")
+
+    def setUp(self):
+        super().setUp()
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(k, None)
+
+    def take_away(self, change):
+        self.add(1, state="running", target="int/g1", group="g1", needs_verifier=False)
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "open", "members": ["1"],
+                                                  "branch": "int/g1", "job": None}), "test: group g1")
+        git(self.proj, "branch", "int/g1", "main")
+        hold = os.path.join(self.tmp, "hold.sh")
+        mark = os.path.join(self.tmp, "held")
+        with open(hold, "w") as fh:
+            fh.write("#!/bin/sh\nif [ ! -e %s ]; then touch %s; sleep 8; fi\nexec python3 %s\n"
+                     % (mark, mark, os.path.join(HERE, "fake_agent.py")))
+        self.config(agents={r: ["sh", hold] for r in ("worker", "worker_simple", "verifier", "reviewer")})
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_issuer.py"), "--id", "1",
+                                 "--target", "int/g1"], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and osx.kill_tree(proc.pid, grace=1))
+        log = os.path.join(self.tmp, "wt", "runs", "1", "r1-worker", "agent-1.log")
+        deadline = time.time() + 30
+        while not os.path.exists(log):
+            if proc.poll() is not None:
+                out, err = proc.communicate()
+                self.fail("issuer exited (rc %s) before its worker ran: %s" % (proc.returncode, out + err))
+            if time.time() > deadline:
+                self.fail("the worker never started (no %s)" % log)
+            time.sleep(0.1)
+        self.assertIsNone(proc.poll(), "the issuer ended before the test's write")
+        start = git(self.proj, "rev-parse", "int/g1")
+
+        def write(tx):
+            t = tx.ticket("1")
+            change(t)
+            tx.put_ticket(t)
+        self.pool.update(write, "test: take #1 away from its issuer")
+        after = self.snap().ticket("1")
+        out, err = proc.communicate(timeout=90)
+        return proc.returncode, out, err, start, after
+
+    def check(self, rc, out, err, start, after, event):
+        self.assertEqual(rc, 2, "issuer rc %s; stdout: %s; stderr: %s" % (rc, out, err))
+        lines = [ln for ln in err.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, "stderr should be exactly one non-empty line: %r" % err)
+        self.assertIn("#1 is no longer this issuer's ticket", lines[0])
+        now = self.snap().ticket("1")
+        for f in self.FIELDS:
+            self.assertEqual(now.get(f), after.get(f), "ticket field %r changed after the test's write" % f)
+        self.assertEqual((now.get("history") or [{}])[-1].get("event"), event, now.get("history"))
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), start, "int/g1 moved")
+        about = [r for r in self.snap().inbox.values() if str(r.get("ref")) == "1"]
+        self.assertEqual(about, [], "pages about #1: %r" % about)
+
+    def test_1_released_to_ready_under_a_live_issuer(self):
+        def release(t):   # what Controller._release_orphan writes
+            t["state"], t["run"] = "ready", None
+            t.setdefault("history", []).append({"event": "released by the test"})
+        rc, out, err, start, after = self.take_away(release)
+        self.assertEqual((after.get("state"), after.get("run")), ("ready", None))
+        self.check(rc, out, err, start, after, "released by the test")
+
+    def test_2_run_replaced_by_another_stamp_under_a_live_issuer(self):
+        other = {"pid": 1, "host": "another-host", "boot": "b", "started": osx.now()}
+
+        def claim(t):
+            t["run"] = dict(other)
+            t.setdefault("history", []).append({"event": "claimed by the test"})
+        rc, out, err, start, after = self.take_away(claim)
+        self.assertEqual((after.get("state"), after.get("run")), ("running", other))
+        self.check(rc, out, err, start, after, "claimed by the test")
+        self.assertEqual(self.snap().ticket("1").get("run"), other)
+
+
 class T27Acceptance(LoopCase):
     """D-089 item 2: a merged or landed ticket is frozen for every caller (#27)."""
 
@@ -1108,6 +1287,89 @@ class T27Acceptance(LoopCase):
                         bullets)
 
 
+class IssuerLock(LoopCase):
+    """core/ticketlock helpers and the controller's reading of a free lock (#130)."""
+
+    def setUp(self):
+        super().setUp()
+        from core.config import Config
+        self.cfg = Config(self.proj)
+        self.lock = os.path.join(self.tmp, "wt", "locks", "issuer-1.lock")
+
+    def other_holds(self):
+        """A child process that holds the lock until its stdin closes."""
+        code = ("import fcntl, sys; fh = open(sys.argv[1], 'a'); fcntl.flock(fh, fcntl.LOCK_EX); "
+                "print('held', flush=True); sys.stdin.read()")
+        os.makedirs(os.path.dirname(self.lock), exist_ok=True)
+        proc = subprocess.Popen([sys.executable, "-c", code, self.lock], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, text=True)
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        self.addCleanup(lambda: (proc.stdin.close(), proc.wait(timeout=10), proc.stdout.close()))
+        return proc
+
+    def test_path_is_under_the_worktree_root(self):
+        from core import ticketlock
+        self.assertEqual(ticketlock.path(self.cfg, "1"), self.lock)
+
+    def test_take_creates_the_folder_holds_and_never_removes_the_file(self):
+        import fcntl
+        from core import ticketlock
+        self.assertFalse(os.path.exists(os.path.dirname(self.lock)))
+        fd = ticketlock.take(self.cfg, "1")
+        self.assertIsNotNone(fd)
+        try:
+            self.assertIsNone(ticketlock.take(self.cfg, "1"))       # a second open description is refused
+            with open(self.lock, "a") as fh, self.assertRaises(BlockingIOError):
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            ino = os.stat(self.lock).st_ino
+        finally:
+            os.close(fd)
+        self.assertEqual(os.stat(self.lock).st_ino, ino)
+        fd = ticketlock.take(self.cfg, "1")
+        self.assertIsNotNone(fd)
+        os.close(fd)
+
+    def test_held_reads_another_process_and_leaves_a_free_lock_free(self):
+        from core import ticketlock
+        self.assertFalse(ticketlock.held(self.cfg, "1"))
+        self.assertFalse(ticketlock.held(self.cfg, "1"))            # the probe dropped what it took
+        proc = self.other_holds()
+        self.assertTrue(ticketlock.held(self.cfg, "1"))
+        self.assertFalse(ticketlock.held(self.cfg, "2"))
+        proc.stdin.close()
+        proc.wait(timeout=10)
+        self.assertFalse(ticketlock.held(self.cfg, "1"))
+        self.assertTrue(os.path.exists(self.lock))
+
+    def ctl(self, boot):
+        import ticket_controller
+        self.add(1, state="running", target="int/g1", group="g1", needs_verifier=False,
+                 claimed_at="2026-01-01T00:00:00Z",
+                 run={"pid": os.getpid(), "host": osx.host(), "boot": boot, "started": osx.now()})
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "open", "members": ["1"],
+                                                  "branch": "int/g1", "job": None}), "test: g1")
+        c = ticket_controller.Controller(self.cfg, self.pool)
+        c.forever = False
+        c.issued = []
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
+        return c
+
+    def test_free_lock_and_dead_stamp_release_the_ticket(self):
+        c = self.ctl("not-this-boot")
+        c.finish_jobs(self.snap())
+        t = self.snap().tickets["1"]
+        self.assertEqual(t["state"], "ready")
+        self.assertIn("issuer ended without an outcome; dispatch again",
+                      [h.get("event") for h in t.get("history") or []])
+
+    def test_free_lock_and_live_stamp_adopt_the_issuer(self):
+        c = self.ctl(osx.boot_id())
+        run = self.snap().tickets["1"]["run"]
+        c.finish_jobs(self.snap())
+        t = self.snap().tickets["1"]
+        self.assertEqual((t["state"], t["run"]), ("running", run))
+
+
 class RedCheck(LoopCase):
     def feedback_of(self, ident):
         t = self.snap().ticket(str(ident))
@@ -1156,6 +1418,155 @@ class Recovery(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
+
+
+class T130Acceptance(LoopCase):
+    """#15: one issuer per ticket - the issuer holds a per-ticket lock and the controller honours it (#130)."""
+
+    def setUp(self):
+        super().setUp()
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(k, None)
+        self.lock_path = os.path.join(self.tmp, "wt", "locks", "issuer-1.lock")
+
+    def hold_lock(self):
+        import fcntl
+        os.makedirs(os.path.dirname(self.lock_path), exist_ok=True)
+        fh = open(self.lock_path, "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        return fh
+
+    def probe(self):
+        """True when LOCK_EX|LOCK_NB on the lock path succeeds from this process (lock free)."""
+        import fcntl
+        os.makedirs(os.path.dirname(self.lock_path), exist_ok=True)
+        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return True
+        finally:
+            os.close(fd)
+
+    def running_layout(self):
+        self.add(1, state="running", target="int/g1", group="g1", needs_verifier=False)
+
+        def change(tx):
+            tx.put_group({"id": "g1", "state": "open", "members": ["1"], "branch": "int/g1", "job": None})
+        self.pool.update(change, "test: group g1")
+        git(self.proj, "branch", "int/g1", "main")
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.issued = []
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
+        return c
+
+    def history_events(self, ident):
+        return [h.get("event") for h in self.snap().ticket(str(ident)).get("history") or []]
+
+    # acceptance 1
+    def test_issuer_holds_the_lock_while_its_worker_runs(self):
+        self.running_layout()
+        held = os.path.join(self.tmp, "held")
+        hold = os.path.join(self.tmp, "hold.sh")
+        with open(hold, "w") as fh:
+            fh.write("#!/bin/sh\nif [ ! -e %s ]; then touch %s; sleep 10; fi\nexec python3 %s\n"
+                     % (held, held, os.path.join(HERE, "fake_agent.py")))
+        os.chmod(hold, 0o755)
+        agents = {r: AGENT for r in ROLES}
+        for r in ("worker", "worker_simple", "verifier", "reviewer"):
+            agents[r] = ["sh", hold]
+        self.config(agents=agents)
+        out = open(os.path.join(self.tmp, "issuer.out"), "w")
+        self.addCleanup(out.close)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_issuer.py"), "--id", "1",
+                                 "--target", "int/g1"], cwd=self.proj, env=self.env,
+                                stdout=out, stderr=subprocess.STDOUT, text=True)
+
+        def reap():
+            if proc.poll() is None:
+                proc.terminate()
+            proc.wait(60)
+        self.addCleanup(reap)
+        log = os.path.join(self.tmp, "wt", "runs", "1", "r1-worker", "agent-1.log")
+        deadline = time.time() + 30
+        while not os.path.exists(log) and proc.poll() is None and time.time() < deadline:
+            time.sleep(0.1)
+        if not os.path.exists(log):
+            self.fail("the worker never started (rc %s); output: %s" % (proc.poll(), open(out.name).read()))
+        self.assertTrue(proc.poll() is None, "the issuer ended before the probe")
+        self.assertFalse(self.probe(), "the issuer's lock %s is not held while its worker runs" % self.lock_path)
+        proc.communicate(timeout=90)
+        self.assertEqual(proc.returncode, 0, open(out.name).read())
+        self.assertTrue(self.probe(), "the lock is still held after the issuer exited")
+
+    # acceptance 2
+    def test_second_issuer_refuses_and_changes_nothing(self):
+        self.running_layout()
+        self.hold_lock()
+        live = os.path.join(self.tmp, "wt", "runs", "live", "issuer-1.json")
+        os.makedirs(os.path.dirname(live), exist_ok=True)
+        with open(live, "w") as fh:
+            json.dump({"kind": "issuer", "ticket": "1"}, fh)
+        with open(live, "rb") as fh:
+            before_bytes = fh.read()
+        head = git(self.pool_path, "rev-parse", "HEAD")
+        t0 = time.time()
+        res = self.run_py("ticket_issuer.py", "--id", "1", "--target", "int/g1", timeout=60)
+        took = time.time() - t0
+        self.assertEqual(res.returncode, 2, (res.stdout, res.stderr))
+        self.assertLess(took, 10)
+        lines = [ln for ln in res.stderr.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, res.stderr)
+        self.assertIn("#1", lines[0])
+        self.assertIn(self.lock_path, lines[0])
+        self.assertEqual(git(self.pool_path, "rev-parse", "HEAD"), head, "the pool moved")
+        self.assertTrue(os.path.exists(live), "the live record was removed")
+        with open(live, "rb") as fh:
+            self.assertEqual(fh.read(), before_bytes)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "t1")))
+
+    # acceptance 3
+    def test_finish_jobs_leaves_a_running_ticket_whose_lock_is_held(self):
+        run = {"pid": os.getpid(), "host": osx.host(), "boot": "not-this-boot", "started": osx.now()}
+        self.assertTrue(osx.stamp_dead(run), "fixture: the stamp must look dead")
+        self.add(1, state="running", target="int/g1", group="g1", claimed_at="2026-01-01T00:00:00Z", run=run)
+
+        def change(tx):
+            tx.put_group({"id": "g1", "state": "open", "members": ["1"], "branch": "int/g1", "job": None})
+        self.pool.update(change, "test: group g1")
+        git(self.proj, "branch", "int/g1", "main")
+        self.hold_lock()
+        c = self.ctl()
+        c.finish_jobs(self.snap())
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "running")
+        self.assertEqual(t.get("run"), run)
+        self.assertNotIn("issuer ended without an outcome; dispatch again", self.history_events(1))
+
+    # acceptance 4
+    def test_dispatch_skips_a_ready_ticket_whose_lock_is_held(self):
+        self.add(1, group="g1")
+
+        def change(tx):
+            tx.put_group({"id": "g1", "state": "open", "members": ["1"], "branch": "int/g1", "job": None})
+        self.pool.update(change, "test: group g1")
+        git(self.proj, "branch", "int/g1", "main")
+        fh = self.hold_lock()
+        c = self.ctl()
+        c.dispatch(self.snap())
+        self.assertEqual(c.issued, [], "dispatched while another process holds the issuer lock")
+        fh.close()
+        c.dispatch(self.snap())
+        self.assertEqual(c.issued, [("1", "g1")])
 
 
 class HardBlockOwnChange(LoopCase):

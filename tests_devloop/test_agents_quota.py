@@ -101,6 +101,51 @@ class AgentChains(LoopCase):
             agents.with_effort(["claude"], "huge")
 
 
+class T133Acceptance(LoopCase):
+    """#133: a ticket worktree that vanished before an agent command starts is made again from its
+    branch, or the ticket is stuck (env) with 'worktree missing: <path>'."""
+
+    def setUp(self):
+        super().setUp()
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(k, None)
+
+    def run_with_first(self, extra=""):
+        first = os.path.join(self.tmp, "first.sh")
+        with open(first, "w") as fh:
+            fh.write('#!/bin/sh\nrm -rf "$PWD"\n%sexec python3 %s\n'
+                     % (extra, os.path.join(HERE, "fake_agent.py")))
+        os.chmod(first, 0o755)
+        agents_cfg = json.load(open(os.path.join(self.proj, "board", "config.json")))["devloop"]["agents"]
+        chain = [["sh", first], AGENT]
+        self.config(agents=dict(agents_cfg, worker=chain, worker_simple=chain))
+        self.add(1)
+        self.plan(worker={"1": ["quota", "ok"]})
+        return self.controller()
+
+    def test_1_a_removed_worktree_is_made_again_and_the_ticket_lands(self):
+        res = self.run_with_first()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1), t.get("stuck"))
+        made = [h for h in t.get("history") or [] if h.get("event") == "worktree made again"]
+        self.assertEqual(len(made), 1, t.get("history"))
+        self.assertEqual(made[0].get("path"), os.path.join(self.tmp, "wt", "t1"))
+        self.assertEqual(made[0].get("branch"), "t/1")
+
+    def test_2_a_removed_worktree_without_its_branch_is_stuck_env(self):
+        res = self.run_with_first('git -C "$AC_ROOT" worktree prune\ngit -C "$AC_ROOT" branch -D t/1\n')
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "stuck", (t["state"], res.stdout + res.stderr))
+        self.assertEqual(t["stuck"]["reason"], "env", t["stuck"])
+        self.assertTrue(t["stuck"]["text"].startswith("worktree missing: " + os.path.join(self.tmp, "wt", "t1")),
+                        t["stuck"])
+        env_pages = [r for r in self.snap().inbox.values()
+                     if r.get("kind") == "env" and not r.get("acked")]
+        self.assertEqual(len(env_pages), 1, env_pages)
+        self.assertEqual(env_pages[0].get("ref"), "1", env_pages)
+
+
 class OpenerOtherFailureRetries(LoopCase):
     def test_a_non_quota_failure_still_gets_the_second_attempt(self):
         for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
@@ -1080,6 +1125,48 @@ class AgentEnv(LoopCase):
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
 
 
+class T132Acceptance(LoopCase):
+    """#132: a command whose working directory is gone says so, and an agent chain stops there."""
+
+    def gone(self):
+        d = os.path.join(self.tmp, "gone")
+        self.assertFalse(os.path.exists(d))
+        return d
+
+    def test_1_spawn_and_run_name_the_missing_working_directory(self):
+        d = self.gone()
+        want = "working directory does not exist: " + d
+        with self.assertRaises(osx.OSFailure) as ctx:
+            p = osx.spawn(["python3", "-c", "pass"], cwd=d)
+            p.wait()
+        self.assertEqual(str(ctx.exception), want)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            osx.run(["git", "status"], cwd=d)
+        self.assertEqual(str(ctx.exception), want)
+
+    def test_2_agent_chain_stops_on_a_missing_working_directory(self):
+        from core import agents
+        from core.config import Config
+        d = self.gone()
+        self.config(agents=dict({r: AGENT for r in ROLES}, worker=[AGENT, AGENT]))
+        saved = {k: os.environ.get(k) for k in ("DEVLOOP_SLOT", "AC_ROOT")}
+
+        def restore():
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.addCleanup(restore)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        cfg = Config(self.proj)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            p = agents.start(cfg, "worker", "prompt", d, os.path.join(self.tmp, "run"), 30)
+            self.addCleanup(p.stop)
+        self.assertEqual(str(ctx.exception), "working directory does not exist: " + d)
+
+
 class CodexUsageUnits(LoopCase):
     EVENTS = [{"type": "thread.started", "thread_id": "t-9"}, {"type": "turn.started"},
               {"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 40,
@@ -1132,6 +1219,122 @@ class CodexUsageUnits(LoopCase):
             Config(self.proj)
 
 
+
+class WorktreeRemakeUnits(LoopCase):
+    """agents.start(before_spawn=...) and Issuer.remake_tree (implementer's tests of #133)."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    cfg = QuotaWaitUnits.cfg
+    counted = QuotaWaitUnits.counted
+
+    def test_the_hook_runs_before_the_first_command_in_its_cwd(self):
+        from core import agents
+        cwd = os.path.join(self.tmp, "made-by-hook")
+        calls = []
+
+        def hook():
+            calls.append(os.path.exists(os.path.join(self.tmp, "run", "agent-1.log")))
+            os.makedirs(cwd)
+        p = agents.start(self.cfg(["sh", "-c", 'cat >/dev/null; pwd > out; '
+                                   'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"']),
+                         "worker", "go", cwd, os.path.join(self.tmp, "run"), 30, before_spawn=hook)
+        hand = p.finish()
+        self.assertEqual(hand.kind, "done")
+        self.assertEqual(calls, [False])
+        with open(os.path.join(cwd, "out")) as fh:
+            self.assertEqual(os.path.realpath(fh.read().strip()), os.path.realpath(cwd))
+
+    def test_the_hook_runs_again_on_a_fall_through_and_on_a_quota_restart(self):
+        from core import agents
+        calls = []
+        p = agents.start(self.cfg([self.counted(1), self.counted(2)], quota_retry_seconds=1),
+                         "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30,
+                         on_quota=lambda *a, **kw: None, before_spawn=lambda: calls.append(1))
+        hand = p.finish()
+        self.assertEqual(hand.kind, "done")
+        # first start, fall-through after quota, restart of the chain after the wait
+        self.assertEqual(len(calls), 3)
+
+    def test_what_the_hook_raises_leaves_start_and_frees_the_slot(self):
+        from core import agents
+
+        class Boom(Exception):
+            pass
+
+        def hook():
+            raise Boom("x")
+        with self.assertRaises(Boom):
+            agents.start(self.cfg(AGENT), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30,
+                         before_spawn=hook)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "run", "agent-1.log")))
+
+    def issuer(self):
+        import ticket_issuer
+        from core.config import Config
+        self.add(1, state="running", target="main")
+        return ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "main")
+
+    def test_issuer_start_binds_the_verifier_worktree_to_the_cases_branch(self):
+        import ticket_issuer
+        issuer = self.issuer()
+        t = self.snap().ticket("1")
+        seen = []
+        with mock.patch.object(ticket_issuer.agents, "start") as start, \
+                mock.patch.object(issuer, "remake_tree", lambda path, branch: seen.append((path, branch))):
+            start.return_value = mock.Mock(waited=0.0)
+            issuer.start("verifier", "verifier.md", t, 1, issuer.cwt)
+            issuer.start("worker", "worker.md", t, 1, issuer.wt)
+            issuer.start("reviewer", "reviewer.md", t, 1, issuer.wt)
+            for call in start.call_args_list:
+                call.kwargs["before_spawn"]()
+        self.assertEqual(seen, [(issuer.cwt, "t/1-cases"), (issuer.wt, "t/1"), (issuer.wt, "t/1")])
+
+    def test_a_vanished_cases_worktree_comes_back_on_its_branch_head_with_the_setup(self):
+        from core import worktrees
+        self.config(worktree_setup="touch set-up")
+        issuer = self.issuer()
+        worktrees.branch_tree(issuer.cfg, issuer.repo, issuer.cwt, issuer.cases_branch, start="main")
+        git(issuer.cwt, "commit", "-q", "--allow-empty", "-m", "cases")
+        head = issuer.repo.sha("refs/heads/t/1-cases")
+        shutil.rmtree(issuer.cwt)
+        issuer.remake_tree(issuer.cwt, issuer.cases_branch)
+        self.assertEqual(git(issuer.cwt, "rev-parse", "--abbrev-ref", "HEAD").strip(), "t/1-cases")
+        self.assertEqual(git(issuer.cwt, "rev-parse", "HEAD").strip(), head)
+        self.assertTrue(os.path.exists(os.path.join(issuer.cwt, "set-up")))
+        made = [h for h in self.snap().ticket("1")["history"] if h["event"] == "worktree made again"]
+        self.assertEqual([(h["path"], h["branch"]) for h in made], [(issuer.cwt, "t/1-cases")])
+        issuer.remake_tree(issuer.cwt, issuer.cases_branch)     # present: nothing happens
+        self.assertEqual(len([h for h in self.snap().ticket("1")["history"]
+                              if h["event"] == "worktree made again"]), 1)
+
+    def test_no_branch_or_a_failed_setup_is_stuck_env(self):
+        import ticket_issuer
+        issuer = self.issuer()
+        with self.assertRaises(ticket_issuer.Stuck) as ctx:
+            issuer.remake_tree(issuer.wt, issuer.branch)
+        self.assertEqual(ctx.exception.reason, "env")
+        self.assertEqual(ctx.exception.text, "worktree missing: %s (branch t/1 does not exist)" % issuer.wt)
+        git(self.proj, "branch", "t/1")
+        self.config(worktree_setup="exit 3")
+        from core.config import Config
+        issuer.cfg = Config(self.proj)
+        with self.assertRaises(ticket_issuer.Stuck) as ctx:
+            issuer.remake_tree(issuer.wt, issuer.branch)
+        self.assertEqual(ctx.exception.reason, "env")
+        self.assertTrue(ctx.exception.text.startswith(
+            "worktree missing: %s (making it again from t/1 failed: " % issuer.wt), ctx.exception.text)
+        self.assertNotIn("worktree made again",
+                         [h["event"] for h in self.snap().ticket("1").get("history") or []])
+
 class ProjectRulesHome(unittest.TestCase):
     def read(self, *parts):
         with open(os.path.join(HOME, *parts)) as f:
@@ -1155,6 +1358,21 @@ class ProjectRulesHome(unittest.TestCase):
         sec = text.split("\n## Project rules for agents\n", 1)[1].split("\n## ", 1)[0]
         for word in ("CLAUDE.md", "AGENTS.md", "project memory", "hard_block"):
             self.assertIn(word, sec.replace("Project memory", "project memory"))
+
+
+class MissingProgramKeepsText(unittest.TestCase):
+    """A missing program in an existing cwd keeps 'cannot start X: not found' (implementer's tests of #132)."""
+
+    def test_spawn_and_run_text(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for call in (lambda: osx.spawn(["no-such-program-132"], cwd=d),
+                         lambda: osx.run(["no-such-program-132"], cwd=d)):
+                with self.assertRaises(osx.OSFailure) as ctx:
+                    call()
+                self.assertNotIsInstance(ctx.exception, osx.CwdMissing)
+                self.assertTrue(str(ctx.exception).startswith(
+                    "cannot start no-such-program-132: not found ("), str(ctx.exception))
 
 
 class ChainStartUnits(LoopCase):

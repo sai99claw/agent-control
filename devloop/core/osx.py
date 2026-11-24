@@ -20,6 +20,16 @@ class OSFailure(Exception):
     """An operating-system level failure, already explained in `str(self)`."""
 
 
+class CwdMissing(OSFailure):
+    """The command could not start because its working directory does not exist."""
+
+
+def _cwd_gone(cwd):
+    if cwd is not None and not os.path.isdir(cwd):
+        return CwdMissing("working directory does not exist: %s" % cwd)
+    return None
+
+
 def explain(exc, what):
     """Turn an OSError into a sentence that says what to do."""
     code = getattr(exc, "errno", None)
@@ -58,7 +68,7 @@ def run(argv, cwd=None, env=None, timeout=None, stdin_text=None, check=False, wh
             stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     except OSError as exc:
-        raise OSFailure(explain(exc, "cannot start %s" % what))
+        raise _cwd_gone(cwd) or OSFailure(explain(exc, "cannot start %s" % what))
     try:
         out, err = proc.communicate(stdin_text, timeout=timeout)
         res = Result(proc.returncode, out, err)
@@ -88,7 +98,8 @@ def spawn(argv, cwd=None, env=None, log_path=None, stdin_text=None):
             stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     except OSError as exc:
-        raise OSFailure(explain(exc, "cannot start %s" % os.path.basename(str(argv[0]))))
+        raise _cwd_gone(cwd) or OSFailure(
+            explain(exc, "cannot start %s" % os.path.basename(str(argv[0]))))
     finally:
         if log_path and log is not subprocess.DEVNULL:
             log.close()

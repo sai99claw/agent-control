@@ -31,8 +31,10 @@ An agent whose last command hits the account's usage limit does not lose the rou
 waits for the reset (agents.quota_wait), its ticket stays "running" with a "waiting" mark and the
 run's cost row (outcome "quota"), and the agent runs again (D-091).
 
-Exit: 0 merged · 1 stuck (reported) · 2 refused (wrong state / usage) · 4 interrupted (left
-"ready" so the controller dispatches it again).
+Exit: 0 merged · 1 stuck (reported) · 2 refused (wrong state / usage / another issuer of the
+ticket holds its lock <worktrees>/locks/issuer-<N>.lock), or the ticket is no longer this issuer's
+(not running under the stamp written at the claim: nothing more is written, no branch moves) ·
+4 interrupted (left "ready" so the controller dispatches it again).
 """
 
 import argparse
@@ -45,7 +47,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, inflight, memory, osx, pages, slots, testrun, worktrees  # noqa: E402
+from core import agents, inflight, memory, osx, pages, slots, testrun, ticketlock, worktrees  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -56,6 +58,13 @@ LOOP = os.path.dirname(os.path.abspath(__file__))
 
 class Interrupted(Exception):
     pass
+
+
+class NotOwned(Exception):
+    """The ticket is no longer running under this issuer's claim stamp."""
+    def __init__(self, ident, state):
+        super().__init__("#%s is no longer this issuer's ticket (state %s)" % (ident, state))
+        self.state = state
 
 
 class Stuck(Exception):
@@ -102,6 +111,8 @@ class Issuer:
     test_waited = 0.0
     # Chain index the next worker starts at (set by a blocked hand-in whose ids passed; used once)
     next_worker = 0
+    # The run stamp claim() wrote; from then on every write checks the ticket still carries it
+    run_stamp = None
 
     def __init__(self, cfg, pool, ident, target):
         self.cfg, self.pool, self.id, self.target = cfg, pool, str(ident), target
@@ -126,22 +137,33 @@ class Issuer:
     def ticket(self):
         return self.pool.snapshot().ticket(self.id)
 
+    def owned(self, t):
+        """Raise NotOwned unless `t` is running under this issuer's claim (no-op before it)."""
+        if self.run_stamp is not None and (
+                t.get("state") != "running" or t.get("run") != self.run_stamp):
+            raise NotOwned(self.id, t.get("state"))
+
     def save(self, mutate, message):
         def change(tx):
             t = tx.ticket(self.id)
+            self.owned(t)
             mutate(t)
             tx.put_ticket(t)
             return t
         return self.pool.update(change, "#%s: %s" % (self.id, message))
 
     def claim(self):
+        stamp = osx.stamp()
+
         def mutate(t):
             if t.get("state") != "running" or t.get("target") != self.target:
                 raise osx.OSFailure("#%s is %s for %s, not running for %s" % (
                     self.id, t.get("state"), t.get("target"), self.target))
-            t["run"] = osx.stamp()
+            t["run"] = stamp
             event(t, "issuer started", target=self.target)
-        return self.save(mutate, "issuer started")
+        t = self.save(mutate, "issuer started")
+        self.run_stamp = stamp
+        return t
 
     # ------------------------------------------------------------ main
 
@@ -169,6 +191,7 @@ class Issuer:
                 break
             # A revision the opener handed in while its ticket_creator.py was stopped (with the
             # worker that ran it) is written into the pool before the round reads the ticket.
+            self.owned(self.ticket())
             ticket_creator.apply_unapplied(self.cfg, self.pool, self.id, self.started)
             def start_round(x):
                 x["round"] = int(x.get("round") or 0) + 1
@@ -335,6 +358,7 @@ class Issuer:
         for _ in range(8):
             old = self.repo.sha(self.target)
             if not g.is_ancestor(old, "HEAD"):
+                self.owned(self.ticket())
                 ok, why = g.merge(self.target)
                 if not ok:
                     self._free = "merge"
@@ -344,6 +368,7 @@ class Issuer:
                 failed = self.run_cases(t)
                 if failed:
                     return "after taking in %s: %s" % (self.target, failed)
+            self.owned(self.ticket())
             if self.repo.move_ref(self.target, g.sha("HEAD"), old):
                 return None
             time.sleep(1)
@@ -476,10 +501,27 @@ class Issuer:
         p = agents.start(self.cfg, role, agents.render(template, values), cwd, run_dir, timeout,
                          extra_env={"DEVLOOP_TICKET": self.id, "AC_CODE_ROOT": cwd},
                          effort=t.get("effort") if role == "worker" else None, round_no=r,
-                         chain_role=chain, on_quota=self.on_quota, first=first)
+                         chain_role=chain, on_quota=self.on_quota, first=first,
+                         before_spawn=lambda: self.remake_tree(cwd, self.cases_branch if cwd == self.cwt
+                                                               else self.branch))
         self.pending.append(p)
         self.started_agents.append(p)
         return p
+
+    def remake_tree(self, path, branch):
+        """Right before an agent command starts: a worktree that vanished is made again from its
+        branch (uncommitted work in it is lost); when it cannot be, the ticket is stuck (env)."""
+        if worktrees._exists(path):
+            return
+        if self.repo.sha("refs/heads/" + branch) is None:
+            raise Stuck("env", "worktree missing: %s (branch %s does not exist)" % (path, branch))
+        try:
+            worktrees.branch_tree(self.cfg, self.repo, path, branch)
+        except osx.OSFailure as exc:
+            raise Stuck("env", "worktree missing: %s (making it again from %s failed: %s)"
+                        % (path, branch, exc))
+        self.save(lambda t: event(t, "worktree made again", path=path, branch=branch),
+                  "worktree made again")
 
     def on_quota(self, phase, row=None, until=None, text=None):
         """An agent's last command hit the usage limit (phase "wait") or its wait is over
@@ -649,6 +691,11 @@ def main(argv=None):
 
     try:
         cfg = Config()
+        lock = ticketlock.take(cfg, args.id)    # held until main returns; the kernel frees it on exit
+        if lock is None:
+            print("ticket_issuer: #%s already has a live issuer: lock %s is held; nothing done"
+                  % (args.id, ticketlock.path(cfg, args.id)), file=sys.stderr)
+            return 2
         issuer = Issuer(cfg, pool_for(cfg), args.id, args.target)
     except osx.OSFailure as exc:
         print("ticket_issuer: %s" % exc, file=sys.stderr)
@@ -660,6 +707,15 @@ def main(argv=None):
 
 
 def _go(issuer):
+    try:
+        return _outcome(issuer)
+    except NotOwned as exc:
+        _safe(issuer.stop_agents)
+        print("ticket_issuer: %s; stopped without writing" % exc, file=sys.stderr)
+        return 2
+
+
+def _outcome(issuer):
     try:
         return issuer.go()
     except Stuck as exc:
@@ -692,6 +748,8 @@ def _go(issuer):
 def _safe(fn):
     try:
         fn()
+    except NotOwned:
+        raise
     except Exception as exc:  # the pool itself may be what failed; say so and go on exiting
         print("ticket_issuer: could not record the outcome: %s" % exc, file=sys.stderr)
 

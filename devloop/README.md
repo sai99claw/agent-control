@@ -165,7 +165,12 @@ the ref. A main-moved report, the same or fewer failing cases, or a group sent b
 `refs/devloop/*` is pushed.
 
 A controller stopped with SIGTERM or SIGINT leaves its issuers, regressions and fixers running, and
-the next controller adopts them (#124). Stopping every process the controller started also stops
+the next controller adopts them (#124). An issuer holds a BSD flock on
+`<worktrees>/locks/issuer-<N>.lock` (never deleted or replaced) from before its claim until it
+exits; a second `ticket_issuer.py --id N` while it is held exits 2 with one line naming the lock
+and changes nothing. The controller treats a held lock as a live issuer whatever the stamp says:
+it neither releases a running ticket nor dispatches a ready one while another process holds its
+lock (#130). Stopping every process the controller started also stops
 its regressions: regression.py (on SIGTERM, SIGINT or SIGHUP) removes its worktree, releases its
 slot or machine and records `stopped by <signal> during <stage>` as an unmeasured result; a
 regression that could not record it is named on the unmeasured page by pid, exit code or signal,
@@ -191,6 +196,13 @@ The same holds for any fix round in which auto_fixer ended before starting the f
 group's `fix_agent_round`, set right before the agent starts, is not its `fix_round`): no round is
 counted, no regression starts, the group is paused with one "env" page saying why, and the rerun
 starts the fixer again.
+
+Right before each command of an issuer agent's chain starts (the first, each fall-through, each
+restart after a quota wait), a missing worktree `t<id>` (branch `t/<id>`) or `t<id>-cases` (branch
+`t/<id>-cases`) is made again from its branch head and set up like any new worktree, with the
+ticket event "worktree made again" (path, branch; uncommitted work in it is lost); when the branch
+is gone or making it fails, the ticket is stuck with reason `env` and a text that starts
+`worktree missing: <path>`.
 
 `devloop.prices` (default null; `{}` is the same): maps a model name (the row's `model`: the value
 after `--model`, else the command's file name) to `{"input": n, "cached_input": n, "output": n}`,
