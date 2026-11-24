@@ -158,6 +158,13 @@ the ref. A main-moved report, the same or fewer failing cases, or a group sent b
 `tickets.py ready gN` (which drops `fix_end_sha`) never resets. Neither `int/<gid>` nor
 `refs/devloop/*` is pushed.
 
+A controller stopped with SIGTERM or SIGINT leaves its issuers, regressions and fixers running, and
+the next controller adopts them (#124). Stopping every process the controller started also stops
+its regressions: regression.py (on SIGTERM, SIGINT or SIGHUP) removes its worktree, releases its
+slot or machine and records `stopped by <signal> during <stage>` as an unmeasured result; a
+regression that could not record it is named on the unmeasured page by pid, exit code or signal,
+with the last line of its log (`runs/regression/<gid>/regression.log`).
+
 `devloop.worktree_setup` (D-091 item 10; default null = nothing runs; otherwise a non-empty shell
 command): run with `sh -c` right after devloop creates a worktree for a ticket (`t<id>`), its cases
 (`t<id>-cases`), a red check (`red-t<id>`), a regression (`regression-<branch>`), a fixer
@@ -201,8 +208,9 @@ missing and never deleted. The devloop process that started the run holds the lo
 background process an agent leaves behind keeps no slot, and a process that dies frees its slot.
 An agent and an issuer wait for a slot without a limit: the wait does not count against their
 own limit (the agent's timeout, `issuer_timeout_seconds`), whose time counts from when the slot
-is taken. A regression's wait still counts against `regression_timeout_seconds`
-("unmeasured" when no slot comes free in time).
+is taken. A regression waits for its slot at most `regression_timeout_seconds`
+("unmeasured" when no slot comes free in time) and its run gets `regression_timeout_seconds` from when the slot is taken;
+the wait reuses that setting because another group's regression runs at most `regression_timeout_seconds` once it has the machine, so the wait is long enough for it to finish.
 Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file) in the
 environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
 `ticket_creator.py --revise`). `run_tests.py` outside a slot (the opener's way to run tests) takes
@@ -215,8 +223,8 @@ script). The mark is a `flock` LOCK_EX on `<worktrees>/slots/exclusive`, held by
 from the moment it starts waiting until it has released every slot; with it held, the regression
 takes every `slot-<i>`, waiting for each, then runs preflight and `full`. Every other taker needs a
 LOCK_SH on that file, only while it takes its slot; its wait for it is a slot wait (no limit for
-an agent or an issuer, its time limits count from when the slot is taken). The whole wait counts against `regression_timeout_seconds` ("unmeasured" when the
-machine is not free in time), and a regression that dies leaves nothing locked. Nested runs
+an agent or an issuer, its time limits count from when the slot is taken). A regression waits for the whole machine at most `regression_timeout_seconds` ("unmeasured" when the
+machine is not free in time) and its run gets `regression_timeout_seconds` from when the machine is taken, and a regression that dies leaves nothing locked. Nested runs
 (`DEVLOOP_SLOT` set) do not touch the mark.
 
 ## Roles
@@ -388,7 +396,8 @@ controller's stderr and sampling carries on; the thread stops with the controlle
 ## Dashboard
 
 `board.py` reads the pool only: the four VISION numbers (tokens and time per landed ticket,
-first-pass share, user interventions per ticket, what waits for the user), every ticket, every
+first-pass share, user interventions per ticket, what waits for the user: the unread pages other than
+`created` ones, plus stuck tickets), every ticket, every
 integration branch, unread pages, memory files. Unknown numbers show as 「未知」, never 0.
 The page has six tabs, chosen by `?tab=`: 要你判 (`?tab=decide`), 進行中 (`?tab=live`), 票
 (`?tab=tickets`; everything above but the four numbers, which every tab shows), DAG (`?tab=dag`),
@@ -538,6 +547,17 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
   group-ready, group-cancel, rerun, release (a group), ack (any page); each maps to one answer
   command that inbox prints. `Pool.report` checks the set when the page is written: a bad set is
   dropped and the text gets a last line `(options dropped: <the first problem>)`.
+- **Pages close with their subject**: an unread decision or env page whose `ref` is a ticket or group
+  is acked (`acked_at`, `acked_by`, no event) in the same pool write that handles that subject; the
+  `--page` page keeps `--by` (else `answer`). `tickets.py ready N|gN` acks as `tickets ready`,
+  `cancel N|gN` as `tickets cancel` (with each member ticket it cancels), `rerun gN` as `tickets rerun`,
+  `release gN` as `tickets release` (pages that existed when it started); `ticket_creator.py --revise N
+  --from user|main --decision retry|cancel`, and `revise` ending ready or escalated, as `new --revise`
+  (pages that existed when it started; its own question stays unread). The controller acks as
+  `superseded` when it dispatches a ready ticket (the ticket's pages), starts a regression or fixer
+  job for a group (the group's pages), lands a group (the group's and each landed ticket's pages that
+  existed when the landing began; its push-failed and release pages stay unread), and sets a group
+  cancelled (the group's pages). Created, landed, cancelled and idle pages are never acked this way.
 
 ## Tests
 

@@ -791,6 +791,73 @@ class T3Acceptance(LoopCase):
         for role in agents.NO_SLOT_ROLES:
             self.assertNotIn(role, ("worker", "verifier", "reviewer", "fixer"))
 
+
+class T121Acceptance(LoopCase):
+    """Ticket #121 (RegressionDeadlineAcceptance): a regression's time limit starts when it has
+    the slot or the machine; preflight shares that limit."""
+
+    def set_tests(self, **commands):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["tests"].update(commands)
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+
+    def hold_slot_for(self, seconds):
+        """Another process holding slot-0, played by this test process, released after `seconds`."""
+        import threading
+        from core import slots
+        from core.config import Config
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        try:
+            os.environ.pop("DEVLOOP_SLOT", None)
+            os.environ["AC_ROOT"] = self.proj
+            slot = slots.take(Config(self.proj), time.time() + 2)
+        finally:
+            patch.stop()
+        self.assertTrue(slot and slot.held)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "wt", "slots", "slot-0")))
+        timer = threading.Timer(seconds, slot.release)
+        self.addCleanup(timer.cancel)
+        timer.start()
+        return timer
+
+    def regression(self):
+        out = os.path.join(self.tmp, "regression.json")
+        res = self.run_py("regression.py", "--branch", "main", "--out", out, timeout=120)
+        self.assertTrue(os.path.exists(out), res.stdout + res.stderr)
+        with open(out) as fh:
+            got = json.load(fh)
+        return res, got
+
+    def test_a_regression_that_waited_for_its_slot_gets_its_full_time(self):
+        self.config(machine_slots=1, regression_timeout_seconds=10)
+        self.set_tests(full="sleep 4; " + TESTS + " full")
+        self.hold_slot_for(7)
+        res, got = self.regression()
+        self.assertEqual(got["status"], "green", got)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def test_a_regression_that_waited_for_the_whole_machine_gets_its_full_time(self):
+        self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=10)
+        self.set_tests(full="sleep 4; " + TESTS + " full")
+        self.hold_slot_for(7)
+        res, got = self.regression()
+        self.assertEqual(got["status"], "green", got)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def test_preflight_shares_the_runs_time_limit(self):
+        self.config(regression_timeout_seconds=3)
+        self.set_tests(preflight="sleep 6; " + TESTS + " preflight")
+        res, got = self.regression()
+        self.assertEqual(got["status"], "unmeasured", got)
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn("tests.preflight", got["summary"])
+        self.assertIn("timeout", got["summary"])
+
+
 class T30Acceptance(LoopCase):
     """Ticket #30: waiting for a machine slot does not count against an agent's or an issuer's
     time limit; the clocks start when the slot is taken (D-091 item 6)."""
@@ -887,6 +954,19 @@ class T30Acceptance(LoopCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         t = self.snap().ticket("1")
         self.assertEqual((t["state"], t["round"]), ("landed", 1), t.get("stuck") or t.get("history"))
+
+
+class RegressionWaitReadme(LoopCase):
+    def test_the_slot_section_gives_the_run_its_own_time_from_the_slot(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        flat = " ".join(text.split("## Machine slots", 1)[1].split("\n## ", 1)[0].split())
+        for words in ("A regression waits for its slot at most `regression_timeout_seconds`",
+                      "its run gets `regression_timeout_seconds` from when the slot is taken",
+                      "from when the machine is taken",
+                      "another group's regression runs at most `regression_timeout_seconds`"):
+            self.assertIn(words, flat)
+        self.assertNotIn("still counts against `regression_timeout_seconds`", flat)
 
 
 class T116Acceptance(LoopCase):
@@ -1049,7 +1129,7 @@ class T116Acceptance(LoopCase):
         for words in ("creator", "consolidator_peer", "machine busy",
                       "agent", "red check", "regression", "slots/slot-", "own limit", "DEVLOOP_SLOT",
                       "parent's slot", "wait for a slot without a limit", "from when the slot is taken",
-                      "still counts against `regression_timeout_seconds`", "regression_exclusive",
+                      "A regression waits for its slot at most `regression_timeout_seconds`", "regression_exclusive",
                       "slots/exclusive", "needs `machine_slots`"):
             self.assertIn(words, flat)
         self.assertNotIn('"no slot"', flat)
@@ -1209,7 +1289,7 @@ class MachineSlots(LoopCase):
         self.assertNotIn('"no slot"', flat)
         self.assertIn("wait for a slot without a limit", flat)
         self.assertIn("from when the slot is taken", flat)
-        self.assertIn("still counts against `regression_timeout_seconds`", flat)
+        self.assertIn("A regression waits for its slot at most `regression_timeout_seconds`", flat)
 
     def test_take_without_a_deadline_waits_until_the_slot_is_freed(self):
         import threading

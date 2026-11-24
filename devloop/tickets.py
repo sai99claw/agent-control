@@ -31,7 +31,7 @@ from core import dag as dagmod  # noqa: E402
 from core import osx, pages, release  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.pool import event, frozen_reason, leave_group, shown_state  # noqa: E402
+from core.pool import close_pages, event, frozen_reason, leave_group, shown_state  # noqa: E402
 
 
 def cmd_list(pool, args):
@@ -93,6 +93,7 @@ def _set(pool, ident, state, why, by=None, page=None):
         event(t, "set %s by main" % state, why=why, **({"by": by} if by else {}))
         tx.put_ticket(t)
         ack_in(tx, page, by)
+        close_pages(tx, ident, "tickets ready" if state == "ready" else "tickets cancel")
     pool.update(change, "#%s: %s (main)" % (ident, state))
     print("#%s is %s" % (ident, state))
     return 0
@@ -124,6 +125,7 @@ def cmd_ready_group(pool, cfg, gid, why, note=None, by=None, page=None, via=None
         event(g, "ready again by the user", by=by or "user", **detail)
         tx.put_group(g)
         ack_in(tx, page, by)
+        close_pages(tx, gid, "tickets ready")
     pool.update(change, "group %s: ready again (main)" % gid)
     print("group %s goes back to the regression (fix rounds reset to 0)" % gid)
     return 0
@@ -154,6 +156,8 @@ def cmd_cancel_group(pool, gid, why, by=None, page=None):
         event(g, "cancelled by the user", by=by or "user", why=why)
         tx.put_group(g)
         ack_in(tx, page, by)
+        for ref in [gid] + [d[1:] for d in done]:
+            close_pages(tx, ref, "tickets cancel")
         return done
     done = pool.update(change, "group %s: cancelled (main)" % gid)
     text = "group %s cancelled by %s (%s); cancelled tickets: %s" % (
@@ -180,6 +184,7 @@ def cmd_rerun_group(pool, gid, why, by=None, page=None):
         event(g, "environment fixed: verify again", by=who, why=why)
         tx.put_group(g)
         ack_in(tx, page, who)
+        close_pages(tx, gid, "tickets rerun")
     pool.update(change, "group %s: environment fixed (main)" % gid)
     print("group %s: environment fixed; the controller verifies it again (a --forever controller at its next "
           "tick, otherwise run the controller)" % gid)
@@ -285,7 +290,8 @@ def cmd_release(pool, cfg, args):
     """Re-run the release of a landed group the way the controller does at landing; once, no
     retry, no rollback. The outcome goes on the group and in a page."""
     gid = args.group
-    g = pool.snapshot().groups.get(gid)
+    snap = pool.snapshot()
+    g, before = snap.groups.get(gid), set(snap.inbox)
     if not g:
         raise osx.OSFailure("no group %s" % gid)
     if g.get("state") != "landed" or not g.get("landed_sha"):
@@ -304,6 +310,7 @@ def cmd_release(pool, cfg, args):
         event(grp, "release re-run: %s" % ("ok" if ok else "failed"), **({"by": args.by} if args.by else {}))
         tx.put_group(grp)
         ack_in(tx, args.page, args.by)
+        close_pages(tx, gid, "tickets release", before)
     pool.update(change, "group %s: release re-run (%s)" % (gid, "ok" if ok else "failed"))
     if ok:
         pool.report("landed", gid, "group %s released (re-run): #%s (%s); release log: %s" % (

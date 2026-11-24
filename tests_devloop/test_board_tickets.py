@@ -405,6 +405,27 @@ class BoardTabs(LoopCase):
         self.assertEqual(get("/x/nothing")[0], 404)
 
 
+class BoardWaitingCount(LoopCase):
+    """The 等你處理的 number leaves out unread created pages (GitHub issue #10)."""
+
+    @staticmethod
+    def snap():
+        from core.pool import Snapshot
+        inbox = {str(i): {"kind": k, "acked": a} for i, (k, a) in enumerate(
+            [("created", False), ("created", False), ("decision", False), ("env", False),
+             ("landed", False), ("decision", True)])}
+        return Snapshot({"dag": {"tickets": {}}, "tickets": {"1": {"id": "1", "state": "stuck"}}, "groups": {},
+                         "inbox": inbox, "lessons": {}, "memory_state": {}})
+
+    def test_waiting_skips_created_pages(self):
+        import board
+        self.assertEqual(board.metrics(self.snap())["waiting"], "3 頁 + 1 張卡住")
+
+    def test_card_note_says_created_is_left_out(self):
+        import board
+        self.assertIn("未讀頁(created 除外)+ 卡住的票", board.render_metrics(self.snap()))
+
+
 class T39Acceptance(LoopCase):
     """#39: a stuck or quota-waiting ticket or group shows why as one of eight categories.
     Expected values come from the ticket's acceptance items and the texts it quotes, not from board.py."""

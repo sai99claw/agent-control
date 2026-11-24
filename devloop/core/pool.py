@@ -343,6 +343,19 @@ def leave_group(tx, t):
         tx.put_group(g)
 
 
+def close_pages(tx, ref, by, names=None):
+    """Ack, inside the caller's change(tx), every unread decision or env page whose str(ref) is
+    `ref` (only those named in `names` when given) as acked_by `by`; no event. Returns their names."""
+    done = []
+    for name, row in sorted(tx.data.inbox.items()):
+        if (row.get("kind") in ("decision", "env") and not row.get("acked") and str(row.get("ref")) == str(ref)
+                and (names is None or name in names)):
+            row["acked"], row["acked_at"], row["acked_by"] = True, osx.now(), by
+            tx.write("inbox/%s.json" % name, row)
+            done.append(name)
+    return done
+
+
 def new_group(tx, ids, why):
     """Write the next group (at the end of the chain) with `ids` as its members and set each of
     those tickets' 'group' to it; one group event `why`. No git: the controller makes the branch
