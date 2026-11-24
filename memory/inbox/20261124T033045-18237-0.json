@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "worker",
+  "text": "Set SIG_IGN inside the stop-signal handler itself, before raising, so a second signal cannot interrupt the cleanup in finally blocks that runs before the except clause is reached.",
+  "source": "#124 r1 worker",
+  "at": "2026-11-24T03:30:45Z"
+}
