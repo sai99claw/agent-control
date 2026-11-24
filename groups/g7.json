@@ -63,6 +63,16 @@
     {
       "at": "2026-11-24T04:24:31Z",
       "event": "regression started"
+    },
+    {
+      "at": "2026-11-24T04:31:43Z",
+      "event": "flaky: test_regression_fixer.T108Acceptance.test_a7_live_record_shows_stage_quick passed when run again",
+      "flaky": [
+        {
+          "id": "test_regression_fixer.T108Acceptance.test_a7_live_record_shows_stage_quick",
+          "message": "AssertionError: 'full' not found in ['quick'] : ['quick']"
+        }
+      ]
     }
   ],
   "base": "5564e9b5086bad099feabad440a6477d3edc18d7",
