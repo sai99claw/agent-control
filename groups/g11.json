@@ -1,7 +1,7 @@
 {
   "id": "g11",
   "branch": "int/g11",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "134",
     "135",
@@ -99,6 +99,10 @@
     {
       "at": "2026-11-24T16:02:41Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-24T16:02:47Z",
+      "event": "landed (release failed)"
     }
   ],
   "base": "52bb7cd4cd8f0b1556e46c4fc2be3d72409b2ab5",
@@ -127,5 +131,8 @@
     }
   ],
   "fix_end_sha": "b6874a6c42de1cd553c93934ddf7d4eb14baffdf",
-  "verified_sha": "52386d56cb9f07c574935be3d1b9b730da8541ef"
+  "verified_sha": "52386d56cb9f07c574935be3d1b9b730da8541ef",
+  "landed_sha": "52386d56cb9f07c574935be3d1b9b730da8541ef",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g11.log"
 }

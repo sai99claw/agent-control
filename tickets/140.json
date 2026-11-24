@@ -17,7 +17,7 @@
   "vision": "目的與成功指標: 每張票需要我介入幾次 (down): without it every `actl new` erases the group order the main session set with `actl dag after`, and the user has to notice and set it again (inferred).",
   "removes": "the silent loss of dag.json's top-level keys at every `actl new` (first_ticket_id is already gone from the live pool; group_after edges would vanish the same way); no gate or step is added.",
   "id": "140",
-  "state": "merged",
+  "state": "landed",
   "round": 1,
   "created": "2026-11-24T14:46:32Z",
   "request": "# `actl dag` can change the order of groups (docs/DECISIONS.md D-099; follow-up of GitHub issue #16)\n\nThe user's ruling (2026-11-24, verbatim in D-099): 「Ok Dag 也要允許群組順序改動」. Read D-096, D-098 and D-099 first, and the `actl dag` code from #125 (devloop/dag_edit.py, devloop/core/dagedit.py) and #122 (devloop/core/chain.py). Tests go in tests_devloop/test_dag_edit.py and tests_devloop/test_chain.py using loop_harness.py; each case runs in seconds.\n\nWhy: in T (2026-11-24) groups g63, g70 and g78 had all their tickets merged into their int branches, so `actl dag dep` and `actl dag move` refused them (frozen, D-089), and the main session could not put them after the group of #320 as the owner wanted. The chain order comes only from ticket dependencies and creation order, so there was no way to say \"this group after that one\".\n\nWanted:\n1. A group-order edge kept in dag.json (a new field, e.g. `group_after: {\"g63\": [\"g88\"]}`), written only through the pool's validated write. core/chain.py builds the group graph from ticket dependencies plus these edges; the chain is a topological order of that graph with today's tie-break (created, then id).\n2. `actl dag after gA --add gB --reason \"...\"` puts group A after group B; `actl dag after gA --drop gB --reason \"...\"` removes an edge added this way (ticket dependencies are not touched). `--by` as the other `actl dag` commands (default main-session). The last stdout line is the chain after the change, like the other dag commands.\n3. Refused with one line, nothing written: A or B does not exist; A == B; A has started or finished its regression (a regression job running, or state verified, landed or cancelled); B is landed or cancelled (adding is pointless; dropping an existing edge to a landed B is allowed); the edge makes a cycle with the ticket dependencies or other edges; `--drop` of an edge that is not there. A group whose tickets are merged (state pr, or open with merged members) can be reordered: that is the point.\n4. Each change writes an event on both groups (who, why). When a group is moved behind another, nothing else changes now: when the earlier group lands, follow_main brings main into the later group's branch as today, and its regression runs after that (D-098).\n5. Edges to a group that lands or is cancelled stay in dag.json as history but no longer constrain the order. Pool validation refuses a dag.json whose group edges make a cycle.\n6. The board's DAG view and the idle/chain pages show the order as computed (no board action to change it, D-096). Document `actl dag after` in devloop/README.md next to `actl dag dep/move`, and add one line to CLAUDE.md 「怎麼做事」 after the `actl dag move` line: 「把整組排到另一組後面是 `actl dag after gA --add gB --reason \"…\"`(票已合入的組也可以)」.\n- removes: the main session's inability to set the order of groups whose tickets are merged.\n- Out of scope: the board offering this action; reordering a group that has started its regression.\n",
@@ -48,6 +48,11 @@
       "at": "2026-11-24T14:56:20Z",
       "event": "merged",
       "target": "int/g11"
+    },
+    {
+      "at": "2026-11-24T16:02:47Z",
+      "event": "landed",
+      "group": "g11"
     }
   ],
   "cost": [
@@ -93,5 +98,16 @@
   ],
   "target": "int/g11",
   "run": null,
-  "claimed_at": "2026-11-24T14:55:44Z"
+  "claimed_at": "2026-11-24T14:55:44Z",
+  "landed_sha": "52386d56cb9f07c574935be3d1b9b730da8541ef",
+  "cost_total": {
+    "input_tokens": 50,
+    "output_tokens": 27562,
+    "cache_read_tokens": 2376981,
+    "cache_write_tokens": 76067,
+    "usd": 1.4845978666666666,
+    "seconds": 266.06666666666666,
+    "runs": 2,
+    "unknown_runs": 0
+  }
 }
