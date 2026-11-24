@@ -1,7 +1,7 @@
 {
   "id": "g10",
   "branch": "int/g10",
-  "state": "pr",
+  "state": "verified",
   "members": [
     "130",
     "131",
@@ -31,8 +31,13 @@
     {
       "at": "2026-11-24T14:22:12Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-24T14:22:15Z",
+      "event": "regression green"
     }
   ],
   "base": "52bb7cd4cd8f0b1556e46c4fc2be3d72409b2ab5",
-  "last_regression": "green"
+  "last_regression": "green",
+  "verified_sha": "15a3be2c60a4fd85f1a1614d8c853ec56facd948"
 }
