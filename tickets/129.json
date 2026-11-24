@@ -22,7 +22,7 @@
   "vision": "docs/VISION.md 目的與成功指標, metric 2 (一次就過測試的比例) and metric 1 (每張落地票的 token 與時間). Today every worker's base command is run_tests.py over tests.unittest.base, which includes test_testiface; that run exits 1 with one ImportError row (measured 2026-11-24: run_tests.py test_testiface test_actl -> 2 ImportError rows, rc 1), so no worker round's base run is ever green on the first try and each worker spends tokens deciding the red is not its own (#108's and #128's openers both had to write that caveat into their tickets). After: the base set is green when the code is; one false red removed per worker round, on every ticket (the token saving per round is inferred, not measured).",
   "removes": "The dead test ids in board/config.json: test_testiface in tests.unittest.base and in 5 map rows, test_actl in the bin/actl row, and the scripts/session-hook.sh map row whose only id was test_actl. Adds one guard case (acceptance 5) that keeps dead ids from coming back.",
   "id": "129",
-  "state": "running",
+  "state": "merged",
   "round": 1,
   "created": "2026-11-24T13:01:29Z",
   "request": "# board/config.json lists a test module that no longer exists: test_testiface\n\nThe user asked for this (2026-11-24: 「先修掉他」). Found by #128's opener: board/config.json `tests.unittest` names `test_testiface` in `base` and in several `map` rows, but tests/test_testiface.py was deleted in c5024c7 (D-085, \"Make devloop agent-control's loop; remove the old loop\"). Every run that selects it gets one ImportError row that belongs to no ticket.\n\nWanted:\n- Remove every `test_testiface` id from board/config.json (base and map rows). Do not add a replacement id unless a module that exists today covers what the map row was for; say which in the notes.\n- Update what still names the module as if it existed: tests/test_adapter_unittest.py `test_several_files_are_deduped_in_order` expects \"test_testiface\" in the selected ids (its expectation follows the config); the comment at the top of tests/fixtures/project/scripts/ac-tests.sh says \"A's tests/test_testiface.py drives it\". Leave history (docs/HANDOFF.md, docs/design/*) as written.\n- Check whether any other id in the config's tests section names a module that does not exist in tests/ or tests_devloop/; fix those the same way and list them in the notes.\n- Consider a guard: a case (in the config's own test file, e.g. tests/test_project_config.py, or wherever config checks live) that fails when an id in tests.unittest names no module under the roots. Add it only if it is cheap and fits an existing test file.\n- removes: the dead test id(s) in board/config.json.\n",
@@ -47,6 +47,11 @@
       "at": "2026-11-24T13:01:50Z",
       "event": "round start",
       "round": 1
+    },
+    {
+      "at": "2026-11-24T13:02:21Z",
+      "event": "merged",
+      "target": "int/g9"
     }
   ],
   "cost": [
@@ -69,15 +74,27 @@
       "split_over": [
         "129"
       ]
+    },
+    {
+      "role": "worker",
+      "model": "sonnet",
+      "effort": "medium",
+      "command": "claude",
+      "round": 1,
+      "seconds": 27.5,
+      "at": "2026-11-24T13:02:20Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/129/r1-worker",
+      "input_tokens": 10,
+      "output_tokens": 2397,
+      "cache_read_tokens": 205819,
+      "cache_write_tokens": 53729,
+      "usd": 0.2594879,
+      "session_id": "83c626eb-2cc5-4de9-9aab-7868d6ecec49"
     }
   ],
   "group": "g9",
   "target": "int/g9",
-  "run": {
-    "pid": 1692,
-    "host": "vm",
-    "boot": "43b18e73-1e98-45df-8fb9-9240fd8959fa",
-    "started": "2026-11-24T13:01:47Z"
-  },
+  "run": null,
   "claimed_at": "2026-11-24T13:01:45Z"
 }
