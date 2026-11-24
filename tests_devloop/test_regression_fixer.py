@@ -215,28 +215,28 @@ class T108Acceptance(LoopCase):
         self.assertLess(st.index("quick"), st.index("full"), st)
 
     def test_a7_live_record_shows_stage_quick(self):
-        self.declare_quick("sh -c 'sleep 4; %s quick'" % TESTS)
-        git(self.proj, "branch", "int/g1", "main")
         live = os.path.join(self.tmp, "wt", "runs", "live", "regression-int-g1.json")
-        proc = subprocess.Popen(["python3", os.path.join(LOOP, "regression.py"), "--branch", "int/g1",
-                                 "--out", self.out], cwd=self.proj, env=self.env,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: proc.poll() is None and proc.terminate())
-        seen = []
-        end = time.time() + 20
-        while time.time() < end and proc.poll() is None:
-            try:
-                with open(live) as fh:
-                    stage = json.load(fh).get("stage")
-            except (OSError, ValueError):
-                stage = None
-            if stage and (not seen or seen[-1] != stage):
-                seen.append(stage)
-            time.sleep(0.2)
-        rc = proc.wait(30)
-        self.assertIn("quick", seen, seen)
-        self.assertIn("full", seen[seen.index("quick"):], seen)
-        self.assertEqual(rc, 0)
+        snap = {s: os.path.join(self.tmp, "live-at-%s.json" % s) for s in ("quick", "full")}
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        # regression.py writes the stage into the live record before it starts that stage's command and
+        # waits for it (devloop/regression.py:136-145), so what the command copies is the record during that stage.
+        for stage in ("quick", "full"):
+            cfg["tests"][stage] = "sh -c 'cp %s %s; %s %s'" % (live, snap[stage], TESTS, stage)
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "tests.quick and tests.full copy the live record")
+        res, r = self.regression()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        for stage in ("quick", "full"):
+            self.assertTrue(os.path.exists(snap[stage]), "no live record copied during stage " + stage)
+        seen = {}
+        for stage in ("quick", "full"):
+            with open(snap[stage]) as fh:
+                seen[stage] = json.load(fh).get("stage")
+        self.assertEqual(seen, {"quick": "quick", "full": "full"})
 
     def test_a8_controller_fix_round_and_decision_carry_the_quick_red(self):
         self.declare_quick()
