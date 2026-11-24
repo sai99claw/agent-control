@@ -1,7 +1,7 @@
 {
   "id": "g11",
   "branch": "int/g11",
-  "state": "pr",
+  "state": "fixing",
   "members": [
     "134",
     "135",
@@ -12,7 +12,7 @@
     "140",
     "141"
   ],
-  "fix_round": 0,
+  "fix_round": 1,
   "job": null,
   "created": "2026-11-24T14:06:01Z",
   "history": [
@@ -67,9 +67,14 @@
     {
       "at": "2026-11-24T15:10:16Z",
       "event": "regression red"
+    },
+    {
+      "at": "2026-11-24T15:10:18Z",
+      "event": "fix round 1"
     }
   ],
   "base": "52bb7cd4cd8f0b1556e46c4fc2be3d72409b2ab5",
   "main_tried": "22af64f016c0fe02b91a995043f92f2f891af6d3",
-  "last_regression": "4 failing:\n- test_board_dag.DagTabUnit.test_dag_svg_draws_wait_lines_marks_and_lane_lines AttributeError \n- test_board_dag.DagTabUnit.test_lanes_in_group_number_order_ungrouped_last AttributeError \n- test_board_dag.DagTabUnit.test_node_live_lines_grow_the_node AttributeError \n- test_board_dag.DagTabUnit.test_svg_escapes_titles AttributeError "
+  "last_regression": "4 failing:\n- test_board_dag.DagTabUnit.test_dag_svg_draws_wait_lines_marks_and_lane_lines AttributeError \n- test_board_dag.DagTabUnit.test_lanes_in_group_number_order_ungrouped_last AttributeError \n- test_board_dag.DagTabUnit.test_node_live_lines_grow_the_node AttributeError \n- test_board_dag.DagTabUnit.test_svg_escapes_titles AttributeError ",
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g11/result-1795532533.json"
 }
