@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "creator",
-  "text": "When a request describes an ordering by its effect ('the dependency moves the other group ahead'), choose the algorithm whose result matches that wording (prerequisites pulled ahead, depth-first) over a generic topological sort, and pin it with fixtures whose expected lists differ between the candidates.",
-  "source": "request (opener)",
-  "at": "2026-11-24T03:00:13Z"
-}

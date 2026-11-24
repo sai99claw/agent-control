@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "creator",
-  "text": "When acceptance says a refused change leaves a ticket 'unchanged', name what the comparison covers (fields, state, dag entry) and which run records (history, cost rows) stay, so the verifier does not compare the whole row.",
-  "source": "#127 revise (opener)",
-  "at": "2026-11-24T03:50:38Z"
-}
