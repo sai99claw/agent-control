@@ -1,7 +1,7 @@
 {
   "id": "g9",
   "branch": "int/g9",
-  "state": "pr",
+  "state": "verified",
   "members": [
     "129"
   ],
@@ -28,8 +28,13 @@
     {
       "at": "2026-11-24T13:10:52Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-24T13:10:55Z",
+      "event": "regression green"
     }
   ],
   "base": "b5564f9614719dd695b81d3be948d30194091969",
-  "last_regression": "green"
+  "last_regression": "green",
+  "verified_sha": "d109fb97c099b98d1c8734f5036eae2babfc0102"
 }
