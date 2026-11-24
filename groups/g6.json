@@ -1,7 +1,7 @@
 {
   "id": "g6",
   "branch": "int/g6",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "121",
     "123",
@@ -43,10 +43,17 @@
     {
       "at": "2026-11-24T03:51:38Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-24T03:51:43Z",
+      "event": "landed (release failed)"
     }
   ],
   "base": "5564e9b5086bad099feabad440a6477d3edc18d7",
   "main_tried": "1891a258210268f393a9d70106c4b6daad9d7906",
   "last_regression": "green",
-  "verified_sha": "4d3f47505f8b6ae93cd17cef67cdc700873c1175"
+  "verified_sha": "4d3f47505f8b6ae93cd17cef67cdc700873c1175",
+  "landed_sha": "4d3f47505f8b6ae93cd17cef67cdc700873c1175",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g6.log"
 }
