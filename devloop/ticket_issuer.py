@@ -51,7 +51,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, inflight, memory, osx, pages, slots, testrun, ticketlock, worktrees  # noqa: E402
+from core import agents, chain, inflight, memory, osx, pages, slots, testrun, ticketlock, worktrees  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -721,8 +721,13 @@ class Issuer:
             event(t, "stuck", reason=reason)
         self.save(mutate, "stuck (%s)" % reason)
         if page:   # not when the worker's revise escalated in this round: that page is the page
-            self.pool.report("env" if reason == "env" else "decision", self.id,
-                             "#%s is stuck (%s): %s" % (self.id, reason, text), **self.stuck_ask(reason))
+            page_text = "#%s is stuck (%s): %s" % (self.id, reason, text)
+            snap = self.pool.snapshot()
+            gid = (snap.ticket(self.id) or {}).get("group")
+            if gid in snap.groups and snap.groups[gid].get("state") == "open" and chain.stuck_holds(snap, self.id, gid):
+                page_text += "\n%s waits for this decision; groups after it in the chain: %s" % (
+                    gid, ", ".join(chain.behind(snap, gid)) or "none")
+            self.pool.report("env" if reason == "env" else "decision", self.id, page_text, **self.stuck_ask(reason))
 
     def stuck_ask(self, reason):
         i = self.id

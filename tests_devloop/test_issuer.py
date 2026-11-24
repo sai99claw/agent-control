@@ -298,6 +298,63 @@ class PageSetsOfIssuerAndWriters(LoopCase):
         self.assertEqual(pages.problems("request", row), [])
 
 
+class T136Acceptance(LoopCase):
+    """#136 (issue #16, D-097): the stuck page of a ticket its open group waits for names that group
+    and the groups after it in the chain."""
+
+    def setUp(self):
+        super().setUp()
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(k, None)
+
+    def page_lines(self, unacked):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rows = [r for r in self.snap().inbox.values()
+                if r.get("kind") == "decision" and str(r.get("ref")) == "1"
+                and (not unacked or not r.get("acked"))]
+        self.assertEqual(len(rows), 1, "decision pages about #1: %r" % rows)
+        return [ln.strip() for ln in str(rows[0].get("text", "")).splitlines()]
+
+    def test_1_a_dependent_ticket_names_the_group_and_the_next_one(self):
+        self.add(1)
+        self.add(2, deps=[1])
+        self.plan(worker={"1": ["blocked"]})
+        lines = self.page_lines(unacked=True)
+        self.assertIn("g1 waits for this decision; groups after it in the chain: g2", lines)
+
+    def test_2_a_held_last_group_names_none_after(self):
+        import ticket_issuer
+        from core.config import Config
+        self.add(1, state="running", target="int/g1", group="g1")
+        self.add(2, group="g1")
+
+        def change(tx):
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": "open", "members": ["1", "2"],
+                          "fix_round": 0, "job": None, "created": osx.now(), "history": []})
+        self.pool.update(change, "test: group g1")
+        snap = self.snap()
+        self.assertEqual(sorted(snap.groups), ["g1"])
+        self.assertEqual(snap.ticket("2")["state"], "ready")
+
+        calls = []
+        real = self.pool
+
+        class StandInPool:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def report(self, kind, ref, text, **kw):
+                calls.append((kind, str(ref), text))
+
+        issuer = ticket_issuer.Issuer(Config(self.proj), StandInPool(), "1", "int/g1")
+        issuer.stuck("decision", "need the user")
+        self.assertEqual(self.snap().ticket("1")["state"], "stuck")
+        self.assertEqual([c[:2] for c in calls], [("decision", "1")], calls)
+        lines = [ln.strip() for ln in calls[0][2].splitlines()]
+        self.assertIn("g1 waits for this decision; groups after it in the chain: none", lines)
+
+
 class Timeout(LoopCase):
     loop_extra = {"issuer_timeout_seconds": 4}
 
@@ -308,6 +365,41 @@ class Timeout(LoopCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         t = self.snap().ticket("1")
         self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "timeout"))
+
+
+class StuckPageGroupLine(LoopCase):
+    """#136 (the implementer's): Issuer.stuck() adds the D-097 'group waits' line to its page only when the ticket holds its open group."""
+
+    group = __import__("test_groups").GroupFollowUnits.group
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def page_text(self):
+        import ticket_issuer
+        me = mock.Mock(id="1", pool=mock.Mock(snapshot=self.snap), stuck_ask=lambda reason: {})
+        me.pool.report = mock.Mock()
+        ticket_issuer.Issuer.stuck(me, "decision", "need the user")
+        return me.pool.report.call_args[0][2]
+
+    def test_no_line_when_the_ticket_does_not_hold_its_group(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="merged", group="g1")
+        self.group("g1", ["1", "2"])
+        self.assertEqual(self.page_text(), "#1 is stuck (decision): need the user")
+
+    def test_line_names_the_group_when_an_unfinished_member_is_beside_it(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="ready", group="g1")
+        self.group("g1", ["1", "2"])
+        self.assertIn("g1 waits for this decision; groups after it in the chain: none", self.page_text())
 
 
 class Revise(LoopCase):
