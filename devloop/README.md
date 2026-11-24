@@ -33,7 +33,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + quick, if 
 | `python3 devloop/tickets.py init` | once per project: create the pool |
 | `python3 devloop/tickets.py lessons --layer L --name N --file F` | queue every bullet line of F as a lesson for that memory file (a project's own older memory) |
 | `python3 devloop/ticket_creator.py --request "..."` | the user wants something; `--revise N --from user --decision D [--page P] [--by NAME]` is the user's answer (`--from main` is the main session answering for the user, D-094: same `--decision` effects, `by` defaults to `main-session`; `--decision` anywhere else is refused with exit 2), recorded first as a 'user answer' event (decision, text, by, page) and refused for a running ticket |
-| `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching); a run that ends idle with tickets or groups left undone writes one idle page (ref `controller`, the same lines on stderr) saying what each waits for; after a group's own line, each group that waits on an earlier one gets `<gid> waits for <gM> to land (place <k> in the chain)` |
+| `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching); a run that ends idle with tickets or groups left undone writes one idle page (ref `controller`, the same lines on stderr) saying what each waits for; an open group held by stuck members gets `<gid> waits for the decision on #<N>[, #<M>]` (D-097); after a group's own line, each group that waits on an earlier one gets `<gid> waits for <gM> to land (place <k> in the chain)` |
 | `python3 devloop/tickets.py inbox` / `ack P [--by NAME]` | pages: created, landed, decision, env, cancelled, idle; `--by` sets acked_by and, for a page whose ref is a ticket or group, writes a 'page acknowledged' event on it (`ack --all --by NAME` only sets acked_by); a page with options also prints its question, each option with the command it runs, and the recommendation |
 | `python3 devloop/tickets.py wait [--timeout S] [--kind K,...]` | block until a page arrives that was not in the inbox at its start (new = not there then, not acked, kind listed in `--kind`), print it as inbox does, exit 0; exit 1 after `--timeout S` with no new page; exit 2 for a bad kind, a timeout <= 0 or no pool |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
@@ -112,9 +112,15 @@ in the same pool write and under the refusals of `actl dag` except 'mentions #M'
 while that group is open, once each dependency is landed or merged in the same group and, with a
 landed one, the group's branch contains main or does not exist yet; the controller makes the branch
 from main's current sha right before the first start and records that sha as the group's `base`.
-An open group with no running member and no ready member that can still start goes on: its ready
-members leave it, then it becomes pr (a merged member remains), stuck (other members remain) or
-cancelled (none remains); a group with no members left is cancelled. Existing pools: a ready
+A stuck member holds its open group (D-097): while a ticket not cancelled depends on it directly,
+or another member is neither merged nor cancelled, the group waits for the decision on it - it is
+not closed, no member is moved out, and a ready ticket that depends on it can still start once it
+is decided (it counts like a ready dependency in its own or an earlier group in the chain). An open
+group with no running member, no ready member that can still start and no stuck member that holds
+it goes on: its stuck members leave it with no group (event `member #N left: stuck, nothing depends
+on it and no other member of gK is unfinished (D-097)`), its ready members leave it, then it
+becomes pr (a merged member remains), stuck (other members remain) or cancelled (none remains); a
+group with no members left is cancelled. Existing pools: a ready
 ticket written before this change has no group and gets a group of its own at the end of the chain,
 one group each, in ticket order, once its dependencies allow (each is landed, running, merged, or
 ready in an open group; first event `opened for #N, which had no open group`), so nothing is lost;

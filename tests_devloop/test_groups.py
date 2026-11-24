@@ -224,7 +224,7 @@ class GroupFollowUnits(LoopCase):
         snap = self.snap()
         got = {i: c.can_still_start(snap, i, snap.groups[snap.tickets[i]["group"]])
                for i in ("11", "12", "13", "14", "15", "16")}
-        self.assertEqual(got, {"11": True, "12": True, "13": True, "14": False, "15": False, "16": False})
+        self.assertEqual(got, {"11": True, "12": True, "13": True, "14": True, "15": False, "16": False})
 
     def test_adoption_counts_a_group_made_earlier_in_the_same_write(self):
         self.add(1)
@@ -316,6 +316,67 @@ class GroupFollowUnits(LoopCase):
                          or tx.put_group(tx.data.groups["g1"]), "test: #3 joins")
         c.dispatch = lambda snap: 0
         self.assertTrue(c.tick())                      # #3 has no dependency: it can start now
+
+
+class StuckHoldsUnits(LoopCase):
+    """#134 (the implementer's): core.chain.stuck_holds (D-097) and the idle line it gives."""
+
+    group = GroupFollowUnits.group
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def holds(self, ident="1", gid="g1"):
+        from core import chain
+        return chain.stuck_holds(self.snap(), ident, gid)
+
+    def test_a_stuck_ticket_alone_does_not_hold(self):
+        self.add(1, state="stuck", group="g1")
+        self.group("g1", ["1"])
+        self.assertFalse(self.holds())
+
+    def test_beside_only_cancelled_or_merged_members_it_does_not_hold(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="cancelled", group="g1")
+        self.group("g1", ["1", "2"])
+        self.assertFalse(self.holds())
+        self.add(3, state="merged", group="g1")
+        self.pool.update(lambda tx: tx.data.groups["g1"]["members"].append("3")
+                         or tx.put_group(tx.data.groups["g1"]), "test: #3 joins")
+        self.assertFalse(self.holds())
+
+    def test_an_unfinished_member_beside_it_holds(self):
+        for state in ("ready", "running", "stuck"):
+            with self.subTest(state=state):
+                self.add(1, state="stuck", group="g1")
+                self.add(2, state=state, group="g1")
+                self.group("g1", ["1", "2"])
+                self.assertTrue(self.holds())
+
+    def test_a_direct_dependent_holds_unless_it_is_cancelled(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="merged", group="g1")
+        self.group("g1", ["1", "2"])
+        self.add(3, deps=[1], group="g2")
+        self.assertTrue(self.holds())
+        self.add(3, deps=[1], state="cancelled", group="g2")
+        self.assertFalse(self.holds())
+        self.add(3, deps=[2], group="g2")             # depends on another member only
+        self.assertFalse(self.holds())
+
+    def test_the_idle_line_names_every_stuck_member_that_holds(self):
+        import ticket_controller
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="stuck", group="g1")
+        self.group("g1", ["1", "2"])
+        self.assertIn("g1 waits for the decision on #1, #2", ticket_controller.idle_lines(self.snap()))
 
 
 class T104Acceptance(LoopCase):

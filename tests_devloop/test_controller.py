@@ -1162,7 +1162,8 @@ class T63Acceptance(LoopCase):
         expected = ["#1 stuck (decision): need the user",
                     "#2 ready, waits for: #1 stuck",
                     "#3 ready, waits for: #4 cancelled",
-                    "g1 stuck: no ticket of the group got merged"]
+                    "g1 waits for the decision on #1",                    # #134 (D-097)
+                    "g2 waits for g1 to land (place 2 in the chain)"]
         # acceptance 2: those whole lines, in that order, optionally after one header line
         lines = pages[0]["text"].splitlines()
         if lines and not (lines[0].startswith("#") or lines[0].startswith("g")):

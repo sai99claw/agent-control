@@ -148,7 +148,7 @@ class T118Acceptance(LoopCase):
 
     # ------------------------------------------------------------ acceptance 6
 
-    def test_a_member_that_cannot_start_leaves_and_the_group_goes_on(self):
+    def test_a_member_waiting_on_a_stuck_one_stays_and_the_group_stays_open(self):
         self.add(1, group="g1")
         self.add(2, deps=[1], group="g1")
         self.groups(("g1", ["1", "2"]))
@@ -158,12 +158,11 @@ class T118Acceptance(LoopCase):
         self.assertEqual(self.state(1), "stuck")
         t2 = snap.ticket("2")
         self.assertEqual(t2.get("state"), "ready")
-        self.assertIsNone(t2.get("group"), t2)
-        self.assertIsNone(t2.get("target"), t2)
+        self.assertEqual(t2.get("group"), "g1", t2)          # #134 (D-097): #2 waits in g1 for the decision on #1
         g1 = snap.groups["g1"]
-        self.assertEqual(g1.get("state"), "stuck")
-        self.assertEqual(g1.get("members"), ["1"])
-        self.assertIn("member #2 left: it cannot start in g1", events(g1))
+        self.assertEqual(g1.get("state"), "open")
+        self.assertEqual(g1.get("members"), ["1", "2"])
+        self.assertNotIn("member #2 left: it cannot start in g1", events(g1))
         self.assertEqual(set(snap.groups), {"g1"})
 
     # ------------------------------------------------------------ acceptance 8

@@ -5,9 +5,11 @@ Each tick, in this order:
 
   1. finish jobs  - an issuer, regression or fixer that ended; read what it left in the pool
   2. groups       - main is merged into every waiting integration branch first (#72: clean ->
-                    no state change; a conflict -> the fixer once the group is due for its
                     regression); an open group whose tickets are all merged or stuck becomes a
-                    PR; groups form one chain (core/chain.py, ordered by the DAG): a PR
+                    PR; a stuck member that a ticket depends on directly, or that has a member
+                    beside it neither merged nor cancelled, holds its open group until it is
+                    decided, any other stuck member leaves with no group first (D-097); groups
+                    form one chain (core/chain.py, ordered by the DAG): a PR
                     gets a regression (or a fix round) only when
                     every earlier group is landed or cancelled - a stuck group with no merged ticket holds no one; red -> auto_fixer (at most devloop.max_rounds);
                     green -> main fast-forwards to the integration branch (a main that moved
@@ -396,7 +398,7 @@ class Controller:
                 t["group"] = t["target"] = None
                 tx.put_ticket(t)
                 g["members"] = [m for m in g["members"] if m != i]
-                event(g, "member #%s left: stuck, nothing depends on it and the rest of %s is merged (D-097)"
+                event(g, "member #%s left: stuck, nothing depends on it and no other member of %s is unfinished (D-097)"
                       % (i, gid))
             for i in list(g.get("members") or []):
                 t = tx.data.tickets.get(i) or {}
