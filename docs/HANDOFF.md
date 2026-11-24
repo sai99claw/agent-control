@@ -380,3 +380,15 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 - `board/config.json` 的 tests 列了已在 c5024c7(D-085)刪掉的 `test_testiface` 與 `test_actl`。使用者「先修掉他」,#129(g9,main = e7dcd4b)拿掉它們，
   `bin/actl` 那一列改列現在真的會跑 actl 的測試模組，並在 test_adapter_unittest 加了一個檢查：設定列的測試模組不存在就紅。g9 發版頁已 ack。
 - 給 T 的說明(scratchpad 的 T-update-2026-11-21.md)已補上 #8–#13、`actl dag` 與 #129,已交給使用者。
+
+## 2026-11-24(續)issue #14–#16、D-097/098/099
+
+- T 開了 #14(額度換指令時 worktree 不見)、#15(重啟後同一張票起了第二個 issuer)、#16(卡住的票放回 ready 後自成一組，依賴的票散成 7 組，順序被打亂)。
+- 使用者對 #16 裁示 D-097:卡住的票只有在沒有票直接依賴它、且組裡其他票都已合入時才離組(變成不屬於任何組，等主線與使用者決定);其他情況組等它。
+  接著定了大原則 D-098(新的實作從最新驗證過的點往後寫),並同意 D-099(`actl dag after` 改組的順序，票已合入的組也可以)。
+- g10(#130–#133,main = e8434a0):每張票一個 issuer 鎖;票不歸自己的 issuer 什麼都不寫、退出;worktree 不見就從分支重建;起不來時寫「working directory does not exist」。
+  開題者實測：只有 controller 把活著的 issuer 判成死的時才會出現雙 issuer(測試裡改寫 stamp 的 boot 造成);T 的 Mac 上為什麼誤判沒查到，鎖讓它不再重要。
+- g11(#134–#141,main = 52386d5):D-097、D-098(每輪開工前票分支只帶自己的 commit 重接到組分支頂端，衝突就結束這輪、不算輪數)、D-099(dag.json 的 `group_after`)。
+  CLAUDE.md「怎麼做事」已加 `actl dag after`。
+- #14、#15、#16 已留言並關閉;#3 還開著。g10、g11 發版頁(推 tag 403)已 ack。
+- T 要做的：拉 A、重啟;用 `actl dag after` 把 g63/g70/g78 排到 #320 那組後面(還沒開始 regression 才行);之後卡住的票不再自動另開組。
