@@ -310,6 +310,41 @@ class Timeout(LoopCase):
         self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "timeout"))
 
 
+class StuckPageGroupLine(LoopCase):
+    """#136 (the implementer's): Issuer.stuck() adds the D-097 'group waits' line to its page only when the ticket holds its open group."""
+
+    group = __import__("test_groups").GroupFollowUnits.group
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def page_text(self):
+        import ticket_issuer
+        me = mock.Mock(id="1", pool=mock.Mock(snapshot=self.snap), stuck_ask=lambda reason: {})
+        me.pool.report = mock.Mock()
+        ticket_issuer.Issuer.stuck(me, "decision", "need the user")
+        return me.pool.report.call_args[0][2]
+
+    def test_no_line_when_the_ticket_does_not_hold_its_group(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="merged", group="g1")
+        self.group("g1", ["1", "2"])
+        self.assertEqual(self.page_text(), "#1 is stuck (decision): need the user")
+
+    def test_line_names_the_group_when_an_unfinished_member_is_beside_it(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="ready", group="g1")
+        self.group("g1", ["1", "2"])
+        self.assertIn("g1 waits for this decision; groups after it in the chain: none", self.page_text())
+
+
 class Revise(LoopCase):
     def test_a_worker_can_have_the_ticket_revised_and_cases_rewritten(self):
         self.add(1)
