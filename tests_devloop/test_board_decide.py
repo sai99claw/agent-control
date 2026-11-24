@@ -1417,8 +1417,12 @@ class T57Acceptance(LoopCase):
         self.serve("key")
         folder, job = self.press("g1", "", "group-ready", "go again")
         self.assertEqual(self.wait_rc(folder), "0")
+        self.assertEqual(self.snap().inbox["pg1"].get("acked_by"), "tickets ready")
+        self.pool.update(lambda tx: tx.write("inbox/pg1b.json", {
+            "kind": "decision", "ref": "g1", "text": "page pg1b", "at": osx.now(), "acked": False}),
+            "test: a later page of g1")
         cards = self.cards(self.get("?tab=decide"))
-        self.assertIn("g1", cards, "pg1 is unread: g1 still has a card")
+        self.assertIn("g1", cards, "pg1b is unread: g1 still has a card")
         self.assertEqual(cards["g1"]["last_act"], ["上次的動作:%s · %s · 完成" % (job["what"], self.by)])
         forms = cards["g1"]["forms"]
         self.assertEqual(len(forms), 1)
