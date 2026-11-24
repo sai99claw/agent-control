@@ -924,6 +924,180 @@ class MemberLeavesUnit(LoopCase):
         self.assertEqual(s.groups["g1"]["history"], [])
 
 
+class DagEditUnits(LoopCase):
+    """#125 (the implementer's): core/dagedit.py checks and writes, and the docs and test map
+    (acceptance 8 and 9)."""
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k)
+
+    def groups(self, layout):
+        """layout: {gid: [members]}; members are ready tickets of that open group."""
+        for gid, members in layout.items():
+            for ident in members:
+                self.add(ident, group=gid)
+
+        def change(tx):
+            for gid, members in layout.items():
+                tx.put_group({"id": gid, "branch": "int/" + gid, "state": "open", "members": list(members),
+                              "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z"})
+        self.pool.update(change, "test: groups")
+
+    def edit(self, n, why="r", **change):
+        from core import dagedit
+        out = []
+        head = git(self.pool_path, "rev-parse", "HEAD")
+        self.pool.update(lambda tx: out.append(dagedit.apply(tx, n, "me", why, **change)), "test: edit")
+        if out[-1]:
+            self.assertEqual(git(self.pool_path, "rev-parse", "HEAD"), head)
+            self.assertEqual(git(self.pool_path, "status", "--porcelain"), "")
+        return out[-1]
+
+    def set_field(self, ident, **fields):
+        def change(tx):
+            t = tx.ticket(ident)
+            t.update(fields)
+            tx.put_ticket(t)
+        self.pool.update(change, "test: set")
+
+    def test_add_and_drop_write_dag_and_events(self):
+        from core import chain
+        self.groups({"g1": ["1"], "g2": ["2"]})
+        self.assertIsNone(self.edit("1", add="2"))
+        s = self.snap()
+        self.assertEqual(s.dag["1"]["depends_on"], ["2"])
+        self.assertEqual(chain.order(s), ["g2", "g1"])
+        last = s.tickets["1"]["history"][-1]
+        self.assertEqual((last["event"], last["by"], last["why"]), ("dag: depends on #2", "me", "r"))
+        for gid in ("g1", "g2"):
+            self.assertEqual(s.groups[gid]["history"][-1]["event"], "dag: #1 depends on #2")
+        self.assertIsNone(self.edit("1", drop="2"))
+        s = self.snap()
+        self.assertEqual(s.dag["1"]["depends_on"], [])
+        self.assertEqual(s.groups["g2"]["history"][-1]["event"], "dag: #1 no longer depends on #2")
+
+    def test_same_group_gets_one_event(self):
+        self.groups({"g1": ["1", "2"]})
+        self.assertIsNone(self.edit("1", add="2"))
+        events = [h["event"] for h in self.snap().groups["g1"].get("history") or []]
+        self.assertEqual(events, ["dag: #1 depends on #2"])
+
+    def test_move_to_existing_cancels_empty_old_group(self):
+        self.groups({"g1": ["1"], "g2": ["2"]})
+        self.assertIsNone(self.edit("1", to="g2"))
+        s = self.snap()
+        self.assertEqual(s.groups["g2"]["members"], ["2", "1"])
+        self.assertEqual(s.tickets["1"]["group"], "g2")
+        self.assertIsNone(s.tickets["1"]["target"])
+        self.assertEqual(s.groups["g1"]["state"], "cancelled")
+        self.assertEqual(s.groups["g1"]["members"], [])
+        self.assertEqual([h["event"] for h in s.groups["g1"]["history"]],
+                         ["dag: member #1 moved to g2", "cancelled: its last member #1 moved to g2"])
+        self.assertEqual(s.groups["g2"]["history"][-1]["event"], "dag: member #1 moved in from g1")
+        self.assertEqual(s.tickets["1"]["history"][-1]["event"], "dag: moved from g1 to g2")
+
+    def test_move_to_new_and_from_no_group(self):
+        self.groups({"g1": ["1", "3"], "g2": ["2"]})
+        self.add("4")
+        self.assertIsNone(self.edit("1", to="new"))
+        self.assertIsNone(self.edit("4", to="new"))
+        s = self.snap()
+        self.assertEqual(s.groups["g3"]["members"], ["1"])
+        first = s.groups["g3"]["history"][0]
+        self.assertEqual((first["event"], first["by"], first["why"]), ("dag: member #1 moved in from g1", "me", "r"))
+        self.assertEqual(s.groups["g1"]["members"], ["3"])
+        self.assertEqual(s.groups["g1"]["state"], "open")
+        self.assertEqual(s.groups["g4"]["history"][0]["event"], "dag: member #4 moved in from no group")
+        self.assertEqual(s.tickets["4"]["history"][-1]["event"], "dag: moved from no group to g4")
+
+    def test_refusals_in_order(self):
+        self.groups({"g1": ["1", "4"], "g2": ["2", "3"]})
+        self.add("5", state="cancelled")
+        self.add("6", state="running")
+        self.add("7", state="merged")
+        self.assertIn("--reason", self.edit("1", why=" ", add="9"))
+        self.assertIn("#9 does not exist", self.edit("9", add="2"))
+        self.assertIn("#6 is running", self.edit("6", add="2"))
+        bad = self.edit("7", add="2")
+        self.assertIn("#7", bad)
+        self.assertIn("(merged)", bad)
+        self.assertIn("#9 does not exist", self.edit("1", add="9"))
+        self.assertIn("cannot depend on itself", self.edit("1", add="1"))
+        self.assertIn("#5 is cancelled", self.edit("1", add="5"))
+        self.assertIn("does not depend on #2", self.edit("1", drop="2"))
+        self.assertIsNone(self.edit("1", add="2"))
+        self.assertIn("already depends on #2", self.edit("1", add="2"))
+        self.set_field("1", acceptance=["x", "waits for #2."])
+        bad = self.edit("1", drop="2")
+        self.assertIn("mentions #2", bad)
+        self.assertIn("`actl new --revise 1`", bad)
+        self.set_field("1", acceptance=["#22 only"])
+        self.assertIsNone(self.edit("1", drop="2"))
+        self.assertIn("group g9 does not exist", self.edit("1", to="g9"))
+        self.assertIn("already in g1", self.edit("1", to="g1"))
+
+        def stuck(tx):
+            tx.put_group({"id": "g8", "state": "stuck", "members": []})
+        self.pool.update(stuck, "test: g8")
+        self.assertIn("group g8 is stuck", self.edit("1", to="g8"))
+
+    def test_cycles_refused(self):
+        self.groups({"g1": ["1", "4"], "g2": ["2", "3"]})
+        self.assertIsNone(self.edit("3", add="1"))
+        self.assertEqual(self.edit("4", add="2"), "the group order would be a cycle: g1 -> g2 -> g1")
+        self.assertTrue(self.edit("1", add="3").startswith("cycle: "))
+
+    def test_move_that_makes_a_group_cycle_is_refused(self):
+        self.groups({"g1": ["1"], "g2": ["2"], "g3": ["3"]})
+        self.assertIsNone(self.edit("2", add="1"))   # g2 waits for g1
+        self.assertIsNone(self.edit("3", add="2"))   # g3 waits for g2
+        bad = self.edit("1", to="g3")                 # g3 would wait for g2, which waits for g3
+        self.assertTrue(bad.startswith("the group order would be a cycle: "), bad)
+
+    def test_script_and_actl(self):
+        self.groups({"g1": ["1"], "g2": ["2"]})
+        res = self.run_py("dag_edit.py", "dep", "1", "--add", "2")
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(res.stderr.strip().count("\n"), 0, res.stderr)
+        self.assertIn("--reason", res.stderr)
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "dag", "dep", "1", "--add", "2", "--reason", "r"],
+                             cwd=self.proj, env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(res.stdout.strip().splitlines()[-1], "chain: g2, g1")
+        self.assertEqual(self.snap().tickets["1"]["history"][-1]["by"], "main-session")
+
+    def test_item8_docs(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read()
+        rows = readme.split("## What the main session runs", 1)[1].split("\n## ", 1)[0].splitlines()
+        rerun = next(i for i, r in enumerate(rows) if r.startswith("| `python3 devloop/tickets.py rerun gN"))
+        self.assertTrue(rows[rerun + 1].startswith(
+            "| `actl dag dep N --add M` / `--drop M` / `actl dag move N --to gK|new`"), rows[rerun + 1])
+        self.assertTrue(rows[rerun + 2].startswith("| `python3 devloop/board.py serve"), rows[rerun + 2])
+        paras = readme.split("\n\n")
+        i = next(i for i, p in enumerate(paras) if p.startswith("Groups form one chain"))
+        self.assertIn("actl dag dep", paras[i + 1])
+        self.assertIn("D-096", paras[i + 1])
+        with open(os.path.join(HOME, "CLAUDE.md")) as fh:
+            lines = fh.read().splitlines()
+        self.assertEqual(sum("頁的種類" in l for l in lines), 1)
+        self.assertEqual(sum("不輪詢" in l for l in lines), 1)
+        text = "\n".join(lines).split("## 怎麼做事", 1)[1].split("\n## ", 1)[0]
+        self.assertIn('`actl dag dep Y --add X --reason "…"`', text)
+        self.assertIn('`actl dag move N --to gK|new --reason "…"`', text)
+        self.assertIn("D-096", text)
+
+    def test_item9_test_map(self):
+        with open(os.path.join(HOME, "board", "config.json")) as fh:
+            rows = json.load(fh)["tests"]["unittest"]["map"]
+        chained = [r for r in rows if "test_chain" in r["ids"]]
+        self.assertTrue(any(r["match"] == "devloop/*" for r in chained))
+        self.assertTrue(any(r["match"] == "tests_devloop/*" for r in chained))
+        for r in chained:
+            self.assertIn("test_dag_edit", r["ids"], r["match"])
+
 class ChainGateUnits(LoopCase):
     """#117 acceptance 2, 6, 7, 8 (the implementer's): what the controller starts for a group in
     pr or fixing while an earlier group holds the chain, and what tick() counts as work."""

@@ -43,6 +43,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + quick, if 
 | `python3 devloop/tickets.py release gN [--again] [--by NAME] [--page P]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page; `--by` is stored on the 'release re-run' event and `--page` acks that page in the same write (a refused re-run writes nothing) |
 | `python3 devloop/tickets.py cancel gN --why ... [--by NAME] [--page P]` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them (it names `--by`); `--page` acks that page in the same write |
 | `python3 devloop/tickets.py rerun gN [--why …] [--by NAME] [--page P]` | the environment of a paused group (regression env or unmeasured, or its fixer's worktree setup failed) is fixed: the paused mark is removed, an 'environment fixed: verify again' event is written and `--page` is acked, in one write; a `--forever` controller picks the group up at its next tick; without `--forever`, run the controller again. Refused (exit 2, nothing written) unless the group is pr or fixing without a job |
+| `actl dag dep N --add M` / `--drop M` / `actl dag move N --to gK|new` (`--reason R` required, `[--by NAME]`, default main-session) | the main session reorders a ready ticket (`devloop/dag_edit.py`, checks in `devloop/core/dagedit.py`): `dep` adds or drops one entry of N's `depends_on`, `move` puts N in another open group or a new one (an old group left empty is cancelled); one pool write with `dag:` events on the ticket and the groups involved; the last stdout line is `chain: ` and the group order after the change. Refused (exit 2, one stderr line, nothing written) as the paragraph after 'Groups form one chain' lists |
 | `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F [--query Q]`) |
 
 Agents run their tests with `python3 devloop/run_tests.py <ids>` (output stays in their run directory).
@@ -131,6 +132,16 @@ following main goes on while it waits, and landing a verified group is not gated
 with no merged ticket holds no one (it has nothing to verify or land); a stuck group with a merged
 ticket, or a paused one, holds every later group until it lands or is cancelled. A group that
 only waits does not keep a controller without `--forever` running: it ends with the idle page.
+
+Only the main session changes the DAG by hand, from the CLI, never on the board (D-096: the DAG is
+scheduling, not ticket content): `actl dag dep N --add M|--drop M --reason R` and `actl dag move N
+--to gK|new --reason R` (`devloop/dag_edit.py`, its checks in `devloop/core/dagedit.py`, run inside
+the one pool write on the data it reads). Each refuses with one line, exit 2 and nothing written:
+a blank `--reason`; N unknown or not ready (running, stuck, merged or landed tickets are frozen; a
+stuck one is readied first); M unknown, M == N, a dependency N already has, a cancelled M (N would
+wait forever), dropping one N does not have or one N's text mentions (`#M`: that is ticket content,
+`actl new --revise N`); a group that does not exist, is not open or already holds N; and a change
+that makes the ticket DAG or the group order a cycle.
 
 A fix round that leaves the branch redder is dropped (#74). auto_fixer records `fix_start_sha` (the
 branch head the fixer agent starts from, after its own clean merge of main) in the same pool write

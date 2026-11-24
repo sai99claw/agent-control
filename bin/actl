@@ -34,6 +34,7 @@ TABLE='actl [-C <project dir>] <command> [args…]
   run [--forever]                    devloop/ticket_controller.py (drives tickets to landed)
   tickets init|list|show|inbox|wait|ack|lessons|ready|cancel|rerun|release …
                                      devloop/tickets.py (the pool)
+  dag dep|move …                     devloop/dag_edit.py (the main session reorders a ready ticket: depends_on, group)
   board serve|html …                 devloop/board.py
   check                              board/config.json is usable by this A: prints "ok <project root>"
   doctor migrate init                scripts/project_config.py (board/config.json version, schema, rows)
@@ -82,7 +83,7 @@ case "$CMD" in
         echo "AC_ROOT=${_root:-(none)}"
         echo "AC_CODE_ROOT=${_code:-(none)}"
         exit 0 ;;
-    new|run|tickets|board|test|check|doctor|migrate|init) ;;
+    new|run|tickets|dag|board|test|check|doctor|migrate|init) ;;
     *)
         echo "actl: unknown command '$CMD'" >&2
         printf '%s\n' "$TABLE" >&2
@@ -113,6 +114,7 @@ case "$CMD" in
     new) exec python3 "$AC_HOME/devloop/ticket_creator.py" "$@" ;;
     run) exec python3 "$AC_HOME/devloop/ticket_controller.py" "$@" ;;
     tickets) exec python3 "$AC_HOME/devloop/tickets.py" "$@" ;;
+    dag) exec python3 "$AC_HOME/devloop/dag_edit.py" "$@" ;;
     board) exec python3 "$AC_HOME/devloop/board.py" "$@" ;;
     test) exec python3 "$AC/testiface.py" "$@" ;;
     doctor|migrate|init) exec python3 "$AC/project_config.py" "$CMD" "$AC_ROOT" "$@" ;;
