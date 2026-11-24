@@ -57,6 +57,12 @@
       "at": "2026-11-24T13:11:04Z",
       "event": "landed",
       "group": "g9"
+    },
+    {
+      "at": "2026-11-24T13:11:18Z",
+      "event": "page acknowledged",
+      "page": "20261124T130131Z-created-129",
+      "by": "main-session"
     }
   ],
   "cost": [

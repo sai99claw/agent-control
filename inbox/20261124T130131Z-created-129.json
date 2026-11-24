@@ -3,5 +3,7 @@
   "ref": "129",
   "text": "opened #129 board/config.json names only test modules that exist (drop test_testiface and test_actl)",
   "at": "2026-11-24T13:01:32Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-24T13:11:18Z"
 }
