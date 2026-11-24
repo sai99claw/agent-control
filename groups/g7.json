@@ -8,7 +8,16 @@
     "127"
   ],
   "fix_round": 1,
-  "job": null,
+  "job": {
+    "kind": "regression",
+    "stamp": {
+      "pid": 9467,
+      "host": "vm",
+      "boot": "5a7dfba0-49b8-4f1b-9b63-ab62db5b769f",
+      "started": "2026-11-24T04:24:30Z"
+    },
+    "out": "/home/user/agent-control-devloop/runs/regression/g7/result-1795494270.json"
+  },
   "created": "2026-11-24T03:00:16Z",
   "history": [
     {
@@ -50,6 +59,10 @@
     {
       "at": "2026-11-24T04:24:28Z",
       "event": "main moved to 9254bd94f6c7: merged it into int/g7"
+    },
+    {
+      "at": "2026-11-24T04:24:31Z",
+      "event": "regression started"
     }
   ],
   "base": "5564e9b5086bad099feabad440a6477d3edc18d7",
