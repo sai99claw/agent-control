@@ -1,7 +1,7 @@
 {
   "id": "g8",
   "branch": "int/g8",
-  "state": "open",
+  "state": "pr",
   "members": [
     "128"
   ],
@@ -16,6 +16,10 @@
     {
       "at": "2026-11-24T04:39:15Z",
       "event": "branch int/g8 made from main 2266d4ede7aa"
+    },
+    {
+      "at": "2026-11-24T04:40:18Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "base": "2266d4ede7aaebded308a9fb1f41b04defd29ba4"
