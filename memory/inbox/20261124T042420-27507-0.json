@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "Since #122 a group with no 'created' sorts before every stamped group; test fixtures that write a group raw next to controller-made groups must set 'created', or the chain order quietly flips.",
+  "source": "group g7 fix r1",
+  "at": "2026-11-24T04:24:19Z"
+}
