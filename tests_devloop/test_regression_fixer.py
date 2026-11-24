@@ -1306,6 +1306,152 @@ class T23Acceptance(LoopCase):
         self.assertEqual(self.pool_memory(self.WORKER_MD), before_md)
 
 
+class T124Acceptance(LoopCase):
+    """#124 (the test plan's RegressionStoppedAcceptance): a regression stopped by a signal records
+    'stopped by <SIGNAME> during <stage>' as an unmeasured result, and a regression that ended
+    without a result is named on the page by its fate (gone, signal or exit code) and its log's
+    last line. Expected texts come from the ticket, never from regression.py or the controller."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for name in ("AC_TEST_TIMEOUT", "AC_TEST_MODE", "AC_TEST_OUT", "AC_CODE_ROOT"):
+            self.env.pop(name, None)
+        self.wt = os.path.join(self.tmp, "wt")
+
+    # ------------------------------------------------------------ items 2, 3: regression.py stopped
+
+    def stop_during_full(self, sig):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["tests"]["full"] = "sleep 30; %s full" % TESTS
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "tests.full sleeps 30 s")
+        git(self.proj, "branch", "int/g1", "main")
+        out = os.path.join(self.tmp, "F.json")
+        live = os.path.join(self.wt, "runs", "live", "regression-int-g1.json")
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "regression.py"), "--branch", "int/g1",
+                                 "--out", out], cwd=self.proj, env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGKILL))
+        stage = None
+        end = time.time() + 60
+        while time.time() < end and proc.poll() is None:
+            try:
+                with open(live) as fh:
+                    stage = json.load(fh).get("stage")
+            except (OSError, ValueError):
+                stage = None
+            if stage == "full":
+                break
+            time.sleep(0.1)
+        if stage != "full":
+            self.fail("live record never said stage full (last %r, rc %r)" % (stage, proc.poll()))
+        proc.send_signal(sig)
+        try:
+            rc = proc.wait(20)
+        except subprocess.TimeoutExpired:
+            self.fail("regression.py still running 20 s after %s" % sig.name)
+        report = {}
+        if os.path.exists(out):
+            with open(out) as fh:
+                report = json.load(fh)
+        return rc, report, live
+
+    def assert_stopped(self, sig):
+        rc, report, live = self.stop_during_full(sig)
+        self.assertEqual(rc, 2, report)
+        self.assertEqual(report.get("status"), "unmeasured", report)
+        self.assertEqual(report.get("signal"), sig.name, report)
+        summary = report.get("summary")
+        self.assertIsInstance(summary, str, report)
+        self.assertTrue(summary.startswith("stopped by %s during full" % sig.name), summary)
+        self.assertIn("a controller restart leaves a running regression alone", summary)
+        self.assertEqual(report.get("failures"), [], report)
+        self.assertEqual(report.get("flaky"), [], report)
+        self.assertIn("at", report)
+        self.assertFalse(os.path.exists(live), "live record still there")
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "regression-int-g1")), "regression tree still there")
+
+    def test_2_sigterm_during_full_records_unmeasured_and_exits_2(self):
+        self.assert_stopped(signal.SIGTERM)
+
+    def test_3_sigint_during_full_records_unmeasured_and_exits_2(self):
+        self.assert_stopped(signal.SIGINT)
+
+    # ------------------------------------------------------------ items 5, 6: the controller's page
+
+    def fixture(self):
+        """Group g1 (state pr, merged #1, branch int/g1) whose regression job is gone without a
+        result; returns (job, log path, dead pid)."""
+        git(self.proj, "branch", "int/g1", "main")
+        base = git(self.proj, "rev-parse", "main")
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        stamp = {"pid": dead.pid, "host": osx.host(), "boot": osx.boot_id(), "started": osx.now()}
+        job = {"kind": "regression", "stamp": stamp, "out": os.path.join(self.tmp, "missing.json")}
+        self.add(1, state="merged", group="g1")
+        self.pool.update(lambda tx: tx.put_group({
+            "id": "g1", "branch": "int/g1", "base": base, "state": "pr", "alone": False,
+            "members": ["1"], "fix_round": 0, "job": job}), "test: group g1 in pr with a gone job")
+        log = os.path.join(self.wt, "runs", "regression", "g1", "regression.log")
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        with open(log, "w") as fh:
+            fh.write("line one\nboom at the end\n")
+        return job, os.path.abspath(log), dead.pid
+
+    def g1_decisions(self):
+        return [r for r in self.snap().inbox.values() if r.get("kind") == "decision" and r.get("ref") == "g1"]
+
+    def test_5_adopted_and_gone_regression_is_named_on_the_page(self):
+        job, log, pid = self.fixture()
+        res = self.controller()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        rows = self.g1_decisions()
+        self.assertEqual(len(rows), 1, self.snap().inbox)
+        text = rows[0].get("text") or ""
+        self.assertIn("is no longer running and wrote no result", text)
+        self.assertIn("regression.py (pid %d, started %s)" % (pid, job["stamp"]["started"]), text)
+        self.assertIn("boom at the end", text)
+        self.assertIn(log, text)
+        self.assertNotIn("None", text)
+        self.assertTrue(text.startswith("group g1: regression unmeasured - "), text)
+        g = self.snap().groups["g1"]
+        self.assertIn("is no longer running and wrote no result", str((g.get("paused") or {}).get("text")))
+        self.assertIn("is no longer running and wrote no result", str(g.get("last_regression")))
+
+    def own_child(self, rc):
+        import ticket_controller
+        from core.config import Config
+        job, log, pid = self.fixture()
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+        ctl.forever = True
+        ctl.after_regression("g1", job, rc)
+        rows = self.g1_decisions()
+        self.assertEqual(len(rows), 1, self.snap().inbox)
+        text = rows[0].get("text") or ""
+        self.assertNotIn("unmeasured - None", text)
+        self.assertIn("regression.py (pid %d)" % pid, text)
+        self.assertIn("; log %s: boom at the end" % log, text)
+        return text
+
+    def test_6_own_child_killed_by_a_signal(self):
+        text = self.own_child(-9)
+        self.assertIn("was killed by signal SIGKILL (9) before it wrote a result", text)
+
+    def test_6_own_child_exited_with_an_rc(self):
+        text = self.own_child(1)
+        self.assertIn("exited with rc 1 without writing a result", text)
+
+
 class T28Acceptance(LoopCase):
     """#28: auto_fixer fixes by the tickets as they are, lists the cases it aligned, and hands a
     contradiction to the user as a decision page."""
