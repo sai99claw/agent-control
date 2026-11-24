@@ -139,6 +139,13 @@ the ref. A main-moved report, the same or fewer failing cases, or a group sent b
 `tickets.py ready gN` (which drops `fix_end_sha`) never resets. Neither `int/<gid>` nor
 `refs/devloop/*` is pushed.
 
+A controller stopped with SIGTERM or SIGINT leaves its issuers, regressions and fixers running, and
+the next controller adopts them (#124). Stopping every process the controller started also stops
+its regressions: regression.py (on SIGTERM, SIGINT or SIGHUP) removes its worktree, releases its
+slot or machine and records `stopped by <signal> during <stage>` as an unmeasured result; a
+regression that could not record it is named on the unmeasured page by pid, exit code or signal,
+with the last line of its log (`runs/regression/<gid>/regression.log`).
+
 `devloop.worktree_setup` (D-091 item 10; default null = nothing runs; otherwise a non-empty shell
 command): run with `sh -c` right after devloop creates a worktree for a ticket (`t<id>`), its cases
 (`t<id>-cases`), a red check (`red-t<id>`), a regression (`regression-<branch>`), a fixer
