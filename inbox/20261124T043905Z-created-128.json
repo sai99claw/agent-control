@@ -1,0 +1,7 @@
+{
+  "kind": "created",
+  "ref": "128",
+  "text": "opened #128 test_a7 reads the regression's live record from inside each stage's command instead of sampling it every 0.2 s",
+  "at": "2026-11-24T04:39:06Z",
+  "acked": false
+}
