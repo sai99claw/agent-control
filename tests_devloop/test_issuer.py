@@ -408,6 +408,142 @@ class T114Acceptance(LoopCase):
         self.assert_own_page(snap, "need the user")
 
 
+class T138Acceptance(LoopCase):
+    """Ticket #138 (D-098): a round-start replay that conflicts ends the round before any agent as a
+    free merge round; the conflicting branch restarts at its start point and its old head is kept
+    under refs/devloop/before-rebase/."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(name, None)
+        self.sides = 0
+
+    # ------------------------------------------------------------ fixture helpers
+
+    def side(self, branch, start=None):
+        self.sides += 1
+        path = os.path.join(self.tmp, "side-%d" % self.sides)
+        if start is None:
+            git(self.proj, "worktree", "add", "-q", path, branch)
+        else:
+            git(self.proj, "worktree", "add", "-q", "-b", branch, path, start)
+        return path
+
+    def commit_on(self, branch, files, subject, start=None):
+        path = self.side(branch, start)
+        for rel, text in files.items():
+            full = os.path.join(path, rel)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w") as fh:
+                fh.write(text)
+        git(path, "add", "-A")
+        git(path, "commit", "-q", "-m", subject)
+        sha = git(path, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", path)
+        return sha
+
+    def merge_on(self, branch, other):
+        path = self.side(branch)
+        git(path, "merge", "-q", "--no-ff", "--no-edit", other)
+        git(self.proj, "worktree", "remove", "--force", path)
+
+    def put_group(self, gid, members):
+        self.pool.update(lambda tx: tx.put_group({
+            "id": gid, "branch": "int/" + gid, "state": "open", "members": members, "fix_round": 0,
+            "job": None, "created": "2026-11-23T00:00:00Z", "history": []}), "test: group %s" % gid)
+
+    def run_dir(self, name):
+        return os.path.join(self.tmp, "wt", "runs", "1", name)
+
+    def prompt(self, name):
+        path = os.path.join(self.run_dir(name), "prompt.md")
+        self.assertTrue(os.path.exists(path), "%s was not written" % path)
+        with open(path) as fh:
+            return fh.read()
+
+    def ref(self, name):
+        res = subprocess.run(["git", "rev-parse", "--verify", "--quiet", name], cwd=self.proj,
+                             capture_output=True, text=True)
+        return res.stdout.strip() if res.returncode == 0 else None
+
+    @staticmethod
+    def feedback_events(t):
+        return [h for h in t.get("history") or [] if h.get("event") == "feedback"]
+
+    def run_loop(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout[-2000:] + res.stderr[-2000:])
+        return self.snap()
+
+    # ------------------------------------------------------------ item 1
+
+    def test_1_conflict_on_the_ticket_branch_ends_round_one_before_any_agent(self):
+        o = self.commit_on("t/1", {"README.md": "one\n"}, "work 1 readme", start="main")
+        self.commit_on("int/g1", {"README.md": "two\n"}, "other ticket readme", start="main")
+        self.add(1, group="g1", needs_verifier=False)
+        self.put_group("g1", ["1"])
+        snap = self.run_loop()
+        t = snap.ticket("1")
+        self.assertFalse(os.path.exists(self.run_dir("r1-worker")), "an agent ran in round 1")
+        r1 = [h for h in self.feedback_events(t) if h.get("round") == 1]
+        self.assertTrue(r1, t.get("history"))
+        self.assertTrue(all(h.get("free") == "merge" for h in r1), r1)
+        self.assertEqual(self.ref("refs/devloop/before-rebase/t1-r1"), o)
+        prompt = self.prompt("r2-worker")
+        self.assertIn("round 1: merging the latest int/g1 into t/1 failed (", prompt)
+        self.assertIn("refs/devloop/before-rebase/t1-r1", prompt)
+        self.assertIn("git cherry-pick " + o[:12], prompt)
+        self.assertEqual((t["state"], t["round"]), ("landed", 2), t.get("history"))
+        self.assertEqual(git(self.proj, "show", "main:README.md"), "two")
+
+    # ------------------------------------------------------------ item 2
+
+    def test_2_conflict_on_the_cases_branch_throws_the_cases_out_and_the_verifier_writes_them_again(self):
+        c = self.commit_on("t/1-cases", {"cases/case_1.txt": "old"}, "cases 1 old", start="main")
+        path = self.side("t/1", "main")
+        git(self.proj, "worktree", "remove", "--force", path)
+        self.merge_on("t/1", "t/1-cases")
+        self.commit_on("t/1", {"impl_1.txt": "bad"}, "work 1")
+        self.commit_on("int/g1", {"cases/case_1.txt": "other"}, "other cases", start="main")
+        self.add(1, group="g1", needs_verifier=True, cases={"branch": "t/1-cases", "run": ["case_1"]})
+        self.put_group("g1", ["1"])
+        snap = self.run_loop()
+        t = snap.ticket("1")
+        self.assertFalse(os.path.exists(self.run_dir("r1-worker")), "the worker ran in round 1")
+        self.assertFalse(os.path.exists(self.run_dir("r1-verifier")), "the verifier ran in round 1")
+        self.assertTrue(os.path.exists(self.run_dir("r2-verifier")), "the verifier did not write the cases again")
+        self.assertEqual(self.ref("refs/devloop/before-rebase/t1-cases-r1"), c)
+        prompt = self.prompt("r2-worker")
+        self.assertIn("round 1: merging the latest int/g1 into t/1-cases failed (", prompt)
+        self.assertIn("refs/devloop/before-rebase/t1-cases-r1", prompt)
+        r1 = [h for h in self.feedback_events(t) if h.get("round") == 1]
+        self.assertTrue(r1, t.get("history"))
+        self.assertTrue(all(h.get("free") == "merge" for h in r1), r1)
+        self.assertEqual((t["state"], t["round"]), ("landed", 2), t.get("history"))
+
+    # ------------------------------------------------------------ item 3
+
+    def test_3_the_step_6_conflict_text_points_at_the_next_rounds_replay(self):
+        self.config(max_rounds=1)
+        self.add(1, group="g1")
+        self.add(2, group="g1")
+        self.put_group("g1", ["1", "2"])
+        self.plan(worker={"1": ["shared"], "2": ["shared"]})
+        snap = self.run_loop()
+        stuck = [i for i in ("1", "2") if snap.ticket(i)["state"] == "stuck"]
+        self.assertEqual(len(stuck), 1, {i: snap.ticket(i)["state"] for i in ("1", "2")})
+        n = stuck[0]
+        t = snap.ticket(n)
+        head = "round 1: merging the latest int/g1 into t/%s failed (" % n
+        tail = "the next round starts on the latest int/g1 and replays this ticket's own commits on it"
+        items = t.get("feedback") or []
+        self.assertTrue(any(x.startswith(head) and x.endswith(tail) for x in items), items)
+        self.assertEqual((t["stuck"]["reason"], t["round"]), ("rounds", 2), t.get("history"))
+        self.assertEqual([h.get("free") for h in self.feedback_events(t)], ["merge", "merge"],
+                         self.feedback_events(t))
+
+
 class FrozenWrites(LoopCase):
     """D-089: the pool writes of a revision refuse a merged or landed ticket inside the transaction."""
 
