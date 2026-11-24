@@ -159,7 +159,12 @@ the ref. A main-moved report, the same or fewer failing cases, or a group sent b
 `refs/devloop/*` is pushed.
 
 A controller stopped with SIGTERM or SIGINT leaves its issuers, regressions and fixers running, and
-the next controller adopts them (#124). Stopping every process the controller started also stops
+the next controller adopts them (#124). An issuer holds a BSD flock on
+`<worktrees>/locks/issuer-<N>.lock` (never deleted or replaced) from before its claim until it
+exits; a second `ticket_issuer.py --id N` while it is held exits 2 with one line naming the lock
+and changes nothing. The controller treats a held lock as a live issuer whatever the stamp says:
+it neither releases a running ticket nor dispatches a ready one while another process holds its
+lock (#130). Stopping every process the controller started also stops
 its regressions: regression.py (on SIGTERM, SIGINT or SIGHUP) removes its worktree, releases its
 slot or machine and records `stopped by <signal> during <stage>` as an unmeasured result; a
 regression that could not record it is named on the unmeasured page by pid, exit code or signal,

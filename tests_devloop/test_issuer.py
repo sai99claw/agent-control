@@ -1108,6 +1108,89 @@ class T27Acceptance(LoopCase):
                         bullets)
 
 
+class IssuerLock(LoopCase):
+    """core/ticketlock helpers and the controller's reading of a free lock (#130)."""
+
+    def setUp(self):
+        super().setUp()
+        from core.config import Config
+        self.cfg = Config(self.proj)
+        self.lock = os.path.join(self.tmp, "wt", "locks", "issuer-1.lock")
+
+    def other_holds(self):
+        """A child process that holds the lock until its stdin closes."""
+        code = ("import fcntl, sys; fh = open(sys.argv[1], 'a'); fcntl.flock(fh, fcntl.LOCK_EX); "
+                "print('held', flush=True); sys.stdin.read()")
+        os.makedirs(os.path.dirname(self.lock), exist_ok=True)
+        proc = subprocess.Popen([sys.executable, "-c", code, self.lock], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, text=True)
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        self.addCleanup(lambda: (proc.stdin.close(), proc.wait(timeout=10), proc.stdout.close()))
+        return proc
+
+    def test_path_is_under_the_worktree_root(self):
+        from core import ticketlock
+        self.assertEqual(ticketlock.path(self.cfg, "1"), self.lock)
+
+    def test_take_creates_the_folder_holds_and_never_removes_the_file(self):
+        import fcntl
+        from core import ticketlock
+        self.assertFalse(os.path.exists(os.path.dirname(self.lock)))
+        fd = ticketlock.take(self.cfg, "1")
+        self.assertIsNotNone(fd)
+        try:
+            self.assertIsNone(ticketlock.take(self.cfg, "1"))       # a second open description is refused
+            with open(self.lock, "a") as fh, self.assertRaises(BlockingIOError):
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            ino = os.stat(self.lock).st_ino
+        finally:
+            os.close(fd)
+        self.assertEqual(os.stat(self.lock).st_ino, ino)
+        fd = ticketlock.take(self.cfg, "1")
+        self.assertIsNotNone(fd)
+        os.close(fd)
+
+    def test_held_reads_another_process_and_leaves_a_free_lock_free(self):
+        from core import ticketlock
+        self.assertFalse(ticketlock.held(self.cfg, "1"))
+        self.assertFalse(ticketlock.held(self.cfg, "1"))            # the probe dropped what it took
+        proc = self.other_holds()
+        self.assertTrue(ticketlock.held(self.cfg, "1"))
+        self.assertFalse(ticketlock.held(self.cfg, "2"))
+        proc.stdin.close()
+        proc.wait(timeout=10)
+        self.assertFalse(ticketlock.held(self.cfg, "1"))
+        self.assertTrue(os.path.exists(self.lock))
+
+    def ctl(self, boot):
+        import ticket_controller
+        self.add(1, state="running", target="int/g1", group="g1", needs_verifier=False,
+                 claimed_at="2026-01-01T00:00:00Z",
+                 run={"pid": os.getpid(), "host": osx.host(), "boot": boot, "started": osx.now()})
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "open", "members": ["1"],
+                                                  "branch": "int/g1", "job": None}), "test: g1")
+        c = ticket_controller.Controller(self.cfg, self.pool)
+        c.forever = False
+        c.issued = []
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
+        return c
+
+    def test_free_lock_and_dead_stamp_release_the_ticket(self):
+        c = self.ctl("not-this-boot")
+        c.finish_jobs(self.snap())
+        t = self.snap().tickets["1"]
+        self.assertEqual(t["state"], "ready")
+        self.assertIn("issuer ended without an outcome; dispatch again",
+                      [h.get("event") for h in t.get("history") or []])
+
+    def test_free_lock_and_live_stamp_adopt_the_issuer(self):
+        c = self.ctl(osx.boot_id())
+        run = self.snap().tickets["1"]["run"]
+        c.finish_jobs(self.snap())
+        t = self.snap().tickets["1"]
+        self.assertEqual((t["state"], t["run"]), ("running", run))
+
+
 class RedCheck(LoopCase):
     def feedback_of(self, ident):
         t = self.snap().ticket(str(ident))
