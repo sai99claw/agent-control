@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "fixer",
-  "text": "For a red that won't reproduce, catch the failing state before guessing: wrap the case so it dumps the pool (tickets, groups, controller stderr) on failure, and run its whole module several at a time in a loop. Search the dumps without anchoring to line start, because unittest's progress dots share the line.",
-  "source": "group g2 fix r1",
-  "at": "2026-11-21T03:25:57Z"
-}
