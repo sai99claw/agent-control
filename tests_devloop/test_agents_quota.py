@@ -1080,6 +1080,48 @@ class AgentEnv(LoopCase):
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
 
 
+class T132Acceptance(LoopCase):
+    """#132: a command whose working directory is gone says so, and an agent chain stops there."""
+
+    def gone(self):
+        d = os.path.join(self.tmp, "gone")
+        self.assertFalse(os.path.exists(d))
+        return d
+
+    def test_1_spawn_and_run_name_the_missing_working_directory(self):
+        d = self.gone()
+        want = "working directory does not exist: " + d
+        with self.assertRaises(osx.OSFailure) as ctx:
+            p = osx.spawn(["python3", "-c", "pass"], cwd=d)
+            p.wait()
+        self.assertEqual(str(ctx.exception), want)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            osx.run(["git", "status"], cwd=d)
+        self.assertEqual(str(ctx.exception), want)
+
+    def test_2_agent_chain_stops_on_a_missing_working_directory(self):
+        from core import agents
+        from core.config import Config
+        d = self.gone()
+        self.config(agents=dict({r: AGENT for r in ROLES}, worker=[AGENT, AGENT]))
+        saved = {k: os.environ.get(k) for k in ("DEVLOOP_SLOT", "AC_ROOT")}
+
+        def restore():
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.addCleanup(restore)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        cfg = Config(self.proj)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            p = agents.start(cfg, "worker", "prompt", d, os.path.join(self.tmp, "run"), 30)
+            self.addCleanup(p.stop)
+        self.assertEqual(str(ctx.exception), "working directory does not exist: " + d)
+
+
 class CodexUsageUnits(LoopCase):
     EVENTS = [{"type": "thread.started", "thread_id": "t-9"}, {"type": "turn.started"},
               {"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 40,
