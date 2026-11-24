@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py takes ids relative to the unittest roots (test_issuer.T130Acceptance), not package paths (tests_devloop.test_issuer...); the latter errors as ImportError.",
+  "source": "#130 r1 verifier",
+  "at": "2026-11-24T14:08:42Z"
+}
