@@ -37,6 +37,11 @@
       "at": "2026-11-24T13:01:45Z",
       "event": "dispatched",
       "target": "int/g9"
+    },
+    {
+      "at": "2026-11-24T13:01:47Z",
+      "event": "issuer started",
+      "target": "int/g9"
     }
   ],
   "cost": [
@@ -63,6 +68,11 @@
   ],
   "group": "g9",
   "target": "int/g9",
-  "run": null,
+  "run": {
+    "pid": 1692,
+    "host": "vm",
+    "boot": "43b18e73-1e98-45df-8fb9-9240fd8959fa",
+    "started": "2026-11-24T13:01:47Z"
+  },
   "claimed_at": "2026-11-24T13:01:45Z"
 }
