@@ -897,6 +897,85 @@ class T11Acceptance(LoopCase):
         self.assertNotIn("applied_by", events[0])
 
 
+class RebaseRoundUnits(LoopCase):
+    """Issuer.rebase_round (D-098) called on its own: what it leaves alone and its interim
+    behaviour on a failed replay."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+        from core.config import Config
+        self.sides = 0
+        self.side("int/g1", "main", "README.md", "group\n", "group work")
+        self.target = git(self.proj, "rev-parse", "int/g1")
+        self.cfg = Config(self.proj)
+
+    def side(self, branch, start, path, text, subject):
+        self.sides += 1
+        where = os.path.join(self.tmp, "side-%d" % self.sides)
+        new = ["-b", branch] if start else []
+        git(self.proj, "worktree", "add", "-q", *new, where, start or branch)
+        full = os.path.join(where, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as fh:
+            fh.write(text)
+        git(where, "add", "-A")
+        git(where, "commit", "-q", "-m", subject)
+        git(self.proj, "worktree", "remove", "--force", where)
+        return git(self.proj, "rev-parse", branch)
+
+    def issuer(self, **extra):
+        import ticket_issuer
+        self.add(1, state="running", target="int/g1", group="g1", **extra)
+        issuer = ticket_issuer.Issuer(self.cfg, self.pool, "1", "int/g1")
+        issuer.claim()
+        return issuer
+
+    def events(self, name):
+        return [h for h in self.snap().ticket("1").get("history") or [] if h.get("event") == name]
+
+    def test_a_branch_already_on_its_start_with_only_its_own_commits_is_kept(self):
+        head = self.side("t/1", "int/g1", "mine.txt", "m\n", "mine")
+        t = self.issuer().rebase_round(self.snap().ticket("1"), 1)
+        self.assertEqual(git(self.proj, "rev-parse", "t/1"), head)
+        self.assertEqual(self.events("rebased"), [])
+        self.assertEqual(t["branch_base"], {"t/1": self.target})
+
+    def test_a_failed_replay_puts_both_branches_back_and_records_nothing(self):
+        cases = self.side("t/1-cases", "main", "cases/c.txt", "case\n", "cases 1")
+        head = self.side("t/1", "main", "README.md", "mine\n", "work 1")
+        issuer = self.issuer(cases={"branch": "t/1-cases", "run": ["c"]})
+        before = self.snap().ticket("1")
+        t = issuer.rebase_round(before, 1)
+        self.assertEqual(git(self.proj, "rev-parse", "t/1"), head)
+        self.assertEqual(git(self.proj, "rev-parse", "t/1-cases"), cases)
+        wt = git(issuer.wt, "status", "--porcelain")
+        self.assertEqual(wt, "")
+        self.assertFalse(os.path.exists(os.path.join(git(issuer.wt, "rev-parse", "--git-dir"),
+                                                     "rebase-merge")))
+        self.assertNotIn("branch_base", self.snap().ticket("1"))
+        self.assertEqual(self.events("rebased"), [])
+        self.assertEqual(t, before)
+        self.assertFalse(os.path.exists(os.path.join(self.cfg.worktree_root, "rebase-t1-cases")))
+
+    def test_uncommitted_changes_become_a_devloop_commit_that_is_replayed(self):
+        self.side("t/1", "main", "mine.txt", "m\n", "work 1")
+        issuer = self.issuer()
+        os.makedirs(self.cfg.worktree_root, exist_ok=True)
+        git(self.proj, "worktree", "add", "-q", issuer.wt, "t/1")
+        with open(os.path.join(issuer.wt, "mine.txt"), "w") as fh:
+            fh.write("local\n")
+        issuer.rebase_round(self.snap().ticket("1"), 2)
+        self.assertEqual(git(self.proj, "log", "--format=%an|%cn|%s", self.target + "..t/1").splitlines(),
+                         ["devloop|devloop|devloop: uncommitted changes in t/1 at the start of round 2",
+                          "t|devloop|work 1"])
+        ev = self.events("rebased")
+        self.assertEqual(len(ev), 1, ev)
+        self.assertEqual((ev[0]["branch"], ev[0]["onto"], ev[0]["base"], ev[0]["replayed"]),
+                         ("t/1", "int/g1", self.target, 2))
+
+
 class T20Acceptance(LoopCase):
     """Ticket #20: a ticket that needs a verifier merges only on cases written after its latest
     cases_wrong revision; never with an empty case list."""

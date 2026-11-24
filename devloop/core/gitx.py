@@ -3,6 +3,8 @@
 import contextlib
 import fcntl
 import os
+import shlex
+import tempfile
 
 from .osx import OSFailure, run
 
@@ -101,6 +103,38 @@ class Git:
         lines = [l for l in (res.out + "\n" + res.err).splitlines() if l.strip()]
         keep = [l.strip() for l in lines if "CONFLICT" in l or "error:" in l or "overwritten" in l
                 or l.startswith("\t")]
+        return False, "; ".join(keep[:8]) or (lines[-1] if lines else "rc %s" % res.rc)
+
+    def own_commits(self, tip, exclude):
+        """The commits `tip` made itself, oldest first: its first-parent line minus merge commits
+        (and so minus all a merge brought in), not reachable from any of `exclude` (D-098)."""
+        return self.out("rev-list", "--reverse", "--first-parent", "--no-merges", tip,
+                        "--not", *exclude).split()
+
+    def replay(self, start, commits):
+        """Put the checked-out branch on `start` followed by `commits` re-applied in order (a
+        commit that became empty is dropped; authors kept, committer devloop). Returns (True, "")
+        or (False, why) with the replay aborted, the branch back on its old head."""
+        who = {"GIT_COMMITTER_NAME": "devloop", "GIT_COMMITTER_EMAIL": "devloop@localhost"}
+        if not commits:
+            res = self.run("reset", "--hard", start, check=False, env=who)
+            lines = (res.err or res.out).strip().splitlines()
+            return res.ok, "" if res.ok else (lines[-1] if lines else "rc %s" % res.rc)
+        fd, todo = tempfile.mkstemp(prefix="devloop-todo-")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write("".join("pick %s\n" % c for c in commits))
+            env = dict(who, GIT_SEQUENCE_EDITOR="cp %s" % shlex.quote(todo))
+            res = self.run("rebase", "-i", "--empty=drop", "--onto", start, start, check=False, env=env)
+        finally:
+            os.unlink(todo)
+        if res.ok:
+            return True, ""
+        lines = [l for l in (res.out + "\n" + res.err).splitlines() if l.strip()]
+        keep = [l.strip() for l in lines if "CONFLICT" in l]
+        if not keep:
+            keep = self.run("diff", "--name-only", "--diff-filter=U", check=False).out.split()
+        self.run("rebase", "--abort", check=False)
         return False, "; ".join(keep[:8]) or (lines[-1] if lines else "rc %s" % res.rc)
 
     def move_ref(self, branch, new, old):

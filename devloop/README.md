@@ -11,6 +11,7 @@ ticket_controller.py (no LLM, the only driver)
   starts ticket_issuer.py --id N --target int/<group> (parallelism decided here)
 ticket_issuer.py
   worker + verifier -> (reviewer) -> verifier's cases -> worker's branch merged into int/<group>
+  each round starts on int/<group>'s current head with only the ticket's own commits (D-098)
   failing step = feedback for the next round (max 3 rounds, 3 hours; a round that ended on a
   merge conflict with the group, on a revision that threw out the cases, or on a blocked worker
   whose failing ids passed when devloop ran them (agent environment) does not count, at most
@@ -144,6 +145,8 @@ wait forever), dropping one N does not have or one N's text mentions (`#M`: that
 so the route for a mentioned dependency is `actl new --revise N`, whose opener judges it and may change
 depends_on and group through its hand-in's `dag`); a group that does not exist, is not open or already holds N; and a change
 that makes the ticket DAG or the group order a cycle.
+
+Every round starts from the latest verified point (D-098; the target takes in main whenever main moves). Before each round's agents, ticket_issuer.py (`rebase_round`) puts both t/<N>-cases (when it exists) and t/<N> on the target's current head T and replays only the ticket's own commits on top: the commits on the branch's first-parent line that are not merge commits (so nothing a merge of the target or of the cases branch brought in) and are not reachable from T, from the target sha the branch was last put on, or from any existing branch the ticket's history names as an issuer's target (for t/<N> also not from the old t/<N>-cases head). t/<N>-cases goes first, onto T; t/<N> goes onto the replayed cases head when it held the old one, else onto T. Authors are kept, the committer is devloop; a commit whose change is already in T is dropped; a branch that already is its start plus its own commits stays as it is. Tracked changes left uncommitted in either worktree are first committed as devloop (`devloop: uncommitted changes in <branch> at the start of round <r>`), so nothing is lost. The ticket records `branch_base` ({branch: T's sha}, written by the issuer only) and one `rebased` event (branch, onto, base, replayed) per branch whose head changed. So a ticket moved to another group, or readied after stuck, carries no commit of an earlier group: commits of its own that already reached an earlier target are that group's unverified work and are not replayed. Until the conflict round lands, a replay that fails puts both branches back where they were, records nothing and the round goes on as before. A fix round already starts from the latest main: auto_fixer merges main into the group branch before the fixer agent starts.
 
 A fix round that leaves the branch redder is dropped (#74). auto_fixer records `fix_start_sha` (the
 branch head the fixer agent starts from, after its own clean merge of main) in the same pool write
