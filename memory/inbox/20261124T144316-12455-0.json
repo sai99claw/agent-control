@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py ids are module.Class relative to the test folder (e.g. test_groups.T135Acceptance), not tests_devloop.test_groups...; the package-prefixed form fails with ImportError.",
+  "source": "#135 r1 verifier",
+  "at": "2026-11-24T14:43:16Z"
+}
