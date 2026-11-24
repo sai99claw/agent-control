@@ -359,3 +359,23 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 - #1、#2、#4、#5、#6、#7 已留言(含 commit)並關閉。#3(花費用每週額度百分比)使用者未決定,還開著。
 - T 要配合:發版腳本產品失敗回 1、環境回 86;拉 A 時丟掉本機的 af32012(`devloop.serial_groups`)。
 - 雲端發版照舊推 tag 403(現在回 86,不開票),g4、g5 頁已 ack。`actl run --forever` 在背景跑著。
+
+## 2026-11-24 GitHub issue #8–#13、主線可改相依圖(D-096)
+
+- T 開了 #8–#13。使用者問「主線看過票後也應該能改 dag?」,主線同意並提條件,使用者「OK 照這樣開票」,寫成 D-096(5564e9b)。
+- g6(#121、#123、#124、#126,main = 4d3f475):
+  - #8:regression 的時限從拿到名額或整台機器起算;等機器另外用 `regression_timeout_seconds` 當上限(沒有新增設定)。
+  - #10:對票或組的任何處理(CLI、看板、revise、ready、rerun、release、cancel)都會關掉它回答到的頁;票或組自己往前走時，舊頁記成 superseded。
+    `created` 頁不算進看板的「要你判」和等你的數字。
+  - #11:開題者用 loop harness 實測，只停 controller 時 regression 會被新的 controller 接手;連子程序一起停才重現 T 的「unmeasured - None」。
+    推論:T 停 controller 時把它起的程序也停了，原因不在 A。改成頁上寫出 regression 發生了什麼(訊號、回傳碼、程序不在了)。
+- g7(#122、#125、#127,main = 2266d4e):
+  - #13:組的順序由相依圖決定，組號只是名稱(`g62a` 不會再當掉)。
+  - #12、#9:新增 `actl dag dep N --add|--drop M --reason …`、`actl dag move N --to gK|new --reason …`(只給主線用，看板沒有);
+    `actl new --revise N` 交件可帶 `dag` 改相依與組。CLAUDE.md「怎麼做事」已加這兩行。
+- g8(#128,main = b7bb3b7):g7 的 regression 出現一個偶發(test_a7),#2 的機制自動開了 #128。開題者實測 10 次錯 5 次，是測試的競態，不是產品的;
+  改成在 stage 的指令裡複製 live record,10 次全綠。這是 #2 第一次自己走完一輪。
+- #8–#13 已留言(含 commit)並關閉。#3(花費用每週額度百分比)還開著，等使用者決定。
+- 雲端發版照舊推 tag 403(rc 86),g6、g7、g8 的頁已 ack。目前沒有 `actl run` 在跑，也沒有未完成的票。
+- 小事:`board/config.json` 的 tests 列了 `test_testiface`,但這個檔不存在(#128 的開題者看到的);還沒開票。
+- 給 T 的說明(scratchpad 的 T-update-2026-11-21.md)要補上 #8–#13 與 `actl dag`。
