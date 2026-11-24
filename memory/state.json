@@ -1,13 +1,5 @@
 {
-  "job": {
-    "path": "memory/role/fixer.md",
-    "stamp": {
-      "pid": 28569,
-      "host": "vm",
-      "boot": "5a7dfba0-49b8-4f1b-9b63-ab62db5b769f",
-      "started": "2026-11-24T03:26:04Z"
-    }
-  },
+  "job": null,
   "last": {
     "memory/project.md": "2026-11-23T04:09:48Z",
     "memory/role/creator.md": "2026-11-23T04:43:18Z",
