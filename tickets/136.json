@@ -31,6 +31,11 @@
       "at": "2026-11-24T14:43:32Z",
       "event": "dispatched",
       "target": "int/g11"
+    },
+    {
+      "at": "2026-11-24T14:43:34Z",
+      "event": "issuer started",
+      "target": "int/g11"
     }
   ],
   "cost": [
@@ -63,6 +68,11 @@
   ],
   "group": "g11",
   "target": "int/g11",
-  "run": null,
+  "run": {
+    "pid": 6869,
+    "host": "vm",
+    "boot": "684854eb-0a64-47dd-82da-7967ea798506",
+    "started": "2026-11-24T14:43:34Z"
+  },
   "claimed_at": "2026-11-24T14:43:32Z"
 }
