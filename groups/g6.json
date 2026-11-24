@@ -9,7 +9,16 @@
     "126"
   ],
   "fix_round": 0,
-  "job": null,
+  "job": {
+    "kind": "regression",
+    "stamp": {
+      "pid": 4861,
+      "host": "vm",
+      "boot": "5a7dfba0-49b8-4f1b-9b63-ab62db5b769f",
+      "started": "2026-11-24T03:44:27Z"
+    },
+    "out": "/home/user/agent-control-devloop/runs/regression/g6/result-1795491867.json"
+  },
   "created": "2026-11-24T03:00:16Z",
   "history": [
     {
@@ -27,6 +36,10 @@
     {
       "at": "2026-11-24T03:44:14Z",
       "event": "all tickets merged or stuck: PR ready"
+    },
+    {
+      "at": "2026-11-24T03:44:28Z",
+      "event": "regression started"
     }
   ],
   "base": "5564e9b5086bad099feabad440a6477d3edc18d7",
