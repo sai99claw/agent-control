@@ -483,6 +483,161 @@ class CasesThrownOut(LoopCase):
         self.assertIsNone(issuer.run_cases({"needs_verifier": False, "cases": None}))
 
 
+class T137Acceptance(LoopCase):
+    """Ticket #137 (D-098): before the agents of an issuer round start, t/<N> and t/<N>-cases are the
+    target's current head plus only the ticket's own commits; the target sha is recorded in branch_base."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(name, None)
+        self.sides = 0
+
+    # ------------------------------------------------------------ fixture helpers
+
+    def side(self, branch, start=None):
+        """A throwaway worktree on `branch` (made from `start` when given); the project's main stays checked out."""
+        self.sides += 1
+        path = os.path.join(self.tmp, "side-%d" % self.sides)
+        if start is None:
+            git(self.proj, "worktree", "add", "-q", path, branch)
+        else:
+            git(self.proj, "worktree", "add", "-q", "-b", branch, path, start)
+        return path
+
+    def commit_on(self, branch, files, subject, start=None):
+        path = self.side(branch, start)
+        for rel, text in files.items():
+            full = os.path.join(path, rel)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w") as fh:
+                fh.write(text)
+        git(path, "add", "-A")
+        git(path, "commit", "-q", "-m", subject)
+        sha = git(path, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", path)
+        return sha
+
+    def merge_on(self, branch, other):
+        path = self.side(branch)
+        git(path, "merge", "-q", "--no-ff", "--no-edit", other)
+        git(self.proj, "worktree", "remove", "--force", path)
+
+    def put_group(self, gid, state, members):
+        self.pool.update(lambda tx: tx.put_group({
+            "id": gid, "branch": "int/" + gid, "state": state, "members": members, "fix_round": 0,
+            "job": None, "created": "2026-11-23T00:00:00Z", "history": []}), "test: group %s" % gid)
+
+    def main_files(self):
+        return set(git(self.proj, "ls-tree", "-r", "--name-only", "main").split())
+
+    def moved_fixture(self, with_cases=False):
+        """Items 3-5: t/1 made in g1 (at 'work 5'), took in int/g1 again after 'work 6'; now in g2."""
+        a = self.commit_on("int/g1", {"five.txt": "5\n"}, "work 5", start="main")
+        self.commit_on("t/1", {"seven.txt": "7\n"}, "work 1 r1", start=a)
+        if with_cases:
+            self.commit_on("t/1-cases", {"cases/case_1.txt": "case\n"}, "cases 1", start=a)
+            self.merge_on("t/1", "t/1-cases")
+        self.commit_on("int/g1", {"six.txt": "6\n"}, "work 6")
+        self.merge_on("t/1", "int/g1")
+        self.commit_on("t/1", {"seven.txt": "7b\n"}, "work 1 r2")
+        self.commit_on("int/g2", {"new.txt": "n\n"}, "new group work", start="main")
+        self.put_group("g1", "cancelled", [])
+        self.put_group("g2", "open", ["1"])
+        return a
+
+    def assert_moved_landed(self, res):
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        self.assertEqual(self.state(1), "landed")
+        files = self.main_files()
+        self.assertEqual(git(self.proj, "show", "main:seven.txt"), "7b")
+        self.assertIn("impl_1.txt", files)
+        self.assertIn("new.txt", files)
+        self.assertNotIn("five.txt", files, "a commit of the old group g1 reached main")
+        self.assertNotIn("six.txt", files, "a commit of the old group g1 reached main")
+
+    # ------------------------------------------------------------ items 1 and 2
+
+    def test_1_2_retried_ticket_starts_on_the_targets_head_and_records_branch_base(self):
+        self.commit_on("int/g1", {"other.txt": "o\n"}, "other ticket merged", start="main")
+        self.commit_on("t/1", {"impl_1.txt": "bad"}, "work 1 old", start="main")
+        self.add(1, group="g1")
+        self.put_group("g1", "open", ["1"])
+        t1 = git(self.proj, "rev-parse", "int/g1")
+        starts = os.path.join(self.tmp, "starts.txt")
+        wrap = os.path.join(self.tmp, "wrap.sh")
+        with open(wrap, "w") as fh:
+            fh.write("#!/bin/sh\n"
+                     "if git merge-base --is-ancestor %s HEAD; then A=yes; else A=no; fi\n"
+                     "echo \"ancestor=$A log=$(git log --format=%%s %s..HEAD | tr '\\n' '|')\" >> %s\n"
+                     "exec python3 %s\n" % (t1, t1, starts, os.path.join(HERE, "fake_agent.py")))
+        agents = {r: AGENT for r in ROLES}
+        agents["worker"] = agents["worker_simple"] = ["sh", wrap]
+        self.config(agents=agents)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        self.assertTrue(os.path.exists(starts), "the worker never started")
+        with open(starts) as fh:
+            first = fh.read().splitlines()[0]
+        # item 1: the round-1 worker's HEAD holds T1 and exactly the one own commit on top of it
+        self.assertEqual(first, "ancestor=yes log=work 1 old|")
+        # item 2
+        t = self.snap().ticket("1")
+        self.assertEqual(t.get("branch_base"), {"t/1": t1, "t/1-cases": t1})
+        rebased = [h for h in t.get("history") or [] if h.get("event") == "rebased"]
+        self.assertEqual(len([h for h in rebased if h.get("branch") == "t/1"]), 1, rebased)
+        self.assertEqual([h for h in rebased if h.get("branch") == "t/1-cases"], [], rebased)
+        self.assertEqual(len(rebased), 1, rebased)
+        ev = rebased[0]
+        self.assertEqual((ev.get("onto"), ev.get("base"), ev.get("replayed")), ("int/g1", t1, 1), ev)
+
+    # ------------------------------------------------------------ items 3 and 4
+
+    def test_3_moved_ticket_with_a_recorded_base_carries_no_commit_of_the_old_group(self):
+        a = self.moved_fixture()
+        self.add(1, group="g2", branch_base={"t/1": a}, history=[])
+        self.assert_moved_landed(self.controller())
+
+    def test_4_moved_ticket_without_a_recorded_base_uses_the_old_target_from_history(self):
+        self.moved_fixture()
+        self.add(1, group="g2", history=[{"at": "2026-11-20T00:00:00Z", "event": "issuer started",
+                                          "target": "int/g1"}])
+        self.assertNotIn("branch_base", self.snap().ticket("1"))
+        self.assert_moved_landed(self.controller())
+
+    # ------------------------------------------------------------ item 5
+
+    def test_5_accepted_cases_made_in_the_old_group_are_replayed_onto_the_new_target(self):
+        a = self.moved_fixture(with_cases=True)
+        self.add(1, group="g2", cases={"branch": "t/1-cases", "run": ["case_1"]},
+                 branch_base={"t/1": a, "t/1-cases": a}, history=[])
+        g2 = git(self.proj, "rev-parse", "int/g2")
+        res = self.controller()
+        self.assert_moved_landed(res)
+        self.assertIn("cases/case_1.txt", self.main_files())
+        self.assertEqual((self.snap().ticket("1").get("branch_base") or {}).get("t/1-cases"), g2)
+
+    # ------------------------------------------------------------ item 6
+
+    def test_6_uncommitted_tracked_changes_become_a_devloop_commit(self):
+        self.commit_on("int/g1", {"other.txt": "o\n"}, "other ticket merged", start="main")
+        self.commit_on("t/1", {"impl_1.txt": "bad"}, "work 1 old", start="main")
+        self.add(1, group="g1", needs_verifier=False)
+        self.put_group("g1", "open", ["1"])
+        os.makedirs(os.path.join(self.tmp, "wt"))
+        wt = os.path.join(self.tmp, "wt", "t1")
+        git(self.proj, "worktree", "add", "-q", wt, "t/1")
+        with open(os.path.join(wt, "README.md"), "w") as fh:
+            fh.write("local\n")
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(git(self.proj, "show", "main:README.md"), "local")
+        lines = [ln for ln in git(self.proj, "log", "--format=%an|%s", "main").splitlines()
+                 if ln == "devloop|devloop: uncommitted changes in t/1 at the start of round 1"]
+        self.assertEqual(len(lines), 1, git(self.proj, "log", "--format=%an|%s", "main"))
+
+
 class ApplyUnapplied(LoopCase):
     """ticket_creator.apply_unapplied: which revise-* hand-ins the issuer writes into the pool."""
 
