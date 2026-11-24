@@ -76,5 +76,13 @@
       "usd": 0.8143210000000001,
       "session_id": "2e1b5d5b-12f1-46ea-b950-09000be13939"
     }
+  ],
+  "tests_changed": [
+    {
+      "test": "test_regression_fixer.FixerOffBranchLoop.test_off_branch_page_names_the_later_groups (fixture off_branch_page)",
+      "ticket": "122",
+      "acceptance": "core/chain.py: ... order(snap) lists the groups ... by creation key - the group's 'created' (missing = ''), then its id in natural order ... (#122 acceptance 1; acceptance 7 asks for any other old case that changes to be named in the hand-in: this one)",
+      "round": 1
+    }
   ]
 }
