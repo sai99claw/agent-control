@@ -14,6 +14,10 @@ STAMP = "2026-11-23T00:00:00Z"
 NS = "{http://www.w3.org/2000/svg}"
 
 
+LEFT_1 = ("member #1 left: stuck, nothing depends on it and no other member of g1 is unfinished"
+          " (D-097)")
+
+
 def events(obj):
     return [h.get("event") for h in (obj or {}).get("history") or []]
 
@@ -337,8 +341,7 @@ class T134Acceptance(LoopCase):
         self.assertIsNone(t1.get("target"), t1)
         g1 = snap.groups["g1"]
         self.assertEqual((g1.get("members"), g1.get("state")), (["2"], "pr"), events(g1))
-        self.assertIn("member #1 left: stuck, nothing depends on it and the rest of g1 is merged (D-097)",
-                      events(g1))
+        self.assertIn(LEFT_1, events(g1))
 
     # ------------------------------------------------------------ acceptance 4
 
@@ -353,18 +356,22 @@ class T134Acceptance(LoopCase):
 
     # ------------------------------------------------------------ acceptance 5
 
-    def test_a_stuck_member_alone_holds_the_group(self):
+    def test_a_lone_stuck_member_nothing_needs_leaves_and_the_group_is_cancelled(self):
         self.add(1, state="stuck", group="g1", target="int/g1")
         self.group("g1", ["1"])
         snap = self.advance()
+        t1 = snap.ticket("1")
+        self.assertIsNone(t1.get("group"), t1)
+        self.assertIsNone(t1.get("target"), t1)
         g1 = snap.groups["g1"]
-        self.assertEqual((g1.get("state"), g1.get("members")), ("open", ["1"]), events(g1))
-        self.assertEqual(snap.ticket("1").get("group"), "g1")
+        self.assertEqual((g1.get("members"), g1.get("state")), ([], "cancelled"), events(g1))
+        self.assertEqual(events(g1)[-2:], [LEFT_1, "no tickets left: group closed"], events(g1))
 
     # ------------------------------------------------------------ acceptance 6
 
     def test_a_run_whose_group_waits_for_a_decision_ends_with_one_idle_page(self):
         self.add(1)
+        self.add(2, deps=[1])
         self.plan(worker={"1": ["blocked"]})
         res = self.controller(timeout=60)
         self.assertEqual(res.returncode, 0, res.stdout[-2000:] + res.stderr[-2000:])
@@ -372,13 +379,16 @@ class T134Acceptance(LoopCase):
         idle = [r for r in self.snap().inbox.values() if r.get("kind") == "idle"]
         self.assertEqual(len(idle), 1, self.inbox_kinds())
         self.assertEqual(self.item_lines(idle[0]["text"]),
-                         ["#1 stuck (decision): need the user", "g1 waits for the decision on #1"],
+                         ["#1 stuck (decision): need the user", "#2 ready, waits for: #1 stuck",
+                          "g1 waits for the decision on #1",
+                          "g2 waits for g1 to land (place 2 in the chain)"],
                          idle[0]["text"])
 
     # ------------------------------------------------------------ acceptance 7
 
     def test_a_stuck_ticket_made_ready_lands_in_the_group_it_held(self):
         self.add(1)
+        self.add(2, deps=[1])
         self.plan(worker={"1": ["blocked", "ok"]})
         res = self.controller(timeout=60)
         self.assertEqual(res.returncode, 0, res.stdout[-2000:] + res.stderr[-2000:])
@@ -391,5 +401,7 @@ class T134Acceptance(LoopCase):
         self.assertEqual(res.returncode, 0, res.stdout[-2000:] + res.stderr[-2000:])
         snap = self.snap()
         self.assertEqual(self.state(1), "landed", snap.ticket("1").get("history"))
+        self.assertEqual(self.state(2), "landed", snap.ticket("2").get("history"))
         self.assertEqual(snap.ticket("1").get("group"), "g1")
-        self.assertEqual(set(snap.groups), {"g1"})
+        self.assertEqual(snap.ticket("2").get("group"), "g2")
+        self.assertEqual(set(snap.groups), {"g1", "g2"})
