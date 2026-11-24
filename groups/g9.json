@@ -32,9 +32,13 @@
     {
       "at": "2026-11-24T13:10:55Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-24T13:10:59Z",
+      "event": "code map refreshed"
     }
   ],
   "base": "b5564f9614719dd695b81d3be948d30194091969",
   "last_regression": "green",
-  "verified_sha": "d109fb97c099b98d1c8734f5036eae2babfc0102"
+  "verified_sha": "e7dcd4bccfbb992f3893313e4b3df9496f6de2d8"
 }
