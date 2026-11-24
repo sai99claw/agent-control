@@ -1,5 +1,6 @@
 """#117: groups form one chain - a group's regression waits until every earlier group has landed."""
 
+import ast
 import importlib
 import importlib.util
 import os
@@ -426,6 +427,14 @@ class DagOrderUnits(unittest.TestCase):
                             if re.search(r"int\([^)]*\[1:\]\)|_gnum|group_order", line) \
                                     and "next_group_id" not in line and 'k[1:]) for k in self.groups' not in line:
                                 hits.append("%s:%d" % (name, n))
+                    # A helper that slices off the 'g' and int()s the rest on another line.
+                    with open(os.path.join(base, name)) as fh:
+                        src = fh.read()
+                    for node in ast.walk(ast.parse(src)):
+                        if isinstance(node, ast.FunctionDef) and node.name != "next_group_id":
+                            seg = ast.get_source_segment(src, node) or ""
+                            if "[1:]" in seg and re.search(r"\bint\(", seg):
+                                hits.append("%s:%s" % (name, node.name))
         self.assertEqual(hits, [])
 
     def test_texts_name_the_dag_order(self):
@@ -439,3 +448,11 @@ class DagOrderUnits(unittest.TestCase):
         for old in ("group-number order", "chain order: existing groups by number"):
             self.assertNotIn(old, readme)
         self.assertIn("makes the group order a cycle", readme)
+
+    def test_dag_lanes_follow_the_sequence(self):
+        import board
+        snap = self.snap([("g63", "open", "1"), ("g64", "open", "2"), ("g75", "open", "3"), ("g9", "landed", "4")],
+                         [("1", "g63", "ready"), ("2", "g64", "ready"), ("3", "g75", "ready"),
+                          ("4", "g9", "landed"), ("5", "g7", "ready"), ("6", "", "ready")], {"1": ["3"]})
+        lanes = [gid for gid, _ in board.dag_lanes(snap, {"1", "2", "3", "4", "5", "6"})]
+        self.assertEqual(lanes, ["g9", "g75", "g63", "g64", "g7", ""])

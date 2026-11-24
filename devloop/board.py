@@ -1232,11 +1232,6 @@ def _num_key(ident):
     return (0, int(ident), "") if ident.isdigit() else (1, 0, ident)
 
 
-def _group_key(gid):
-    rest = gid[1:]
-    return (0, int(rest), gid) if rest.isdigit() else (1, 0, gid)
-
-
 def dag_blockers(snap):
     """Ids of tickets that keep their dependents waiting for good: stuck, cancelled, or merged into a
     stuck group (ticket_controller.can_start_now only starts a ticket on landed or same-open-group
@@ -1304,10 +1299,12 @@ def dag_layers(snap, shown):
 
 
 def dag_lanes(snap, shown):
-    """[(group id, label)] for the lanes that hold a shown ticket: groups by number, 未分組 ('') last."""
+    """[(group id, label)] for the lanes that hold a shown ticket: groups in chain.sequence order, ids
+    the pool has no group for after them, 未分組 ('') last."""
     gids = set((snap.tickets[i].get("group") or "") for i in shown)
+    seq = chainmod.sequence(snap)
     out = []
-    for gid in sorted((g for g in gids if g), key=_group_key):
+    for gid in [g for g in seq if g in gids] + sorted((g for g in gids if g and g not in seq), key=chainmod._natural):
         g = snap.groups.get(gid)
         out.append((gid, group_state_text(g) if g else UNKNOWN))
     if "" in gids:
