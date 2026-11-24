@@ -7,7 +7,10 @@ Each tick, in this order:
   2. groups       - main is merged into every waiting integration branch first (#72: clean ->
                     no state change; a conflict -> the fixer once the group is due for its
                     regression); an open group whose tickets are all merged or stuck becomes a
-                    PR; groups form one chain (core/chain.py, ordered by the DAG): a PR
+                    PR; a stuck member that a ticket depends on directly, or that has a member
+                    beside it neither merged nor cancelled, holds its open group until it is
+                    decided, any other stuck member leaves with no group first (D-097); groups
+                    form one chain (core/chain.py, ordered by the DAG): a PR
                     gets a regression (or a fix round) only when
                     every earlier group is landed or cancelled - a stuck group with no merged ticket holds no one; red -> auto_fixer (at most devloop.max_rounds);
                     green -> main fast-forwards to the integration branch (a main that moved
@@ -16,8 +19,10 @@ Each tick, in this order:
                     fix ticket (none while one opened this way is still open) and runs once
                     more on the same sha, and that run decides the page
   3. dispatch     - a ticket's group is written when it is opened; the controller only follows
-                    it. A ready ticket with no open group gets a group of its own at the end of
-                    the chain once its dependencies can still come (adoption); a ready ticket
+                    it. A ready ticket written before groups existed (no 'group' field) gets a
+                    group of its own at the end of the chain once its dependencies can still
+                    come (adoption); one that left a group or whose group is not open waits
+                    for the main session (actl dag move); a ready ticket
                     is started only in its own open group, once its dependencies are in its
                     starting point (landed, or merged into the same integration branch) and,
                     with a landed one, the branch has main or does not exist yet (it is then
@@ -89,6 +94,9 @@ def idle_lines(snap):
         if state == "stuck":
             stuck = t.get("stuck") or {}
             out.append("#%s stuck (%s): %s" % (ident, stuck.get("reason") or "?", _first_line(stuck.get("text"))))
+        elif state == "ready" and "group" in t and (snap.groups.get(t.get("group") or "") or {}).get("state") != "open":
+            out.append("#%s ready, has no open group: waits for the main session to place it (actl dag move %s --to gK|new)"
+                       % (ident, ident))
         elif state == "ready":
             waits = []
             for d in dagmod.deps(snap.dag, ident):
@@ -112,6 +120,11 @@ def idle_lines(snap):
         elif g.get("paused") and state not in ("landed", "cancelled"):
             mark = g["paused"]
             out.append("%s paused (%s): %s" % (gid, mark.get("reason") or "?", _first_line(mark.get("text"))))
+        elif state == "open":
+            held = [i for i in g.get("members") or [] if (snap.tickets.get(i) or {}).get("state") == "stuck"
+                    and snap.tickets[i].get("group") == gid and chain.stuck_holds(snap, i, gid)]
+            if held:
+                out.append("%s waits for the decision on #%s" % (gid, ", #".join(held)))
         chain_order, earlier = chain.order(snap), chain.waits_for(snap, gid)
         if earlier is not None:
             out.append("%s waits for %s to land (place %d in the chain)" % (gid, earlier, chain_order.index(gid) + 1))
@@ -365,10 +378,13 @@ class Controller:
         self.start_fixer(gid, report, rnd + 1)
 
     def open_stays(self, data, g):
-        """An open group stays open while a member runs or a ready member can still start."""
+        """An open group stays open while a member runs, a ready member can still start, or a
+        stuck member holds it (chain.stuck_holds, D-097)."""
         for i in g.get("members") or []:
             t = data.tickets.get(i) or {}
             if t.get("state") == "running":
+                return True
+            if t.get("state") == "stuck" and t.get("group") == g["id"] and chain.stuck_holds(data, i, g["id"]):
                 return True
             if t.get("state") == "ready" and t.get("group") == g["id"] and self.can_still_start(data, i, g):
                 return True
@@ -376,12 +392,22 @@ class Controller:
 
     def close_open(self, gid):
         """An open group with no running member and no ready member that can still start goes on,
-        decided on the data this pool update reads: each ready member leaves it, then it becomes
+        decided on the data this pool update reads: each stuck member leaves it (none holds it,
+        D-097) and has no group, then each ready member leaves it, then it becomes
         pr (a merged member remains), stuck (other members remain) or cancelled (none remains)."""
         def change(tx):
             g = tx.data.groups.get(gid)
             if not g or g.get("state") != "open" or self.open_stays(tx.data, g):
                 return None
+            for i in list(g.get("members") or []):
+                t = tx.data.tickets.get(i) or {}
+                if t.get("state") != "stuck" or t.get("group") != gid:
+                    continue
+                t["group"] = t["target"] = None
+                tx.put_ticket(t)
+                g["members"] = [m for m in g["members"] if m != i]
+                event(g, "member #%s left: stuck, nothing depends on it and no other member of %s is unfinished (D-097)"
+                      % (i, gid))
             for i in list(g.get("members") or []):
                 t = tx.data.tickets.get(i) or {}
                 if t.get("state") != "ready":
@@ -1005,13 +1031,11 @@ class Controller:
 
     @staticmethod
     def adoptable(data, ident):
-        """A ready ticket with no open group whose every dependency is landed, running or merged,
-        or ready and a member of an open group."""
+        """A ready ticket written without a 'group' field (before groups existed) whose every
+        dependency is landed, running or merged, or ready and a member of an open group. A ticket
+        that left a group, or whose group is not open, waits for the main session (D-097 3)."""
         t = data.tickets.get(ident) or {}
-        if t.get("state") != "ready":
-            return False
-        own = data.groups.get(t.get("group") or "")
-        if own and own.get("state") == "open":
+        if t.get("state") != "ready" or "group" in t:
             return False
         for d in dagmod.deps(data.dag, ident):
             dt = data.tickets.get(d)
@@ -1060,7 +1084,8 @@ class Controller:
 
     def can_still_start(self, data, ident, group):
         """Every dependency is landed, or ready, running or merged in this group or in a group
-        earlier in chain.order, and, with a landed one, main_ok."""
+        earlier in chain.order, or stuck in such a group that is open (it waits for the decision,
+        D-097), and, with a landed one, main_ok."""
         gid, landed, chain_order = group["id"], False, chain.order(data)
         for d in dagmod.deps(data.dag, ident):
             dt = data.tickets.get(d) or {}
@@ -1069,7 +1094,8 @@ class Controller:
                 continue
             dgid = dt.get("group") or ""
             dg = data.groups.get(dgid)
-            if (dt.get("state") in ("ready", "running", "merged") and dg
+            if ((dt.get("state") in ("ready", "running", "merged")
+                 or (dt.get("state") == "stuck" and (dg or {}).get("state") == "open")) and dg
                     and (dgid == gid or (dgid in chain_order and gid in chain_order
                                          and chain_order.index(dgid) < chain_order.index(gid)))):
                 continue

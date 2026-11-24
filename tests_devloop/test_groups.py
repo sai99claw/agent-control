@@ -224,7 +224,7 @@ class GroupFollowUnits(LoopCase):
         snap = self.snap()
         got = {i: c.can_still_start(snap, i, snap.groups[snap.tickets[i]["group"]])
                for i in ("11", "12", "13", "14", "15", "16")}
-        self.assertEqual(got, {"11": True, "12": True, "13": True, "14": False, "15": False, "16": False})
+        self.assertEqual(got, {"11": True, "12": True, "13": True, "14": True, "15": False, "16": False})
 
     def test_adoption_counts_a_group_made_earlier_in_the_same_write(self):
         self.add(1)
@@ -243,14 +243,13 @@ class GroupFollowUnits(LoopCase):
 
     def test_adoption_leaves_a_group_that_is_not_open(self):
         self.add(1, group="g1", target="int/g1")
-        self.group("g1", ["1"], state="stuck")
+        self.group("g1", ["1"], state="pr")
         c = self.ctl()
-        self.assertEqual(c.adopt(self.snap()), ["1"])
-        snap = self.snap()
-        self.assertEqual(snap.groups["g1"]["members"], [])
-        self.assertEqual(snap.groups["g2"]["members"], ["1"])
-        self.assertEqual((snap.tickets["1"]["group"], snap.tickets["1"].get("target")), ("g2", None))
         self.assertEqual(c.adopt(self.snap()), [])
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["members"], ["1"])
+        self.assertNotIn("g2", snap.groups)
+        self.assertEqual(snap.tickets["1"]["group"], "g1")
 
     def test_a_member_added_before_the_update_keeps_the_group_open(self):
         self.add(1, state="stuck", group="g1")
@@ -316,6 +315,67 @@ class GroupFollowUnits(LoopCase):
                          or tx.put_group(tx.data.groups["g1"]), "test: #3 joins")
         c.dispatch = lambda snap: 0
         self.assertTrue(c.tick())                      # #3 has no dependency: it can start now
+
+
+class StuckHoldsUnits(LoopCase):
+    """#134 (the implementer's): core.chain.stuck_holds (D-097) and the idle line it gives."""
+
+    group = GroupFollowUnits.group
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def holds(self, ident="1", gid="g1"):
+        from core import chain
+        return chain.stuck_holds(self.snap(), ident, gid)
+
+    def test_a_stuck_ticket_alone_does_not_hold(self):
+        self.add(1, state="stuck", group="g1")
+        self.group("g1", ["1"])
+        self.assertFalse(self.holds())
+
+    def test_beside_only_cancelled_or_merged_members_it_does_not_hold(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="cancelled", group="g1")
+        self.group("g1", ["1", "2"])
+        self.assertFalse(self.holds())
+        self.add(3, state="merged", group="g1")
+        self.pool.update(lambda tx: tx.data.groups["g1"]["members"].append("3")
+                         or tx.put_group(tx.data.groups["g1"]), "test: #3 joins")
+        self.assertFalse(self.holds())
+
+    def test_an_unfinished_member_beside_it_holds(self):
+        for state in ("ready", "running", "stuck"):
+            with self.subTest(state=state):
+                self.add(1, state="stuck", group="g1")
+                self.add(2, state=state, group="g1")
+                self.group("g1", ["1", "2"])
+                self.assertTrue(self.holds())
+
+    def test_a_direct_dependent_holds_unless_it_is_cancelled(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="merged", group="g1")
+        self.group("g1", ["1", "2"])
+        self.add(3, deps=[1], group="g2")
+        self.assertTrue(self.holds())
+        self.add(3, deps=[1], state="cancelled", group="g2")
+        self.assertFalse(self.holds())
+        self.add(3, deps=[2], group="g2")             # depends on another member only
+        self.assertFalse(self.holds())
+
+    def test_the_idle_line_names_every_stuck_member_that_holds(self):
+        import ticket_controller
+        self.add(1, state="stuck", group="g1")
+        self.add(2, state="stuck", group="g1")
+        self.group("g1", ["1", "2"])
+        self.assertIn("g1 waits for the decision on #1, #2", ticket_controller.idle_lines(self.snap()))
 
 
 class T104Acceptance(LoopCase):
@@ -762,6 +822,43 @@ class T24Acceptance(LoopCase):
         self.assertTrue([ln for ln in res.stdout.splitlines() if ln.split()[:1] == ["g1"]], res.stdout)
 
 
+class NoGroupPlacementUnits(LoopCase):
+    """D-097 3 internals: a ticket that has a group field but no open group is not adopted."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.started, c.issued = [], []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
+        return c
+
+    def test_ticket_that_left_a_group_is_not_adopted_and_has_an_idle_line(self):
+        self.add(1, group=None)
+        self.assertEqual(self.ctl().adopt(self.snap()), [])
+        snap = self.snap()
+        self.assertNotIn("g1", snap.groups)
+        import ticket_controller
+        self.assertEqual(ticket_controller.idle_lines(snap), [
+            "#1 ready, has no open group: waits for the main session to place it (actl dag move 1 --to gK|new)"])
+
+    def test_ticket_without_a_group_field_is_still_adopted(self):
+        self.add(1)
+        self.assertEqual(self.ctl().adopt(self.snap()), ["1"])
+
+
 class T86Acceptance(LoopCase):
     """#86: a ticket that leaves a group is no longer that group's member; landing, releasing and
     cancelling the group count only tickets whose own group is that group."""
@@ -922,6 +1019,78 @@ class MemberLeavesUnit(LoopCase):
         self.assertEqual(s.tickets["1"]["group"], "g1")
         self.assertEqual(s.groups["g1"]["members"], ["1", "2"])
         self.assertEqual(s.groups["g1"]["history"], [])
+
+
+class T135Acceptance(LoopCase):
+    """#135 (verifier): a ready ticket that has a group field but no open group gets no new group
+    from the controller; the idle page says it waits for the main session (D-097 3)."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def group(self, gid, members, state="open", branch=False, **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": state, "members": list(members),
+             "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z", "history": []}
+        g.update(fields)
+        if branch:
+            git(self.proj, "branch", "int/" + gid, "main")
+        self.pool.update(lambda tx: tx.put_group(g), "test: group %s" % gid)
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.started, c.issued = [], []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
+        return c
+
+    def test_a_ticket_with_group_none_is_not_adopted_or_started(self):
+        self.add(1, group=None)
+        self.assertIn("group", self.snap().tickets["1"])                 # fixture premise
+        c = self.ctl()
+        self.assertEqual(c.adopt(self.snap()), [])
+        snap = self.snap()
+        self.assertEqual(snap.groups, {}, snap.groups)
+        self.assertIsNone(snap.tickets["1"]["group"])
+        c.dispatch(snap)
+        self.assertEqual((c.issued, c.started), ([], []))
+        snap = self.snap()
+        self.assertEqual(snap.groups, {}, snap.groups)
+        self.assertIsNone(snap.tickets["1"]["group"])
+        self.assertEqual(snap.tickets["1"]["state"], "ready")
+
+    def test_a_ticket_whose_group_is_in_pr_is_not_adopted(self):
+        self.add(1, group="g1", target="int/g1")
+        self.group("g1", ["1"], state="pr")
+        c = self.ctl()
+        self.assertEqual(c.adopt(self.snap()), [])
+        snap = self.snap()
+        self.assertEqual(snap.tickets["1"]["group"], "g1")
+        self.assertEqual(sorted(snap.groups), ["g1"], snap.groups)
+        self.assertEqual(snap.groups["g1"]["members"], ["1"])
+
+    def test_run_without_forever_leaves_it_ready_with_one_idle_page(self):
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+        self.add(1, group=None)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1").get("state"), "ready", snap.ticket("1"))
+        pages = [r for r in snap.inbox.values() if r.get("kind") == "idle"]
+        self.assertEqual(len(pages), 1, "exactly one idle page: %r" % pages)
+        lines = [ln for ln in pages[0]["text"].splitlines() if ln.startswith("#") or ln.startswith("g")]
+        self.assertEqual(lines, ["#1 ready, has no open group: waits for the main session to place it "
+                                 "(actl dag move 1 --to gK|new)"], pages[0]["text"])
 
 
 class DagEditUnits(LoopCase):
