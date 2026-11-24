@@ -298,6 +298,38 @@ class PageSetsOfIssuerAndWriters(LoopCase):
         self.assertEqual(pages.problems("request", row), [])
 
 
+class T136Acceptance(LoopCase):
+    """#136 (issue #16, D-097): the stuck page of a ticket its open group waits for names that group
+    and the groups after it in the chain."""
+
+    def setUp(self):
+        super().setUp()
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(k, None)
+
+    def page_lines(self, unacked):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rows = [r for r in self.snap().inbox.values()
+                if r.get("kind") == "decision" and str(r.get("ref")) == "1"
+                and (not unacked or not r.get("acked"))]
+        self.assertEqual(len(rows), 1, "decision pages about #1: %r" % rows)
+        return [ln.strip() for ln in str(rows[0].get("text", "")).splitlines()]
+
+    def test_1_a_dependent_ticket_names_the_group_and_the_next_one(self):
+        self.add(1)
+        self.add(2, deps=[1])
+        self.plan(worker={"1": ["blocked"]})
+        lines = self.page_lines(unacked=True)
+        self.assertIn("g1 waits for this decision; groups after it in the chain: g2", lines)
+
+    def test_2_a_lone_ticket_names_its_group_and_none_after(self):
+        self.add(1)
+        self.plan(worker={"1": ["blocked"]})
+        lines = self.page_lines(unacked=False)
+        self.assertIn("g1 waits for this decision; groups after it in the chain: none", lines)
+
+
 class Timeout(LoopCase):
     loop_extra = {"issuer_timeout_seconds": 4}
 
