@@ -28,7 +28,12 @@
   "feedback": [
     "round 1: the ticket was revised during this round and the revision threw out the verifier's cases (cases_wrong); the verifier writes them again next round and the worker works on the revised ticket"
   ],
-  "cases": null,
+  "cases": {
+    "branch": "t/134-cases",
+    "run": [
+      "test_group_members.T134Acceptance"
+    ]
+  },
   "history": [
     {
       "at": "2026-11-24T14:06:01Z",
@@ -73,6 +78,10 @@
       "at": "2026-11-24T14:31:35Z",
       "event": "round start",
       "round": 2
+    },
+    {
+      "at": "2026-11-24T14:37:37Z",
+      "event": "cases ready"
     }
   ],
   "cost": [
