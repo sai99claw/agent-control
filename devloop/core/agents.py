@@ -266,6 +266,8 @@ class Pending:
             try:
                 self.proc = osx.spawn(argv, cwd=self.cwd, env=env, log_path=self.log,
                                       stdin_text=self.prompt)
+            except osx.CwdMissing:
+                raise
             except osx.OSFailure as exc:
                 self.tried.append({"command": argv[0], "model": model_of(argv), "outcome": "not found"})
                 last = exc

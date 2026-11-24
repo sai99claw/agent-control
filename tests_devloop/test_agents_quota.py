@@ -1157,6 +1157,21 @@ class ProjectRulesHome(unittest.TestCase):
             self.assertIn(word, sec.replace("Project memory", "project memory"))
 
 
+class MissingProgramKeepsText(unittest.TestCase):
+    """A missing program in an existing cwd keeps 'cannot start X: not found' (implementer's tests of #132)."""
+
+    def test_spawn_and_run_text(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for call in (lambda: osx.spawn(["no-such-program-132"], cwd=d),
+                         lambda: osx.run(["no-such-program-132"], cwd=d)):
+                with self.assertRaises(osx.OSFailure) as ctx:
+                    call()
+                self.assertNotIsInstance(ctx.exception, osx.CwdMissing)
+                self.assertTrue(str(ctx.exception).startswith(
+                    "cannot start no-such-program-132: not found ("), str(ctx.exception))
+
+
 class ChainStartUnits(LoopCase):
     """agents.start(first=N) and Pending.index (implementer's tests of #115)."""
 
