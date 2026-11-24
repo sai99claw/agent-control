@@ -5,6 +5,7 @@ Each tick, in this order:
 
   1. finish jobs  - an issuer, regression or fixer that ended; read what it left in the pool
   2. groups       - main is merged into every waiting integration branch first (#72: clean ->
+                    no state change; a conflict -> the fixer once the group is due for its
                     regression); an open group whose tickets are all merged or stuck becomes a
                     PR; a stuck member that a ticket depends on directly, or that has a member
                     beside it neither merged nor cancelled, holds its open group until it is
