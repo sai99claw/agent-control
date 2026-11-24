@@ -2,12 +2,12 @@
   "title": "#16: a stuck ticket's page says that its group and the groups after it wait for the decision",
   "objective": "The page the issuer writes when a ticket gets stuck in an open group that waits for it under D-097 names that group and the groups after it in the chain.",
   "outline": "ticket_issuer.py Issuer.stuck(): after its save and before pool.report, read a snapshot; when the ticket's group is open and the predicate the D-097 ticket added says the stuck ticket holds it, append the line ('%s waits for this decision; groups after it in the chain: %s' with core/chain.behind(snap, gid) joined by ', ', or 'none'). Pages written elsewhere (an escalated revise, page=False) are out of scope.",
-  "test_plan": "Verifier: cases for acceptance 1 and 2 in a new class named with this ticket's case mark in tests_devloop/test_issuer.py, between class PageSetsOfIssuerAndWriters and class Timeout; pop DEVLOOP_TICKET, DEVLOOP_GROUP and DEVLOOP_SLOT from self.env; self.add(...), self.plan(...), self.controller(), then read the inbox rows with kind 'decision' and ref '1'. Before the change (measured): the page text is only '#1 is stuck (decision): need the user' (red). Implementer: acceptance 3 with a unit test of stuck() on a pool fixture (group g1 open, #2 merged, nothing depending on #1), in tests_devloop/test_issuer.py between class Timeout and class Revise.",
-  "notes": "D-097 (docs/DECISIONS.md, 2026-11-24, the user's ruling on issue #16): 1. a group with a stuck ticket goes on to its regression without waiting only when no ticket directly depends on the stuck ticket and the group's other tickets are all done (merged); the stuck ticket then leaves the group and has no group. 2. Otherwise (a ticket directly depends on it, or the group has unfinished tickets) the group waits for the decision on it: it is not closed and no member is moved out. 3. A ticket with no group is placed by the main session and the user (ready, which group, or cancel); the controller opens no new group for it and puts it at no chain end. D-097 notes that the wait shows on the page; a run with --forever writes no idle page, so the stuck page is where the main session sees it. Depends on the D-097 ticket of this hand-in (its predicate; without it the group would not wait and the line would be false). Group new-g2.",
+  "test_plan": "Verifier: cases for acceptance 1 and 2 in a new class named with this ticket's case mark in tests_devloop/test_issuer.py, between class PageSetsOfIssuerAndWriters and class Timeout. Acceptance 1: a loop case; pop DEVLOOP_TICKET, DEVLOOP_GROUP and DEVLOOP_SLOT from self.env; self.add(...), self.plan(...), self.controller(), then read the inbox rows with kind 'decision' and ref '1'. Acceptance 2: a unit test of Issuer.stuck() on a pool fixture (tickets #1 stuck and #2 ready in group g1, g1 open with members ['1', '2'], no other group; a stand-in Issuer whose pool.report records its call), checking the reported page text. Before the change (measured for acceptance 1): the page text is only '#1 is stuck (decision): need the user' (red); acceptance 2 is red the same way. Implementer: acceptance 3 with a unit test of stuck() on a pool fixture (group g1 open, #2 merged, nothing depending on #1) and a loop case with harness ticket #1 alone, plan worker {'1': ['blocked']}, in tests_devloop/test_issuer.py between class Timeout and class Revise.",
+  "notes": "D-097 (docs/DECISIONS.md, 2026-11-24, the user's ruling on issue #16): 1. a group with a stuck ticket goes on to its regression without waiting only when no ticket directly depends on the stuck ticket and the group's other tickets are all done (merged); the stuck ticket then leaves the group and has no group. 2. Otherwise (a ticket directly depends on it, or the group has unfinished tickets) the group waits for the decision on it: it is not closed and no member is moved out. 3. A ticket with no group is placed by the main session and the user (ready, which group, or cancel); the controller opens no new group for it and puts it at no chain end. D-097 notes that the wait shows on the page; a run with --forever writes no idle page, so the stuck page is where the main session sees it. A ticket alone in its group does not hold it: point 1 holds (no other member is unfinished), chain.stuck_holds returns False and the controller moves it out, so its page has no line. Depends on the D-097 ticket of this hand-in (its predicate; without it the group would not wait and the line would be false). Group new-g2.",
   "acceptance": [
     "Harness tickets #1 and #2 (#2 depends on #1), plan worker {'1': ['blocked']}, a controller run without --forever: the unacked decision page whose ref is '1' has a line 'g1 waits for this decision; groups after it in the chain: g2'.",
-    "Harness ticket #1 alone, plan worker {'1': ['blocked']}, a controller run without --forever: the decision page whose ref is '1' has a line 'g1 waits for this decision; groups after it in the chain: none'.",
-    "When the stuck ticket does not hold its group at that moment (nothing depends on it and every other member is merged), the page has no such line."
+    "Issuer.stuck() on a pool fixture where #1 holds its group and no group comes after it: group g1 open with members #1 (stuck) and #2 (ready), nothing depending on #1, no other group: the page text reported for #1 has a line 'g1 waits for this decision; groups after it in the chain: none'.",
+    "When the stuck ticket does not hold its group at that moment (nothing depends on it and every other member is merged or cancelled; this includes a ticket that is its group's only member, e.g. harness ticket #1 alone with plan worker {'1': ['blocked']}), the page has no such line."
   ],
   "needs_verifier": true,
   "complexity": "simple",
@@ -23,12 +23,7 @@
   "feedback": [
     "round 1: verifier cases: 1 failing:\n- test_issuer.T136Acceptance.test_2_a_lone_ticket_names_its_group_and_none_after AssertionError "
   ],
-  "cases": {
-    "branch": "t/136-cases",
-    "run": [
-      "test_issuer.T136Acceptance"
-    ]
-  },
+  "cases": null,
   "history": [
     {
       "at": "2026-11-24T14:06:01Z",
@@ -62,6 +57,18 @@
       "at": "2026-11-24T14:46:56Z",
       "event": "round start",
       "round": 2
+    },
+    {
+      "at": "2026-11-24T14:48:36Z",
+      "event": "revised",
+      "source": "worker",
+      "fields": [
+        "acceptance",
+        "notes",
+        "test_plan"
+      ],
+      "cases_wrong": true,
+      "run": "revise-2026-11-24T144722Z"
     }
   ],
   "cost": [
