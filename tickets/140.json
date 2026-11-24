@@ -1,0 +1,57 @@
+{
+  "title": "#16 D-099: opening tickets keeps dag.json's other top-level keys (group_after, first_ticket_id)",
+  "objective": "Writing an opener's tickets (ticket_creator.write_new) replaces only dag.json's `tickets` and keeps every other top-level key of the file, such as `group_after` and `first_ticket_id`.",
+  "outline": "devloop/ticket_creator.py write_new(): replace `tx.put_dag({\"tickets\": dag})` with a write of the whole file with only `tickets` replaced, e.g. `tx.put_dag(dict(tx.data.raw[\"dag\"], tickets=dag))`. tests_devloop/loop_harness.py add(): the same one-line change. devloop/README.md: the clause in the opener paragraph (around 'the opening makes no git branch, and `dag.json` keeps only `depends_on`'). These are the only two writers that rebuild dag.json (core/dagedit.py writes tx.data.raw['dag'] whole).",
+  "test_plan": "No verifier: a one-line product change; the implementer writes the case. Implementer: acceptance 1 and 2 as one new method in tests_devloop/test_opener.py class OpenerGroupChoice, between test_the_write_appends_to_an_open_group_and_makes_new_ones and test_groups_section: write the group with the class's group() helper, then self.pool.update(lambda tx: tx.put_dag({...}), 'test: dag'), then write_new with the class's ticket('new-1') helper; read dag.json from the snapshot's raw['dag']. It is red before the change (measured by the opener with the same call on 22af64f). Acceptance 2 as a second method and acceptance 3 as a third, next to it (3: write group_after through put_dag, then self.add(1), then assert group_after is still there; also red before). Each method starts from LoopCase's fresh pool. Run `python3 devloop/run_tests.py test_opener.OpenerGroupChoice` (seconds).",
+  "notes": "Group g11: same D-099 change as its siblings; touches only ticket_creator.write_new, loop_harness.add, one README clause and test_opener.py, which no other g11 ticket edits. No dependency: the sibling tickets' fixtures write group_after after every self.add(), so they do not need this one.",
+  "acceptance": [
+    "1: on a pool whose dag.json is {'tickets': {}, 'first_ticket_id': 100, 'group_after': {'g1': ['g2']}} and that has an open group g1 (members [], created stamp, history []), ticket_creator.write_new(pool, {'kind': 'tickets', 'tickets': [one valid ticket 'new-1'], 'dag': {'new-1': {'depends_on': [], 'group': 'g1'}}}, 'req') returns (['100'], []) and dag.json afterwards is {'tickets': {'100': {'depends_on': []}}, 'first_ticket_id': 100, 'group_after': {'g1': ['g2']}}. Measured on 22af64f: afterwards it is {'tickets': {'100': {'depends_on': []}}} - both keys are lost (the live pool lost its first_ticket_id the same way in its commit 3d9068c 'tickets: open from a request').",
+    "2 (unchanged behaviour, kept): write_new still drops 'verify' and 'why_alone' from every ticket entry of dag.json: on a fresh pool seeded {'tickets': {'7': {'depends_on': [], 'verify': 'alone', 'why_alone': 'w'}}, 'group_after': {'g1': ['g2']}} with open group g1, the same write_new call leaves entry '7' == {'depends_on': []} and group_after == {'g1': ['g2']}.",
+    "3: tests_devloop/loop_harness.py LoopCase.add keeps dag.json's other top-level keys the same way, so a fixture may write group_after before adding tickets; existing callers see no difference (they set no other key).",
+    "4: devloop/README.md, the opener paragraph's clause '`dag.json` keeps only `depends_on`', adds that the file's other top-level keys (`first_ticket_id`, `group_after`) are kept."
+  ],
+  "needs_verifier": false,
+  "complexity": "simple",
+  "token_estimate": 400000,
+  "token_basis": "Calibrated on landed simple tickets without verifier: #129 cost 0.26M, #126 0.46M. Two one-line changes, one README clause, two short unit cases in an existing class.",
+  "vision": "目的與成功指標: 每張票需要我介入幾次 (down): without it every `actl new` erases the group order the main session set with `actl dag after`, and the user has to notice and set it again (inferred).",
+  "removes": "the silent loss of dag.json's top-level keys at every `actl new` (first_ticket_id is already gone from the live pool; group_after edges would vanish the same way); no gate or step is added.",
+  "id": "140",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-24T14:46:32Z",
+  "request": "# `actl dag` can change the order of groups (docs/DECISIONS.md D-099; follow-up of GitHub issue #16)\n\nThe user's ruling (2026-11-24, verbatim in D-099): 「Ok Dag 也要允許群組順序改動」. Read D-096, D-098 and D-099 first, and the `actl dag` code from #125 (devloop/dag_edit.py, devloop/core/dagedit.py) and #122 (devloop/core/chain.py). Tests go in tests_devloop/test_dag_edit.py and tests_devloop/test_chain.py using loop_harness.py; each case runs in seconds.\n\nWhy: in T (2026-11-24) groups g63, g70 and g78 had all their tickets merged into their int branches, so `actl dag dep` and `actl dag move` refused them (frozen, D-089), and the main session could not put them after the group of #320 as the owner wanted. The chain order comes only from ticket dependencies and creation order, so there was no way to say \"this group after that one\".\n\nWanted:\n1. A group-order edge kept in dag.json (a new field, e.g. `group_after: {\"g63\": [\"g88\"]}`), written only through the pool's validated write. core/chain.py builds the group graph from ticket dependencies plus these edges; the chain is a topological order of that graph with today's tie-break (created, then id).\n2. `actl dag after gA --add gB --reason \"...\"` puts group A after group B; `actl dag after gA --drop gB --reason \"...\"` removes an edge added this way (ticket dependencies are not touched). `--by` as the other `actl dag` commands (default main-session). The last stdout line is the chain after the change, like the other dag commands.\n3. Refused with one line, nothing written: A or B does not exist; A == B; A has started or finished its regression (a regression job running, or state verified, landed or cancelled); B is landed or cancelled (adding is pointless; dropping an existing edge to a landed B is allowed); the edge makes a cycle with the ticket dependencies or other edges; `--drop` of an edge that is not there. A group whose tickets are merged (state pr, or open with merged members) can be reordered: that is the point.\n4. Each change writes an event on both groups (who, why). When a group is moved behind another, nothing else changes now: when the earlier group lands, follow_main brings main into the later group's branch as today, and its regression runs after that (D-098).\n5. Edges to a group that lands or is cancelled stay in dag.json as history but no longer constrain the order. Pool validation refuses a dag.json whose group edges make a cycle.\n6. The board's DAG view and the idle/chain pages show the order as computed (no board action to change it, D-096). Document `actl dag after` in devloop/README.md next to `actl dag dep/move`, and add one line to CLAUDE.md 「怎麼做事」 after the `actl dag move` line: 「把整組排到另一組後面是 `actl dag after gA --add gB --reason \"…\"`(票已合入的組也可以)」.\n- removes: the main session's inability to set the order of groups whose tickets are merged.\n- Out of scope: the board offering this action; reordering a group that has started its regression.\n",
+  "feedback": [],
+  "cases": null,
+  "group": "g11",
+  "history": [
+    {
+      "at": "2026-11-24T14:46:32Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 238.86666666666667,
+      "at": "2026-11-24T14:46:29Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-24T143432Z-a1",
+      "input_tokens": 36,
+      "output_tokens": 24438,
+      "cache_read_tokens": 2044917,
+      "cache_write_tokens": 54492,
+      "usd": 1.3338234666666666,
+      "session_id": "d8d26c57-33f3-4179-84d1-becb86205d83",
+      "split_over": [
+        "139",
+        "140",
+        "141"
+      ]
+    }
+  ]
+}
