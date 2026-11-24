@@ -18,7 +18,12 @@
     {
       "at": "2026-11-24T03:00:46Z",
       "event": "branch int/g7 made from main 5564e9b5086b"
+    },
+    {
+      "at": "2026-11-24T03:26:42Z",
+      "event": "main moved to 1891a2582102: merged it into int/g7"
     }
   ],
-  "base": "5564e9b5086bad099feabad440a6477d3edc18d7"
+  "base": "5564e9b5086bad099feabad440a6477d3edc18d7",
+  "main_tried": "1891a258210268f393a9d70106c4b6daad9d7906"
 }
