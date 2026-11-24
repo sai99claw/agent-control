@@ -22,7 +22,7 @@
   "vision": "VISION 「一張需求從頭到尾」 items 4-8 (workers write on their group's branch; the group's regression judges only that group's work) and D-098. Metrics: 一次就過測試的比例 up - a moved or retried ticket no longer brings an earlier group's unverified commits into its group's regression, and a retried worker no longer writes on a base its group has left behind; 每張票需要我介入幾次 down - T's #320 needed the main session to untangle a moved ticket's branch by hand, and D-097 3 makes moving tickets the main session's normal tool. Size: every moved or readied ticket (several per week in T's pool around issue #16; inferred).",
   "removes": "The stale ticket base: today t/<N>, once made, keeps its base for life (core/gitx.py Git.worktree reuses an existing branch as it is) and catches up only by merging its target at step 6, so a moved ticket carries its old group's unverified commits into the new group (measured: five.txt and six.txt reached main). Also removes the worker's own catching up with its group's branch before it starts.",
   "id": "137",
-  "state": "ready",
+  "state": "running",
   "round": 0,
   "created": "2026-11-24T14:34:18Z",
   "request": "# New work starts from the latest verified point (docs/DECISIONS.md D-098; follow-up of GitHub issue #16)\n\nThe user's rule (2026-11-24, verbatim in D-098): 「反正我希望group 跑完驗證後 新的實作 都是基於那個點 ，後續的commit 都要先rebase 或是基於最新驗證過的點往後寫， 這是我的大原則」. Read D-097 and D-098 first, and the open tickets #134 #135 #136 (group g11), which change what happens to a stuck ticket's group; place this work so it does not conflict with them (core/chain.py; depend on them where it touches the same code). Tests go in the area's own test file in tests_devloop/ using loop_harness.py; each case runs in seconds.\n\nWhat the main session read in the code (inference, not measured; measure it first and write what you find in the ticket):\n- devloop/core/gitx.py `Git.worktree(path, branch, start)`: when the branch t/N already exists it is checked out as it is; `start` is used only for a new branch. devloop/ticket_issuer.py `go()` calls it with start=target once, then runs rounds; the ticket branch takes in the target only at the end of a round (step 6, \"take in the latest target ... move the target\").\n- So a retried ticket (stuck, then readied) and a ticket moved to another group (`actl dag move`, `actl new --revise` with a dag part, D-097's ungrouped ticket later placed) keep the base they were made from. A worker writes on an old base, and for a moved ticket the old group's commits that were never verified come along when it merges into its new group (T: #320's branch was made from g63's int branch, then #320 was put in g88).\n\nWanted:\n1. Before every round's agent starts (worker, and the verifier's cases branch where it has one), the ticket branch is rebased onto the current head of its target (the group's int branch, which already takes main when a group lands: ticket_controller.py follow_main). Only the ticket's own commits are replayed: the commits on t/N (and t/N-cases) that are not on the base it was last put on. Record that base on the ticket (e.g. `base` sha written when the branch is made or rebased) so a later rebase can use `git rebase --onto <target> <base>`; for a branch made before this change with no recorded base, use the merge-base with the branch's old target if it is known, else with the new target.\n2. A ticket that changes group (any path) or comes back to ready after stuck: at its next round its branch is rebased onto the new target with only its own commits (as 1); commits of the old group that are not on the new target never reach it. If the ticket's own commits include merges of its old target (step 6 of an earlier round), those merges are not replayed.\n3. A rebase with conflicts is aborted and handled like today's merge conflict when taking in the target: the worker gets the conflict to resolve on a branch that starts from the new target, and the round counts as a conflict round (free, as today). Never force anything onto the target or main; only t/N and t/N-cases are rewritten (they are devloop's own branches, nobody else's checkout).\n4. The fixer (auto_fixer on a group's int branch) already works on the group's branch after follow_main; check that a fix round starts only after the group's branch has taken in the latest main (follow_main ran for that main sha), and say in the ticket whether that already holds.\n5. Document in devloop/README.md: \"every round starts from the latest verified point\" with what is rebased, when, and what happens on conflict.\n- removes: work on a stale base; a moved ticket carrying another group's unverified commits.\n- Out of scope: rebasing int branches (they keep merging main; they are shared by the group's tickets); changing how a group lands.\n",
@@ -33,6 +33,11 @@
     {
       "at": "2026-11-24T14:34:18Z",
       "event": "opened"
+    },
+    {
+      "at": "2026-11-24T14:34:24Z",
+      "event": "dispatched",
+      "target": "int/g11"
     }
   ],
   "cost": [
@@ -57,5 +62,8 @@
         "138"
       ]
     }
-  ]
+  ],
+  "target": "int/g11",
+  "run": null,
+  "claimed_at": "2026-11-24T14:34:24Z"
 }
