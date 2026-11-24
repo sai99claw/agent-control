@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When an acceptance example applies a ruling's predicate, check its edge fixtures (a lone member, an empty set of others) against the predicate's literal reading before writing the expected outcome: 'all other members are done' is true when there are none.",
+  "source": "#136 revise (opener)",
+  "at": "2026-11-24T14:48:33Z"
+}
