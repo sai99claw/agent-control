@@ -243,14 +243,13 @@ class GroupFollowUnits(LoopCase):
 
     def test_adoption_leaves_a_group_that_is_not_open(self):
         self.add(1, group="g1", target="int/g1")
-        self.group("g1", ["1"], state="stuck")
+        self.group("g1", ["1"], state="pr")
         c = self.ctl()
-        self.assertEqual(c.adopt(self.snap()), ["1"])
-        snap = self.snap()
-        self.assertEqual(snap.groups["g1"]["members"], [])
-        self.assertEqual(snap.groups["g2"]["members"], ["1"])
-        self.assertEqual((snap.tickets["1"]["group"], snap.tickets["1"].get("target")), ("g2", None))
         self.assertEqual(c.adopt(self.snap()), [])
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["members"], ["1"])
+        self.assertNotIn("g2", snap.groups)
+        self.assertEqual(snap.tickets["1"]["group"], "g1")
 
     def test_a_member_added_before_the_update_keeps_the_group_open(self):
         self.add(1, state="stuck", group="g1")
@@ -821,6 +820,43 @@ class T24Acceptance(LoopCase):
         res = self.run_py("tickets.py", "list", "--all")
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertTrue([ln for ln in res.stdout.splitlines() if ln.split()[:1] == ["g1"]], res.stdout)
+
+
+class NoGroupPlacementUnits(LoopCase):
+    """D-097 3 internals: a ticket that has a group field but no open group is not adopted."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.started, c.issued = [], []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
+        return c
+
+    def test_ticket_that_left_a_group_is_not_adopted_and_has_an_idle_line(self):
+        self.add(1, group=None)
+        self.assertEqual(self.ctl().adopt(self.snap()), [])
+        snap = self.snap()
+        self.assertNotIn("g1", snap.groups)
+        import ticket_controller
+        self.assertEqual(ticket_controller.idle_lines(snap), [
+            "#1 ready, has no open group: waits for the main session to place it (actl dag move 1 --to gK|new)"])
+
+    def test_ticket_without_a_group_field_is_still_adopted(self):
+        self.add(1)
+        self.assertEqual(self.ctl().adopt(self.snap()), ["1"])
 
 
 class T86Acceptance(LoopCase):

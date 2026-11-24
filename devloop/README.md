@@ -37,7 +37,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + quick, if 
 | `python3 devloop/tickets.py inbox` / `ack P [--by NAME]` | pages: created, landed, decision, env, cancelled, idle; `--by` sets acked_by and, for a page whose ref is a ticket or group, writes a 'page acknowledged' event on it (`ack --all --by NAME` only sets acked_by); a page with options also prints its question, each option with the command it runs, and the recommendation |
 | `python3 devloop/tickets.py wait [--timeout S] [--kind K,...]` | block until a page arrives that was not in the inbox at its start (new = not there then, not acked, kind listed in `--kind`), print it as inbox does, exit 0; exit 1 after `--timeout S` with no new page; exit 2 for a bad kind, a timeout <= 0 or no pool |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
-| `python3 devloop/tickets.py ready N [--by NAME] [--page P]` | after deciding on a stuck ticket |
+| `python3 devloop/tickets.py ready N [--by NAME] [--page P]` | after deciding on a stuck ticket (one without an open group must then be placed with `actl dag move`) |
 | `python3 devloop/tickets.py ready gN` `[--note "..."] [--by NAME] [--page P] [--via main|web]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling (`--via web` marks a note sent from the board: the fixer gets it cleaned and wrapped behind the injection check, like web text for the opener); `--by` names who gave the answer on the events and `--page` acks that page in the same write |
 | `python3 devloop/tickets.py cancel N --why ... [--by NAME] [--page P]` | drop a ticket |
 | `python3 devloop/tickets.py release gN [--again] [--by NAME] [--page P]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page; `--by` is stored on the 'release re-run' event and `--page` acks that page in the same write (a refused re-run writes nothing) |
@@ -124,7 +124,8 @@ group with no members left is cancelled. Existing pools: a ready
 ticket written before this change has no group and gets a group of its own at the end of the chain,
 one group each, in ticket order, once its dependencies allow (each is landed, running, merged, or
 ready in an open group; first event `opened for #N, which had no open group`), so nothing is lost;
-the same holds for a ticket that left its group. The group-size setting and the DAG's `verify` are
+only those are adopted: a ticket that left its group, or whose group is not open, waits for
+`actl dag move N --to gK|new` (D-097 3; the idle page says so). The group-size setting and the DAG's `verify` are
 gone; a config or `dag.json` that still has them is accepted.
 
 Groups form one chain (issue #6), ordered by the DAG (issue #13), so a group id is only a name.

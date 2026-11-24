@@ -19,8 +19,10 @@ Each tick, in this order:
                     fix ticket (none while one opened this way is still open) and runs once
                     more on the same sha, and that run decides the page
   3. dispatch     - a ticket's group is written when it is opened; the controller only follows
-                    it. A ready ticket with no open group gets a group of its own at the end of
-                    the chain once its dependencies can still come (adoption); a ready ticket
+                    it. A ready ticket written before groups existed (no 'group' field) gets a
+                    group of its own at the end of the chain once its dependencies can still
+                    come (adoption); one that left a group or whose group is not open waits
+                    for the main session (actl dag move); a ready ticket
                     is started only in its own open group, once its dependencies are in its
                     starting point (landed, or merged into the same integration branch) and,
                     with a landed one, the branch has main or does not exist yet (it is then
@@ -92,6 +94,9 @@ def idle_lines(snap):
         if state == "stuck":
             stuck = t.get("stuck") or {}
             out.append("#%s stuck (%s): %s" % (ident, stuck.get("reason") or "?", _first_line(stuck.get("text"))))
+        elif state == "ready" and "group" in t and (snap.groups.get(t.get("group") or "") or {}).get("state") != "open":
+            out.append("#%s ready, has no open group: waits for the main session to place it (actl dag move %s --to gK|new)"
+                       % (ident, ident))
         elif state == "ready":
             waits = []
             for d in dagmod.deps(snap.dag, ident):
@@ -1026,13 +1031,11 @@ class Controller:
 
     @staticmethod
     def adoptable(data, ident):
-        """A ready ticket with no open group whose every dependency is landed, running or merged,
-        or ready and a member of an open group."""
+        """A ready ticket written without a 'group' field (before groups existed) whose every
+        dependency is landed, running or merged, or ready and a member of an open group. A ticket
+        that left a group, or whose group is not open, waits for the main session (D-097 3)."""
         t = data.tickets.get(ident) or {}
-        if t.get("state") != "ready":
-            return False
-        own = data.groups.get(t.get("group") or "")
-        if own and own.get("state") == "open":
+        if t.get("state") != "ready" or "group" in t:
             return False
         for d in dagmod.deps(data.dag, ident):
             dt = data.tickets.get(d)
