@@ -589,6 +589,130 @@ class T12Acceptance(LoopCase):
                 self.full_result("int-g2", {"schema": 1, "command": "full", "seconds": 30}, 3600)
                 self.assertIn("The project's last full run took 30 seconds.", self.opener_prompt())
 
+class T127Acceptance(LoopCase):
+    """#127 acceptance 4 (a)-(e) (the test_plan's ReviseDagAcceptance): a revised hand-in's 'dag' part
+    changes the ticket's depends_on and group. The creator is fake_agent.py's 'revised_dag' action,
+    which hands in json.loads($FAKE_REVISE_DAG) as 'dag'. Expected values come from the ticket text."""
+
+    STAMP = "2026-11-24T00:00:00Z"
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        self.plan(creator={"1": ["revised_dag"]})
+
+    # ------------------------------------------------------------ helpers
+
+    def groups(self, **groups):
+        """groups: gid=[members], each written raw as an open group."""
+        def change(tx):
+            for gid, members in groups.items():
+                tx.put_group({"id": gid, "branch": "int/" + gid, "state": "open", "members": list(members),
+                              "fix_round": 0, "job": None, "created": self.STAMP})
+        self.pool.update(change, "test: groups")
+
+    def setup_two(self, state1="stuck", deps1=(), **extra1):
+        """#1 in open g1 (stuck by default), ready #2 in open g2."""
+        self.groups(g1=["1"], g2=["2"])
+        if state1 == "stuck":
+            extra1.setdefault("stuck", {"reason": "decision", "text": "x"})
+        self.add(2, group="g2", target="int/g2")
+        self.add(1, deps=deps1, state=state1, group="g1", target="int/g1", **extra1)
+
+    def revise(self, dag, *args):
+        self.env["FAKE_REVISE_DAG"] = json.dumps(dag)
+        return self.run_py("ticket_creator.py", "--revise", "1", *args)
+
+    def main_revise(self, dag):
+        return self.revise(dag, "--from", "main", "--decision", "revise", "--reason", "x")
+
+    def ok(self, res):
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def failed(self, res, *needles):
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn("REVISE FAILED", res.stdout, res.stdout + res.stderr)
+        for n in needles:
+            self.assertIn(n, res.stdout, res.stdout + res.stderr)
+
+    def ticket(self):
+        return self.snap().ticket("1")
+
+    @staticmethod
+    def without_history(t):
+        return {k: v for k, v in t.items() if k != "history"}
+
+    # ------------------------------------------------------------ (a)
+
+    def test_a_main_revise_sets_depends_on_and_reorders_the_chain(self):
+        from core import chain
+        self.setup_two()
+        self.ok(self.main_revise({"depends_on": ["2"]}))
+        snap = self.snap()
+        t = snap.ticket("1")
+        self.assertEqual(t.get("state"), "ready", t)
+        self.assertEqual(t.get("acceptance"), ["a possible thing"])
+        self.assertEqual(dagmod.deps(snap.dag, "1"), ["2"])
+        events = [h for h in t.get("history") or [] if h.get("event") == "dag: depends on #2"]
+        self.assertTrue(events, t.get("history"))
+        self.assertEqual([h.get("by") for h in events], ["opener"], events)
+        self.assertEqual(chain.order(snap), ["g2", "g1"])
+
+    # ------------------------------------------------------------ (b)
+
+    def test_b_main_revise_moves_the_ticket_to_a_new_group(self):
+        self.setup_two()
+        self.ok(self.main_revise({"group": "new"}))
+        snap = self.snap()
+        t = snap.ticket("1")
+        self.assertEqual(t.get("state"), "ready", t)
+        self.assertEqual(t.get("acceptance"), ["a possible thing"])
+        self.assertEqual(t.get("group"), "g3", t)
+        self.assertIn("g3", snap.groups)
+        self.assertEqual(snap.groups["g3"].get("members"), ["1"])
+
+    # ------------------------------------------------------------ (c)
+
+    def test_c_a_missing_dependency_is_refused_and_writes_nothing_of_the_revision(self):
+        self.setup_two()
+        before = self.snap()
+        t0, dag0 = before.ticket("1"), dict(before.dag.get("1") or {})
+        res = self.main_revise({"depends_on": ["9"]})
+        self.failed(res, "#9 does not exist")
+        after = self.snap()
+        t1 = after.ticket("1")
+        self.assertEqual(self.without_history(t1), self.without_history(t0))
+        self.assertEqual(t1.get("state"), "stuck")
+        self.assertEqual(dict(after.dag.get("1") or {}), dag0)
+        old = t0.get("history") or []
+        new = t1.get("history") or []
+        self.assertEqual(new[:len(old)], old)
+        self.assertEqual([h.get("event") for h in new[len(old):]], ["user answer"], new[len(old):])
+
+    # ------------------------------------------------------------ (d)
+
+    def test_d_a_mentioned_dependency_may_be_dropped_by_the_opener(self):
+        self.setup_two(deps1=["2"], objective="o, after #2")
+        self.ok(self.main_revise({"depends_on": []}))
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1").get("state"), "ready")
+        self.assertEqual(dagmod.deps(snap.dag, "1"), [])
+
+    # ------------------------------------------------------------ (e)
+
+    def test_e_a_worker_revision_with_a_dag_part_is_refused(self):
+        self.setup_two(state1="running")
+        before = self.snap()
+        t0, dag0 = before.ticket("1"), dict(before.dag.get("1") or {})
+        res = self.revise({"depends_on": []}, "--from", "worker", "--reason", "x")
+        self.failed(res, "#1 is running")
+        after = self.snap()
+        t1 = after.ticket("1")
+        self.assertEqual(self.without_history(t1), self.without_history(t0))
+        self.assertEqual(dict(after.dag.get("1") or {}), dag0)
+
+
 class LastFullSecondsUnit(unittest.TestCase):
     """limits_section / last_full_seconds helpers of ticket_creator."""
 

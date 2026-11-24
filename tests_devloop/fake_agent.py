@@ -249,6 +249,9 @@ elif role == "creator":
               "note": "dropped item 2"})
         if action == "revised_hold":
             time.sleep(20)
+    elif action == "revised_dag":   # #127: a revised hand-in that also changes the DAG ($FAKE_REVISE_DAG)
+        hand({"kind": "revised", "ticket": {"acceptance": ["a possible thing"]}, "cases_wrong": False,
+              "note": "dag changed", "dag": json.loads(os.environ["FAKE_REVISE_DAG"])})
     elif action == "one_ticket":   # issue #1: exactly one ticket
         hand({"kind": "tickets",
               "tickets": [{"key": "new-1", "title": "fix", "objective": "o", "acceptance": ["a"],
