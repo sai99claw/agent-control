@@ -182,8 +182,9 @@ missing and never deleted. The devloop process that started the run holds the lo
 background process an agent leaves behind keeps no slot, and a process that dies frees its slot.
 An agent and an issuer wait for a slot without a limit: the wait does not count against their
 own limit (the agent's timeout, `issuer_timeout_seconds`), whose time counts from when the slot
-is taken. A regression's wait still counts against `regression_timeout_seconds`
-("unmeasured" when no slot comes free in time).
+is taken. A regression waits for its slot at most `regression_timeout_seconds`
+("unmeasured" when no slot comes free in time) and its run gets `regression_timeout_seconds` from when the slot is taken;
+the wait reuses that setting because another group's regression runs at most `regression_timeout_seconds` once it has the machine, so the wait is long enough for it to finish.
 Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file) in the
 environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
 `ticket_creator.py --revise`). `run_tests.py` outside a slot (the opener's way to run tests) takes
@@ -196,8 +197,8 @@ script). The mark is a `flock` LOCK_EX on `<worktrees>/slots/exclusive`, held by
 from the moment it starts waiting until it has released every slot; with it held, the regression
 takes every `slot-<i>`, waiting for each, then runs preflight and `full`. Every other taker needs a
 LOCK_SH on that file, only while it takes its slot; its wait for it is a slot wait (no limit for
-an agent or an issuer, its time limits count from when the slot is taken). The whole wait counts against `regression_timeout_seconds` ("unmeasured" when the
-machine is not free in time), and a regression that dies leaves nothing locked. Nested runs
+an agent or an issuer, its time limits count from when the slot is taken). A regression waits for the whole machine at most `regression_timeout_seconds` ("unmeasured" when the
+machine is not free in time) and its run gets `regression_timeout_seconds` from when the machine is taken, and a regression that dies leaves nothing locked. Nested runs
 (`DEVLOOP_SLOT` set) do not touch the mark.
 
 ## Roles

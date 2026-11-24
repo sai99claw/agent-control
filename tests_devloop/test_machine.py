@@ -889,6 +889,19 @@ class T30Acceptance(LoopCase):
         self.assertEqual((t["state"], t["round"]), ("landed", 1), t.get("stuck") or t.get("history"))
 
 
+class RegressionWaitReadme(LoopCase):
+    def test_the_slot_section_gives_the_run_its_own_time_from_the_slot(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        flat = " ".join(text.split("## Machine slots", 1)[1].split("\n## ", 1)[0].split())
+        for words in ("A regression waits for its slot at most `regression_timeout_seconds`",
+                      "its run gets `regression_timeout_seconds` from when the slot is taken",
+                      "from when the machine is taken",
+                      "another group's regression runs at most `regression_timeout_seconds`"):
+            self.assertIn(words, flat)
+        self.assertNotIn("still counts against `regression_timeout_seconds`", flat)
+
+
 class T116Acceptance(LoopCase):
     """Ticket #116 (issue #7): the opener and memory consolidation start without a machine slot;
     run_tests.py outside a slot never waits for one."""
@@ -1049,7 +1062,7 @@ class T116Acceptance(LoopCase):
         for words in ("creator", "consolidator_peer", "machine busy",
                       "agent", "red check", "regression", "slots/slot-", "own limit", "DEVLOOP_SLOT",
                       "parent's slot", "wait for a slot without a limit", "from when the slot is taken",
-                      "still counts against `regression_timeout_seconds`", "regression_exclusive",
+                      "A regression waits for its slot at most `regression_timeout_seconds`", "regression_exclusive",
                       "slots/exclusive", "needs `machine_slots`"):
             self.assertIn(words, flat)
         self.assertNotIn('"no slot"', flat)
@@ -1209,7 +1222,7 @@ class MachineSlots(LoopCase):
         self.assertNotIn('"no slot"', flat)
         self.assertIn("wait for a slot without a limit", flat)
         self.assertIn("from when the slot is taken", flat)
-        self.assertIn("still counts against `regression_timeout_seconds`", flat)
+        self.assertIn("A regression waits for its slot at most `regression_timeout_seconds`", flat)
 
     def test_take_without_a_deadline_waits_until_the_slot_is_freed(self):
         import threading

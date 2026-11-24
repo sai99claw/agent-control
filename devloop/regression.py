@@ -8,8 +8,9 @@ full does not run. An unusable environment is not red: it is reported as "env" a
 to fix code for it.
 
 Holds one machine slot (devloop.machine_slots) from before preflight until full has ended, or with
-devloop.regression_exclusive the whole machine (the gate and every slot); the wait, quick and full
-all count against regression_timeout_seconds.
+devloop.regression_exclusive the whole machine (the gate and every slot); the wait for it is
+limited by regression_timeout_seconds, and the run gets its own regression_timeout_seconds from
+when the slot (or the machine) is taken: preflight, quick, full and the rerun share it.
 
 A red quick or full with 1 to RERUN_AT_MOST (5) failing rows gets one second look: exactly those
 ids run once more with the project's `run <ids>` (one call, same worktree, same slot, within the
@@ -74,7 +75,7 @@ def verify(cfg, branch, out_path):
                                   "failures": [], "flaky": [], "at": osx.now()})
         return CODES[testrun.UNMEASURED]
     try:
-        return _verify(cfg, repo, branch, sha, out_path, began + cfg.regression_timeout_seconds)
+        return _verify(cfg, repo, branch, sha, out_path, time.time() + cfg.regression_timeout_seconds)
     finally:
         slot.release()
 
@@ -117,7 +118,8 @@ def _verify(cfg, repo, branch, sha, out_path, deadline):
     summary, flaky = None, []
     try:
         put_live(cfg, branch, sha, out_path, "preflight")
-        result = testrun.run(cfg, tree, "preflight", timeout=600,
+        result = testrun.run(cfg, tree, "preflight",
+                             timeout=max(1, min(600, deadline - time.time())),
                              keep_dir=os.path.join(logs, "preflight"))
         if result.status == testrun.RED:   # preflight has no "red": treat as environment
             result = testrun.Outcome(testrun.ENV, detail="preflight failed", log_dir=result.log_dir)
