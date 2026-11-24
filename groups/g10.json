@@ -1,7 +1,7 @@
 {
   "id": "g10",
   "branch": "int/g10",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "130",
     "131",
@@ -39,9 +39,16 @@
     {
       "at": "2026-11-24T14:22:18Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-24T14:22:24Z",
+      "event": "landed (release failed)"
     }
   ],
   "base": "52bb7cd4cd8f0b1556e46c4fc2be3d72409b2ab5",
   "last_regression": "green",
-  "verified_sha": "e8434a0b89b25e701c9795b29ccbab7bfd93dae0"
+  "verified_sha": "e8434a0b89b25e701c9795b29ccbab7bfd93dae0",
+  "landed_sha": "e8434a0b89b25e701c9795b29ccbab7bfd93dae0",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g10.log"
 }
