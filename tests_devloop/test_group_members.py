@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from loop_harness import HOME, LOOP, LoopCase, git  # noqa: E402,F401
@@ -253,3 +254,142 @@ class T118Acceptance(LoopCase):
             text = fh.read()
         self.assertIn("a group of its own at the end of the chain", text)
         self.assertNotIn("max_group_size", text)
+
+
+class T134Acceptance(LoopCase):
+    """#134 (D-097): an open group with a stuck member waits for the decision on it unless nothing
+    needs it. Expected values come from D-097 and the ticket text, never from the code."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def group(self, gid, members, state="open", branch=False, **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": state, "members": list(members),
+             "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z", "history": []}
+        g.update(fields)
+        if branch:
+            git(self.proj, "branch", "int/" + gid, "main")
+        self.pool.update(lambda tx: tx.put_group(g), "test: group %s" % gid)
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.started, c.issued = [], []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
+        return c
+
+    def advance(self):
+        c = self.ctl()
+        self.assertTrue(hasattr(c, "advance_groups"), "Controller has no advance_groups")
+        c.advance_groups(self.snap())
+        return self.snap()
+
+    @staticmethod
+    def item_lines(text):
+        return [ln for ln in text.splitlines() if ln.startswith("#") or ln.startswith("g")]
+
+    # ------------------------------------------------------------ acceptance 1
+
+    def test_a_dependent_member_holds_the_group_for_the_decision(self):
+        self.add(1, state="stuck", group="g1", target="int/g1")
+        self.add(2, deps=[1], group="g1", target="int/g1")
+        self.group("g1", ["1", "2"])
+        snap = self.advance()
+        g1 = snap.groups["g1"]
+        self.assertEqual((g1.get("state"), g1.get("members")), ("open", ["1", "2"]), events(g1))
+        t2 = snap.ticket("2")
+        self.assertEqual((t2.get("group"), t2.get("target")), ("g1", "int/g1"), t2)
+        self.assertFalse([e for e in events(g1) if e and e.startswith("member #2 left")], events(g1))
+
+    # ------------------------------------------------------------ acceptance 2
+
+    def test_a_dependent_in_a_later_group_holds_the_group_and_stays_in_its_own(self):
+        self.add(1, state="stuck", group="g1", target="int/g1")
+        self.add(2, state="merged", group="g1", target="int/g1")
+        self.add(3, deps=[1], group="g2", target="int/g2")
+        self.group("g1", ["1", "2"])
+        self.group("g2", ["3"])
+        snap = self.advance()
+        g1, g2 = snap.groups["g1"], snap.groups["g2"]
+        self.assertEqual((g1.get("state"), g1.get("members")), ("open", ["1", "2"]), events(g1))
+        self.assertEqual(g2.get("state"), "open", events(g2))
+        self.assertIn("3", g2.get("members"), events(g2))
+
+    # ------------------------------------------------------------ acceptance 3
+
+    def test_a_stuck_member_nothing_needs_leaves_and_the_group_goes_on(self):
+        self.add(1, state="stuck", group="g1", target="int/g1")
+        self.add(2, state="merged", group="g1", target="int/g1")
+        self.group("g1", ["1", "2"])
+        snap = self.advance()
+        t1 = snap.ticket("1")
+        self.assertIsNone(t1.get("group"), t1)
+        self.assertIsNone(t1.get("target"), t1)
+        g1 = snap.groups["g1"]
+        self.assertEqual((g1.get("members"), g1.get("state")), (["2"], "pr"), events(g1))
+        self.assertIn("member #1 left: stuck, nothing depends on it and the rest of g1 is merged (D-097)",
+                      events(g1))
+
+    # ------------------------------------------------------------ acceptance 4
+
+    def test_an_unfinished_member_that_cannot_start_holds_the_group(self):
+        self.add(1, state="stuck", group="g1", target="int/g1")
+        self.add(2, deps=[9], group="g1", target="int/g1")
+        self.group("g1", ["1", "2"])
+        snap = self.advance()
+        g1 = snap.groups["g1"]
+        self.assertEqual((g1.get("state"), g1.get("members")), ("open", ["1", "2"]), events(g1))
+        self.assertEqual(snap.ticket("2").get("group"), "g1")
+
+    # ------------------------------------------------------------ acceptance 5
+
+    def test_a_stuck_member_alone_holds_the_group(self):
+        self.add(1, state="stuck", group="g1", target="int/g1")
+        self.group("g1", ["1"])
+        snap = self.advance()
+        g1 = snap.groups["g1"]
+        self.assertEqual((g1.get("state"), g1.get("members")), ("open", ["1"]), events(g1))
+        self.assertEqual(snap.ticket("1").get("group"), "g1")
+
+    # ------------------------------------------------------------ acceptance 6
+
+    def test_a_run_whose_group_waits_for_a_decision_ends_with_one_idle_page(self):
+        self.add(1)
+        self.plan(worker={"1": ["blocked"]})
+        res = self.controller(timeout=60)
+        self.assertEqual(res.returncode, 0, res.stdout[-2000:] + res.stderr[-2000:])
+        self.assertEqual(self.state(1), "stuck")
+        idle = [r for r in self.snap().inbox.values() if r.get("kind") == "idle"]
+        self.assertEqual(len(idle), 1, self.inbox_kinds())
+        self.assertEqual(self.item_lines(idle[0]["text"]),
+                         ["#1 stuck (decision): need the user", "g1 waits for the decision on #1"],
+                         idle[0]["text"])
+
+    # ------------------------------------------------------------ acceptance 7
+
+    def test_a_stuck_ticket_made_ready_lands_in_the_group_it_held(self):
+        self.add(1)
+        self.plan(worker={"1": ["blocked", "ok"]})
+        res = self.controller(timeout=60)
+        self.assertEqual(res.returncode, 0, res.stdout[-2000:] + res.stderr[-2000:])
+        self.assertEqual(self.state(1), "stuck")
+        res = self.run_py("tickets.py", "ready", "1")
+        self.assertEqual(res.returncode, 0, res.stdout[-2000:] + res.stderr[-2000:])
+        t1 = self.snap().ticket("1")
+        self.assertEqual((t1.get("group"), t1.get("target")), ("g1", "int/g1"), t1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout[-2000:] + res.stderr[-2000:])
+        snap = self.snap()
+        self.assertEqual(self.state(1), "landed", snap.ticket("1").get("history"))
+        self.assertEqual(snap.ticket("1").get("group"), "g1")
+        self.assertEqual(set(snap.groups), {"g1"})
