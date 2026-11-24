@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "Before writing a ticket that changes how groups, rounds or pages behave, grep docs/DECISIONS.md for the rule it changes and read git log of that file during the run: a request can reverse a ratified rule without saying so, and the main session may record the user's ruling while the opener is still working.",
+  "source": "request (opener)",
+  "at": "2026-11-24T14:05:57Z"
+}
