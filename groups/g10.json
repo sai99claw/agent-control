@@ -15,6 +15,11 @@
     {
       "at": "2026-11-24T14:06:01Z",
       "event": "opened by the opener for #130, #131, #132, #133"
+    },
+    {
+      "at": "2026-11-24T14:06:40Z",
+      "event": "branch int/g10 made from main 52bb7cd4cd8f"
     }
-  ]
+  ],
+  "base": "52bb7cd4cd8f0b1556e46c4fc2be3d72409b2ab5"
 }
