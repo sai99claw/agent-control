@@ -328,7 +328,7 @@ def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None, origin
             if isinstance(node, dict):
                 node.pop("verify", None)
                 node.pop("why_alone", None)
-        tx.put_dag({"tickets": dag})
+        tx.put_dag(dict(tx.data.raw["dag"], tickets=dag))
         for ph in placeholders(result):
             members = [mapping[str(t["key"])] for t in result["tickets"]
                        if result["dag"][str(t["key"])]["group"] == ph]
