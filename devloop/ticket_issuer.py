@@ -2,14 +2,16 @@
 """ticket_issuer --id N --target int/gK : take one ticket from "running" to "merged".
 
 Started only by ticket_controller. Per round (at most devloop.max_rounds rounds that were not
-free - a round that ended on a merge conflict with the group, on a revision that threw out the
-verifier's cases, or on a blocked worker whose failing ids passed when devloop ran them is
+free - a round that ended on a merge conflict with the group (at step 6, or replaying the
+ticket's own commits at round start in step 0), on a revision that threw out the verifier's cases, or on a blocked worker whose failing ids passed when devloop ran them is
 free - and at most 2 x max_rounds rounds in all; whole run at most
 devloop.issuer_timeout_seconds (time waiting for a machine slot or for a usage limit to reset
 not counted)):
 
   0. t/<N>-cases and t/<N> are put on the target's current head with only the ticket's own
-     commits (uncommitted tracked changes committed first; branch_base and 'rebased', D-098)
+     commits (uncommitted tracked changes committed first; branch_base and 'rebased', D-098);
+     a replay that conflicts ends the round before any agent: the branch restarts at its start
+     point, its old head kept under refs/devloop/before-rebase/ ('rebase conflict')
   1. worker (+ verifier while the ticket has no cases yet) work in their own worktrees
   2. the verifier's branch is merged into the ticket branch
   3. hard_block check on what the ticket changes
@@ -244,7 +246,10 @@ class Issuer:
                                       start=self.repo.sha(self.target))
             except worktrees.SetupFailed as exc:
                 raise Stuck("env", str(exc))
-        t = self.rebase_round(t, r)
+        t, conflicts = self.rebase_round(t, r)
+        if conflicts:
+            self._free = "merge"
+            return "\n".join(conflicts), costs
         work = None if self.worker_ok else self.start("worker", "worker.md", t, r, self.wt)
         ver = self.start("verifier", "verifier.md", t, r, self.cwt) if need_cases else None
         hands = []
@@ -338,8 +343,10 @@ class Issuer:
         """Before a round's agents (D-098): t/<N>-cases and t/<N> are put on the target's current
         head with only the ticket's own commits replayed. Uncommitted tracked changes in their
         worktrees become a devloop commit first. Records branch_base and a 'rebased' event per
-        branch that moved; returns the ticket. When a replay fails both branches go back to the
-        heads they had right before it and nothing is recorded."""
+        branch that moved. Returns (ticket, conflicts): a branch whose replay stopped on a conflict
+        is kept under refs/devloop/before-rebase/ and set to its start point, with one 'rebase
+        conflict' event (a cases conflict also throws the cases out); conflicts is the feedback
+        text per such branch. Any other replay failure puts the branches back -> Stuck env."""
         self.owned(self.ticket())
         self.remake_tree(self.wt, self.branch)
         target = self.repo.sha(self.target)
@@ -364,7 +371,7 @@ class Issuer:
                 self.repo.worktree(throwaway, self.cases_branch)
         trees = [(self.cases_branch, cwt)] if has_cases else []
         trees.append((self.branch, self.wt))
-        heads, own, after = {}, {}, {}
+        heads, own, after, starts, conflicts = {}, {}, {}, {}, {}
         try:
             for branch, path in trees:
                 g = Git(path)
@@ -376,39 +383,85 @@ class Issuer:
                     g.run("commit", "-q", "-a", "-m", "devloop: uncommitted changes in %s at the "
                           "start of round %d" % (branch, r), env=who)
                 heads[branch] = g.sha("HEAD")
-            ok, why, start = True, "", target
+            failed, start = None, target
+            starts[self.branch] = (self.target, target)
             if has_cases:
-                own[self.cases_branch] = Git(cwt).own_commits(heads[self.cases_branch],
-                                                              exclude(self.cases_branch))
-                ok, why = Git(cwt).replay(target, own[self.cases_branch])
-                after[self.cases_branch] = Git(cwt).sha("HEAD")
-                if ok and self.repo.is_ancestor(heads[self.cases_branch], heads[self.branch]):
+                g = Git(cwt)
+                own[self.cases_branch] = g.own_commits(heads[self.cases_branch],
+                                                       exclude(self.cases_branch))
+                ok, why = g.replay(target, own[self.cases_branch])
+                after[self.cases_branch] = g.sha("HEAD")
+                starts[self.cases_branch] = (self.target, target)
+                if not ok and g.conflict:
+                    conflicts[self.cases_branch] = why
+                elif not ok:
+                    failed = why
+                elif self.repo.is_ancestor(heads[self.cases_branch], heads[self.branch]):
                     start = after[self.cases_branch]
-            if ok:
+                    starts[self.branch] = (self.cases_branch, start)
+            if failed is None:
                 more = [heads[self.cases_branch]] if has_cases else []
-                own[self.branch] = Git(self.wt).own_commits(heads[self.branch],
-                                                            exclude(self.branch, *more))
-                ok, why = Git(self.wt).replay(start, own[self.branch])
-                after[self.branch] = Git(self.wt).sha("HEAD")
-            if not ok and has_cases and after.get(self.cases_branch) != heads[self.cases_branch]:
-                # interim (D-098) until the conflict round: the cases branch goes back too
-                self.repo.move_ref(self.cases_branch, heads[self.cases_branch],
-                                   after[self.cases_branch])
-                if cwt != throwaway:
-                    Git(cwt).run("reset", "--hard", heads[self.cases_branch])
+                g = Git(self.wt)
+                own[self.branch] = g.own_commits(heads[self.branch], exclude(self.branch, *more))
+                ok, why = g.replay(start, own[self.branch])
+                after[self.branch] = g.sha("HEAD")
+                if not ok and g.conflict:
+                    conflicts[self.branch] = why
+                elif not ok:
+                    failed = why
+            if failed is not None:
+                if has_cases and after.get(self.cases_branch) != heads[self.cases_branch]:
+                    self.repo.move_ref(self.cases_branch, heads[self.cases_branch],
+                                       after[self.cases_branch])
+                    if cwt != throwaway:
+                        Git(cwt).run("reset", "--hard", heads[self.cases_branch])
+                raise Stuck("env", failed)
+            kept = {}
+            for branch, path in trees:
+                if branch in conflicts:
+                    kept[branch] = self.keep_head(branch, heads[branch], r)
+                    Git(path).run("reset", "--hard", starts[branch][1])
+                    after[branch] = starts[branch][1]
         finally:
             if cwt == throwaway:
                 self.repo.remove_worktree(throwaway)
-        if not ok:
-            return t
 
         def mutate(x):
             x["branch_base"] = dict(x.get("branch_base") or {}, **{b: target for b in heads})
             for b in heads:
-                if after[b] != heads[b]:
+                if b in conflicts:
+                    event(x, "rebase conflict", branch=b, onto=self.target, kept=kept[b])
+                elif after[b] != heads[b]:
                     event(x, "rebased", branch=b, onto=self.target, base=target,
                           replayed=len(own[b]))
-        return self.save(mutate, "rebased on %s" % self.target)
+            if self.cases_branch in conflicts:
+                x["cases"] = None
+        t = self.save(mutate, "rebased on %s" % self.target)
+        texts = []
+        if self.cases_branch in conflicts:
+            texts.append("merging the latest %s into %s failed (%s) at the start of round %d: the "
+                         "verifier's cases are kept at %s and the verifier writes them again "
+                         "from %s" % (self.target, self.cases_branch, conflicts[self.cases_branch],
+                                      r, kept[self.cases_branch], self.target))
+        if self.branch in conflicts:
+            name, sha = starts[self.branch]
+            texts.append("merging the latest %s into %s failed (%s) at the start of round %d: %s "
+                         "now starts at %s (%s) and its earlier commits are kept at %s; replay "
+                         "them with `git cherry-pick %s` (oldest first) and resolve the conflicts"
+                         % (self.target, self.branch, conflicts[self.branch], r, self.branch, name,
+                            sha[:12], kept[self.branch], " ".join(c[:12] for c in own[self.branch])))
+        return t, texts
+
+    def keep_head(self, branch, sha, r):
+        """Create refs/devloop/before-rebase/t<N>[-cases]-r<r> (first free '-2', '-3', ...) at
+        `sha`; returns the ref."""
+        name = "refs/devloop/before-rebase/t%s%s-r%d" % (
+            self.id, "-cases" if branch == self.cases_branch else "", r)
+        for n in range(1, 100):
+            ref = name if n == 1 else "%s-%d" % (name, n)
+            if self.repo.run("update-ref", ref, sha, "", check=False).ok:
+                return ref
+        raise Stuck("env", "could not create a ref under %s" % name)
 
     def blocked_check(self, work, text, ids):
         """A blocked worker named failing test ids: run them on the ticket branch. Green -> the
@@ -442,7 +495,8 @@ class Issuer:
                 if not ok:
                     self._free = "merge"
                     return ("merging the latest %s into %s failed (%s) - another ticket of "
-                            "this group changed the same files; merge %s yourself and resolve" % (
+                            "this group changed the same files; the next round starts on the "
+                            "latest %s and replays this ticket's own commits on it" % (
                                 self.target, self.branch, why, self.target))
                 failed = self.run_cases(t)
                 if failed:

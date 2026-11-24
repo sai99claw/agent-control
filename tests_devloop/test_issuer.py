@@ -1053,8 +1053,7 @@ class T11Acceptance(LoopCase):
 
 
 class RebaseRoundUnits(LoopCase):
-    """Issuer.rebase_round (D-098) called on its own: what it leaves alone and its interim
-    behaviour on a failed replay."""
+    """Issuer.rebase_round (D-098) called on its own: what it leaves alone."""
 
     def setUp(self):
         super().setUp()
@@ -1092,27 +1091,11 @@ class RebaseRoundUnits(LoopCase):
 
     def test_a_branch_already_on_its_start_with_only_its_own_commits_is_kept(self):
         head = self.side("t/1", "int/g1", "mine.txt", "m\n", "mine")
-        t = self.issuer().rebase_round(self.snap().ticket("1"), 1)
+        t, conflicts = self.issuer().rebase_round(self.snap().ticket("1"), 1)
+        self.assertEqual(conflicts, [])
         self.assertEqual(git(self.proj, "rev-parse", "t/1"), head)
         self.assertEqual(self.events("rebased"), [])
         self.assertEqual(t["branch_base"], {"t/1": self.target})
-
-    def test_a_failed_replay_puts_both_branches_back_and_records_nothing(self):
-        cases = self.side("t/1-cases", "main", "cases/c.txt", "case\n", "cases 1")
-        head = self.side("t/1", "main", "README.md", "mine\n", "work 1")
-        issuer = self.issuer(cases={"branch": "t/1-cases", "run": ["c"]})
-        before = self.snap().ticket("1")
-        t = issuer.rebase_round(before, 1)
-        self.assertEqual(git(self.proj, "rev-parse", "t/1"), head)
-        self.assertEqual(git(self.proj, "rev-parse", "t/1-cases"), cases)
-        wt = git(issuer.wt, "status", "--porcelain")
-        self.assertEqual(wt, "")
-        self.assertFalse(os.path.exists(os.path.join(git(issuer.wt, "rev-parse", "--git-dir"),
-                                                     "rebase-merge")))
-        self.assertNotIn("branch_base", self.snap().ticket("1"))
-        self.assertEqual(self.events("rebased"), [])
-        self.assertEqual(t, before)
-        self.assertFalse(os.path.exists(os.path.join(self.cfg.worktree_root, "rebase-t1-cases")))
 
     def test_uncommitted_changes_become_a_devloop_commit_that_is_replayed(self):
         self.side("t/1", "main", "mine.txt", "m\n", "work 1")
@@ -1634,6 +1617,144 @@ class RedCheck(LoopCase):
 
     def test_the_unnamed_message_points_at_result_json(self):
         self._round_two("unnamed", "result.json")
+
+
+class RebaseConflictUnits(LoopCase):
+    """Issuer.rebase_round (D-098, #138) when a replay fails: a conflict restarts the branch at
+    its start point and keeps its old head; any other failure is an environment stop."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+        from core.config import Config
+        self.sides = 0
+        self.target = self.side("int/g1", "main", "README.md", "group\n", "group work")
+        self.cfg = Config(self.proj)
+
+    side = RebaseRoundUnits.side
+    issuer = RebaseRoundUnits.issuer
+    events = RebaseRoundUnits.events
+
+    def clean(self, path):
+        self.assertEqual(git(path, "status", "--porcelain"), "")
+        gitdir = git(path, "rev-parse", "--absolute-git-dir")
+        self.assertFalse(os.path.exists(os.path.join(gitdir, "rebase-merge")))
+
+    def test_a_ticket_branch_conflict_restarts_it_at_the_target_and_keeps_its_head(self):
+        head = self.side("t/1", "main", "README.md", "mine\n", "work 1")
+        issuer = self.issuer()
+        main = git(self.proj, "rev-parse", "main")
+        t, conflicts = issuer.rebase_round(self.snap().ticket("1"), 3)
+        ref = "refs/devloop/before-rebase/t1-r3"
+        self.assertEqual(git(self.proj, "rev-parse", ref), head)
+        self.assertEqual(git(self.proj, "rev-parse", "t/1"), self.target)
+        self.assertEqual((git(self.proj, "rev-parse", "int/g1"), git(self.proj, "rev-parse", "main")),
+                         (self.target, main))
+        self.clean(issuer.wt)
+        self.assertEqual(t["branch_base"], {"t/1": self.target})
+        ev = self.events("rebase conflict")
+        self.assertEqual([(e["branch"], e["onto"], e["kept"]) for e in ev], [("t/1", "int/g1", ref)])
+        self.assertEqual(self.events("rebased"), [])
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0],
+                         "merging the latest int/g1 into t/1 failed (CONFLICT (content): Merge conflict "
+                         "in README.md) at the start of round 3: t/1 now starts at int/g1 (%s) and its "
+                         "earlier commits are kept at %s; replay them with `git cherry-pick %s` (oldest "
+                         "first) and resolve the conflicts" % (self.target[:12], ref, head[:12]))
+        self.assertTrue(conflicts[0].startswith("merging the latest "))
+        self.assertIn(" failed (", conflicts[0])
+
+    def test_a_taken_ref_name_gets_the_first_free_suffix(self):
+        head = self.side("t/1", "main", "README.md", "mine\n", "work 1")
+        name = "refs/devloop/before-rebase/t1-r1"
+        git(self.proj, "update-ref", name, "main")
+        git(self.proj, "update-ref", name + "-2", "main")
+        _, conflicts = self.issuer().rebase_round(self.snap().ticket("1"), 1)
+        self.assertEqual(git(self.proj, "rev-parse", name + "-3"), head)
+        self.assertEqual(self.events("rebase conflict")[0]["kept"], name + "-3")
+        self.assertIn(name + "-3", conflicts[0])
+
+    def test_a_cases_conflict_throws_the_cases_out_and_replays_the_ticket_on_the_target(self):
+        cases = self.side("t/1-cases", "main", "README.md", "case\n", "cases 1")
+        self.side("t/1", "t/1-cases", "mine.txt", "m\n", "work 1")
+        issuer = self.issuer(cases={"branch": "t/1-cases", "run": ["c"]})
+        t, conflicts = issuer.rebase_round(self.snap().ticket("1"), 1)
+        ref = "refs/devloop/before-rebase/t1-cases-r1"
+        self.assertEqual(git(self.proj, "rev-parse", ref), cases)
+        self.assertEqual(git(self.proj, "rev-parse", "t/1-cases"), self.target)
+        self.assertEqual(git(self.proj, "log", "--format=%s", self.target + "..t/1").splitlines(),
+                         ["work 1"])
+        self.assertIsNone(t["cases"])
+        self.assertEqual(t["branch_base"], {"t/1": self.target, "t/1-cases": self.target})
+        self.assertEqual([e["branch"] for e in self.events("rebase conflict")], ["t/1-cases"])
+        self.assertEqual([e["branch"] for e in self.events("rebased")], ["t/1"])
+        self.assertEqual(conflicts, [
+            "merging the latest int/g1 into t/1-cases failed (CONFLICT (content): Merge conflict in "
+            "README.md) at the start of round 1: the verifier's cases are kept at %s and the verifier "
+            "writes them again from int/g1" % ref])
+        self.assertFalse(os.path.exists(os.path.join(self.cfg.worktree_root, "rebase-t1-cases")))
+
+    def test_a_ticket_conflict_after_replayed_cases_starts_at_the_cases_head(self):
+        self.side("t/1-cases", "main", "cases/c.txt", "case\n", "cases 1")
+        head = self.side("t/1", "t/1-cases", "README.md", "mine\n", "work 1")
+        issuer = self.issuer(cases={"branch": "t/1-cases", "run": ["c"]})
+        t, conflicts = issuer.rebase_round(self.snap().ticket("1"), 1)
+        start = git(self.proj, "rev-parse", "t/1-cases")
+        self.assertEqual(git(self.proj, "rev-parse", start + "^"), self.target)
+        self.assertEqual(git(self.proj, "rev-parse", "t/1"), start)
+        self.assertEqual(t["cases"], {"branch": "t/1-cases", "run": ["c"]})
+        self.assertEqual(t["branch_base"], {"t/1": self.target, "t/1-cases": self.target})
+        self.assertIn("t/1 now starts at t/1-cases (%s)" % start[:12], conflicts[0])
+        self.assertIn("`git cherry-pick %s`" % head[:12], conflicts[0])
+        self.clean(issuer.wt)
+
+    def test_both_branches_conflicting_give_two_texts(self):
+        self.side("t/1-cases", "main", "README.md", "case\n", "cases 1")
+        self.side("t/1", "main", "README.md", "mine\n", "work 1")
+        issuer = self.issuer(cases={"branch": "t/1-cases", "run": ["c"]})
+        _, conflicts = issuer.rebase_round(self.snap().ticket("1"), 1)
+        self.assertEqual(len(conflicts), 2)
+        self.assertIn("into t/1-cases failed (", conflicts[0])
+        self.assertIn("into t/1 failed (", conflicts[1])
+        self.assertEqual([e["branch"] for e in self.events("rebase conflict")], ["t/1-cases", "t/1"])
+        self.assertEqual(git(self.proj, "rev-parse", "t/1"), self.target)
+        self.assertEqual(git(self.proj, "rev-parse", "t/1-cases"), self.target)
+
+    def test_an_untracked_file_in_the_way_is_a_conflict(self):
+        self.target = self.side("int/g1", None, "g.txt", "group\n", "group adds g.txt")
+        self.side("t/1", "main", "mine.txt", "m\n", "work 1")
+        issuer = self.issuer()
+        os.makedirs(self.cfg.worktree_root, exist_ok=True)
+        git(self.proj, "worktree", "add", "-q", issuer.wt, "t/1")
+        with open(os.path.join(issuer.wt, "g.txt"), "w") as fh:
+            fh.write("untracked\n")
+        _, conflicts = issuer.rebase_round(self.snap().ticket("1"), 1)
+        self.assertEqual(len(conflicts), 1, conflicts)
+        self.assertIn("would be overwritten", conflicts[0])
+        self.assertEqual(git(self.proj, "rev-parse", "t/1"), self.target)
+
+    def test_a_failure_that_is_no_conflict_puts_the_branches_back_and_is_an_env_stop(self):
+        import ticket_issuer
+        main = git(self.proj, "rev-parse", "main")
+        git(self.proj, "branch", "t/1-cases", "main")      # no own commits: moved by a reset
+        head = self.side("t/1", "main", "mine.txt", "m\n", "work 1")
+        issuer = self.issuer(cases={"branch": "t/1-cases", "run": ["c"]})
+        signer = os.path.join(self.tmp, "signer.sh")
+        with open(signer, "w") as fh:
+            fh.write("#!/bin/sh\necho 'signer broke' >&2\nexit 128\n")
+        os.chmod(signer, 0o755)
+        git(self.proj, "config", "gpg.program", signer)
+        git(self.proj, "config", "commit.gpgsign", "true")
+        with self.assertRaises(ticket_issuer.Stuck) as cm:
+            issuer.rebase_round(self.snap().ticket("1"), 1)
+        self.assertEqual(cm.exception.reason, "env", cm.exception.text)
+        self.assertEqual(git(self.proj, "rev-parse", "t/1"), head)
+        self.assertEqual(git(self.proj, "rev-parse", "t/1-cases"), main)
+        self.clean(issuer.wt)
+        self.assertEqual(self.events("rebase conflict"), [])
+        self.assertEqual(git(self.proj, "for-each-ref", "refs/devloop/before-rebase/"), "")
+        self.assertNotIn("branch_base", self.snap().ticket("1"))
 
 
 class Recovery(LoopCase):

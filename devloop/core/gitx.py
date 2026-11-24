@@ -114,8 +114,11 @@ class Git:
     def replay(self, start, commits):
         """Put the checked-out branch on `start` followed by `commits` re-applied in order (a
         commit that became empty is dropped; authors kept, committer devloop). Returns (True, "")
-        or (False, why) with the replay aborted, the branch back on its old head."""
+        or (False, why) with the replay aborted, the branch back on its old head; `self.conflict`
+        then tells whether it stopped on a conflict (unmerged paths, or untracked files that
+        would be overwritten) rather than on any other failure."""
         who = {"GIT_COMMITTER_NAME": "devloop", "GIT_COMMITTER_EMAIL": "devloop@localhost"}
+        self.conflict = False
         if not commits:
             res = self.run("reset", "--hard", start, check=False, env=who)
             lines = (res.err or res.out).strip().splitlines()
@@ -131,9 +134,10 @@ class Git:
         if res.ok:
             return True, ""
         lines = [l for l in (res.out + "\n" + res.err).splitlines() if l.strip()]
-        keep = [l.strip() for l in lines if "CONFLICT" in l]
-        if not keep:
-            keep = self.run("diff", "--name-only", "--diff-filter=U", check=False).out.split()
+        keep = [l.strip() for l in lines if "CONFLICT" in l or "would be overwritten" in l]
+        unmerged = self.run("diff", "--name-only", "--diff-filter=U", check=False).out.split()
+        self.conflict = bool(keep or unmerged)
+        keep = keep or unmerged
         self.run("rebase", "--abort", check=False)
         return False, "; ".join(keep[:8]) or (lines[-1] if lines else "rc %s" % res.rc)
 
