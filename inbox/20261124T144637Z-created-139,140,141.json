@@ -3,5 +3,7 @@
   "ref": "139,140,141",
   "text": "opened #139 #16 D-099: the group chain counts dag.json's group_after edges (group A after group B); #140 #16 D-099: opening tickets keeps dag.json's other top-level keys (group_after, first_ticket_id); #141 #16 D-099: `actl dag after gA --add|--drop gB` puts a group after another, also when its tickets are merged",
   "at": "2026-11-24T14:46:38Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-24T16:03:09Z"
 }
