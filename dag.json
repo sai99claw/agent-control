@@ -1,32 +1,25 @@
 {
   "tickets": {
     "100": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "101": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "102": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "103": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "104": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "105": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "106": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "107": {
       "depends_on": [
@@ -37,54 +30,43 @@
         "104",
         "105",
         "106"
-      ],
-      "verify": "alone",
-      "why_alone": "It deletes tests_devloop/test_devloop.py and moves every loop test class into new files: any ticket verified in the same integration branch would add its cases to the deleted file and conflict. The user asked that it verify alone, after #100-#106 land (2026-11-21)."
+      ]
     },
     "108": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "109": {
       "depends_on": [
         "108"
-      ],
-      "verify": "together"
+      ]
     },
     "110": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "111": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "112": {
       "depends_on": [
         "110",
         "111"
-      ],
-      "verify": "together"
+      ]
     },
     "113": {
       "depends_on": [
         "112"
-      ],
-      "verify": "together"
+      ]
     },
     "114": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "115": {
       "depends_on": [
         "114"
-      ],
-      "verify": "together"
+      ]
     },
     "116": {
-      "depends_on": [],
-      "verify": "together"
+      "depends_on": []
     },
     "117": {
       "depends_on": [
@@ -95,26 +77,49 @@
         "114",
         "115",
         "116"
-      ],
-      "verify": "together"
+      ]
     },
     "118": {
       "depends_on": [
         "117"
-      ],
-      "verify": "together"
+      ]
     },
     "119": {
       "depends_on": [
         "118"
-      ],
-      "verify": "together"
+      ]
     },
     "120": {
       "depends_on": [
         "118"
-      ],
-      "verify": "together"
+      ]
+    },
+    "121": {
+      "depends_on": []
+    },
+    "122": {
+      "depends_on": []
+    },
+    "123": {
+      "depends_on": []
+    },
+    "124": {
+      "depends_on": [
+        "121"
+      ]
+    },
+    "125": {
+      "depends_on": [
+        "122"
+      ]
+    },
+    "126": {
+      "depends_on": []
+    },
+    "127": {
+      "depends_on": [
+        "125"
+      ]
     }
   }
 }
