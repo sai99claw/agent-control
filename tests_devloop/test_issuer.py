@@ -633,6 +633,105 @@ class FreeRounds(LoopCase):
                          "conflict, 1 revision); last feedback:\nround 4: last")
 
 
+class NotOwnedWrites(LoopCase):
+    """Issuer.save() and integrate() write nothing and move nothing once the ticket is no longer
+    running under the issuer's claim stamp; _go() turns that into one stderr line and exit 2."""
+
+    def setUp(self):
+        super().setUp()
+        import ticket_issuer
+        from core.config import Config
+        self.ti = ticket_issuer
+        self.add(1, state="running", target="int/g1", group="g1")
+        self.issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1")
+        self.issuer.claim()
+
+    def take_away(self, **fields):
+        def change(tx):
+            row = tx.ticket("1")
+            row.update(fields)
+            row.setdefault("history", []).append({"event": "taken away by the test"})
+            tx.put_ticket(row)
+        self.pool.update(change, "test: #1 taken away")
+        return self.snap().ticket("1")
+
+    def assert_refused(self, fn, before):
+        with self.assertRaises(self.ti.NotOwned) as ctx:
+            fn()
+        self.assertEqual(self.snap().ticket("1"), before)
+        return str(ctx.exception)
+
+    def test_claim_keeps_the_stamp_it_wrote_and_its_own_ticket_is_still_written(self):
+        self.assertEqual(self.snap().ticket("1")["run"], self.issuer.run_stamp)
+        self.issuer.save(lambda t: t.__setitem__("round", 1), "round start")
+        self.assertEqual(self.snap().ticket("1")["round"], 1)
+
+    def test_a_released_ticket_takes_no_write(self):
+        before = self.take_away(state="ready", run=None)
+        msg = self.assert_refused(lambda: self.issuer.save(lambda t: t.__setitem__("round", 9), "x"),
+                                  before)
+        self.assertEqual(msg, "#1 is no longer this issuer's ticket (state ready)")
+        self.assert_refused(lambda: self.issuer.stuck("env", "broken"), before)
+        self.assert_refused(lambda: self.issuer.release("signal 15", [{"role": "worker"}]), before)
+        self.assertEqual([p for p in self.snap().inbox.values() if str(p.get("ref")) == "1"], [])
+
+    def test_another_stamp_takes_no_write(self):
+        other = {"pid": 1, "host": "another-host", "boot": "b", "started": osx.now()}
+        before = self.take_away(run=other)
+        self.assert_refused(lambda: self.issuer.on_quota("wait", row={"role": "worker"},
+                                                         until=time.time() + 60), before)
+        self.assert_refused(lambda: self.issuer.on_quota("over"), before)
+        self.assert_refused(lambda: self.issuer.save(lambda t: self.issuer._merged(t, []), "merged"),
+                            before)
+
+    def test_a_merged_ticket_is_not_turned_into_stuck(self):
+        before = self.take_away(state="merged", run=None)
+        msg = self.assert_refused(lambda: self.issuer.stuck("rounds", "x"), before)
+        self.assertIn("(state merged)", msg)
+
+    def fake_git(self, behind):
+        repo, g = mock.Mock(), mock.Mock()
+        repo.sha.return_value = "old"
+        g.is_ancestor.return_value = not behind
+        g.merge.return_value = (True, "")
+        g.sha.return_value = "new"
+        self.issuer.repo = repo
+        return repo, g
+
+    def test_integrate_neither_merges_nor_moves_a_ticket_that_is_not_its_own(self):
+        before = self.take_away(state="ready", run=None)
+        for behind in (True, False):
+            repo, g = self.fake_git(behind)
+            self.assert_refused(lambda: self.issuer.integrate(g, before), before)
+            g.merge.assert_not_called()
+            repo.move_ref.assert_not_called()
+
+    def test_integrate_moves_the_target_of_its_own_ticket(self):
+        repo, g = self.fake_git(False)
+        repo.move_ref.return_value = True
+        self.assertIsNone(self.issuer.integrate(g, self.snap().ticket("1")))
+        repo.move_ref.assert_called_once_with("int/g1", "new", "old")
+
+    def run_go(self, issuer):
+        err = io.StringIO()
+        with mock.patch.object(sys, "stderr", err):
+            rc = self.ti._go(issuer)
+        return rc, [line for line in err.getvalue().splitlines() if line.strip()]
+
+    def test_go_ends_a_stuck_or_interrupted_issuer_whose_ticket_is_gone_with_one_line_and_2(self):
+        before = self.take_away(state="ready", run=None)
+        for raised in (self.ti.Stuck("env", "broken"), self.ti.Interrupted("signal 15")):
+            def go(exc=raised):
+                raise exc
+            with mock.patch.object(self.issuer, "go", go):
+                rc, lines = self.run_go(self.issuer)
+            self.assertEqual(rc, 2)
+            self.assertEqual(lines, ["ticket_issuer: #1 is no longer this issuer's ticket (state "
+                                     "ready); stopped without writing"])
+            self.assertEqual(self.snap().ticket("1"), before)
+            self.assertEqual([p for p in self.snap().inbox.values() if str(p.get("ref")) == "1"], [])
+
+
 class T115Acceptance(LoopCase):
     """Ticket #115 (issue #4b): a blocked hand-in's failing ids are run by devloop; when they pass,
     the worker runs again in a round that does not count. Expected values come from the ticket and
