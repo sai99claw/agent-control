@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a ticket makes an action close more pages than the one it answers, the list of old cases it breaks must include tests whose fixture relies on a sibling page staying unread to keep a card or listing on screen, not only asserts that check acked directly; grep for the page names in the fixture, not just for 'acked'.",
+  "source": "#123 revise (opener)",
+  "at": "2026-11-24T03:20:40Z"
+}
