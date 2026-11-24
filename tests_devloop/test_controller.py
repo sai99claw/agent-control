@@ -800,6 +800,176 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+class StoppedRegressionPieces(LoopCase):
+    """#124: regression.py records a stop signal; the controller names the fate of a regression
+    that wrote no result; a controller stop alone leaves a running regression to the next one."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        self.out = os.path.join(self.tmp, "r.json")
+
+    def slow_full(self, seconds):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["tests"]["full"] = "sleep %d; %s full" % (seconds, TESTS)
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "slow full")
+
+    def live(self):
+        try:
+            with open(os.path.join(self.tmp, "wt", "runs", "live", "regression-int-g1.json")) as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return {}
+
+    def until(self, what, pred, proc, timeout=60):
+        end = time.time() + timeout
+        while time.time() < end:
+            if pred():
+                return
+            if proc.poll() is not None:
+                self.fail("process exited (rc %s) before %s" % (proc.returncode, what))
+            time.sleep(0.2)
+        self.fail("timed out waiting for " + what)
+
+    # ------------------------------------------------------------ regression.py
+
+    def test_stopped_report_shape(self):
+        import regression
+        r = regression.stopped_report(signal.SIGHUP, "quick", "abc")
+        self.assertEqual((r["status"], r["signal"], r["failures"], r["flaky"], r["sha"]),
+                         ("unmeasured", "SIGHUP", [], [], "abc"))
+        self.assertTrue(r["summary"].startswith("stopped by SIGHUP during quick"), r["summary"])
+        self.assertIn("a controller restart leaves a running regression alone", r["summary"])
+        self.assertIn("at", r)
+        self.assertNotIn("sha", regression.stopped_report(signal.SIGTERM, "slot", None))
+
+    def test_sighup_during_full_cleans_up_and_writes_out(self):
+        self.slow_full(30)
+        git(self.proj, "branch", "int/g1", "main")
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "regression.py"), "--branch", "int/g1",
+                                 "--out", self.out], cwd=self.proj, env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: proc.poll() is None and proc.terminate())
+        self.until("stage full", lambda: self.live().get("stage") == "full", proc, 30)
+        proc.send_signal(signal.SIGHUP)
+        self.assertEqual(proc.wait(20), 2)
+        with open(self.out) as fh:
+            report = json.load(fh)
+        self.assertEqual((report["status"], report["signal"]), ("unmeasured", "SIGHUP"))
+        self.assertTrue(report["summary"].startswith("stopped by SIGHUP during full"), report)
+        self.assertEqual(report["sha"], git(self.proj, "rev-parse", "int/g1").strip())
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "runs", "live",
+                                                     "regression-int-g1.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "regression-int-g1")))
+
+    # ------------------------------------------------------------ controller: the fate text
+
+    def ctl(self):
+        import ticket_controller
+        from core.config import Config
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+        ctl.forever = True
+        return ctl
+
+    def put_g1(self):
+        g = {"id": "g1", "branch": "int/g1", "state": "pr", "members": [], "fix_round": 0, "job": None}
+        self.pool.update(lambda tx: tx.put_group(g), "test: put g1")
+
+    def write_log(self, text):
+        from core.config import Config
+        log = os.path.join(Config(self.proj).runs_dir("regression", "g1"), "regression.log")
+        with open(log, "w") as fh:
+            fh.write(text)
+        return os.path.abspath(log)
+
+    def job(self):
+        return {"kind": "regression", "out": os.path.join(self.tmp, "missing.json"),
+                "stamp": {"pid": 4242, "started": "2026-11-24T00:00:00Z"}}
+
+    def test_job_fate_texts(self):
+        ctl = self.ctl()
+        log = self.write_log("line one\n\nboom at the end\n\n")
+        self.assertEqual(ctl.job_fate("g1", self.job(), None),
+                         "regression.py (pid 4242, started 2026-11-24T00:00:00Z) is no longer running "
+                         "and wrote no result; it was not this controller's child, so its exit status "
+                         "is unknown; log %s: boom at the end" % log)
+        self.assertEqual(ctl.job_fate("g1", self.job(), -15),
+                         "regression.py (pid 4242) was killed by signal SIGTERM (15) before it wrote "
+                         "a result; log %s: boom at the end" % log)
+        self.assertEqual(ctl.job_fate("g1", self.job(), 0),
+                         "regression.py (pid 4242) exited with rc 0 without writing a result; "
+                         "log %s: boom at the end" % log)
+        self.write_log("\n  \n")
+        self.assertTrue(ctl.job_fate("g1", self.job(), 1).endswith(": (empty)"))
+        os.unlink(log)
+        self.assertTrue(ctl.job_fate("g1", self.job(), 1).endswith(": (empty)"))
+
+    def test_after_regression_uses_the_fate_only_without_a_summary(self):
+        ctl = self.ctl()
+        self.write_log("last words\n")
+        self.put_g1()
+        job = self.job()
+        with open(job["out"], "w") as fh:
+            json.dump({"status": "unmeasured", "summary": None}, fh)
+        ctl.after_regression("g1", job, -9)
+        g = self.snap().groups["g1"]
+        self.assertIn("was killed by signal SIGKILL (9)", g["last_regression"])
+        self.assertIn("last words", g["paused"]["text"])
+        text = [r["text"] for r in self.snap().inbox.values() if r["kind"] == "decision"]
+        self.assertEqual(len(text), 1)
+        self.assertIn("regression unmeasured - regression.py (pid 4242) was killed", text[0])
+        self.assertNotIn("None", text[0])
+
+        self.put_g1()
+        with open(job["out"], "w") as fh:
+            json.dump({"status": "unmeasured", "summary": "no slot"}, fh)
+        ctl.after_regression("g1", job, -9)
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["last_regression"], g["paused"]["text"]), ("no slot", "no slot"))
+
+    # ------------------------------------------------------------ a controller stop alone
+
+    def stop_controller_only(self, sig):
+        self.slow_full(12)
+        self.add(1)
+        log = open(os.path.join(self.tmp, "forever.log"), "w")
+        self.addCleanup(log.close)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py"), "--forever"],
+                                cwd=self.proj, env=self.env, stdout=log, stderr=subprocess.STDOUT)
+        self.addCleanup(lambda: proc.poll() is None and proc.terminate())
+
+        def job():
+            return (self.snap().groups.get("g1") or {}).get("job") or {}
+        self.until("a running regression", lambda: job().get("kind") == "regression"
+                   and self.live().get("stage") == "full", proc, 120)
+        pid = job()["stamp"]["pid"]
+        proc.send_signal(sig)
+        proc.wait(30)
+        time.sleep(1)
+        self.assertTrue(osx.alive(pid), "the regression died with the controller")
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1")["state"], "landed")
+        self.assertEqual(snap.groups["g1"]["state"], "landed")
+        started = [h for h in snap.groups["g1"].get("history") or []
+                   if h.get("event") == "regression started"]
+        self.assertEqual(len(started), 1, snap.groups["g1"].get("history"))
+        self.assertEqual([r for r in snap.inbox.values() if r["kind"] == "decision"], [])
+
+    def test_sigterm_to_the_controller_leaves_the_regression_running(self):
+        self.stop_controller_only(signal.SIGTERM)
+
+    def test_sigint_to_the_controller_leaves_the_regression_running(self):
+        self.stop_controller_only(signal.SIGINT)
+
+
 class T72Acceptance(LoopCase):
     """#72: when main moves, the controller merges it into every waiting integration branch before
     that branch's next regression; only a merge conflict costs a fix round. Expected values come

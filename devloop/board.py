@@ -114,7 +114,7 @@ def metrics(snap):
     tok = [sum(x for x in tokens(t) if x is not None) for t in landed if any(x is not None for x in tokens(t))]
     mins = [m for m in (minutes(t) for t in landed) if m is not None]
     asks = [p for p in snap.inbox.values() if p.get("kind") in ("decision", "env")]
-    waiting = [p for p in snap.inbox.values() if not p.get("acked")]
+    waiting = [p for p in snap.inbox.values() if not p.get("acked") and p.get("kind") != "created"]
     stuck = [t for t in snap.tickets.values() if t.get("state") == "stuck"]
     return {
         "tokens": "%s" % format(int(statistics.median(tok)), ",") if tok else UNKNOWN,
@@ -240,7 +240,7 @@ def render_metrics(snap):
                               ("每張落地票的時間(中位)", "minutes", "派工到落地"),
                               ("一次就過", "first_pass", "第 1 輪就合進、沒改過票"),
                               ("每張票要你介入幾次", "asks", "決定頁與環境頁 ÷ 落地或卡住的票"),
-                              ("等你處理的", "waiting", "未讀頁 + 卡住的票")):
+                              ("等你處理的", "waiting", "未讀頁(created 除外)+ 卡住的票")):
         out.append('<div class="card"><div class="k">%s</div><div class="v">%s</div><div class="n">%s</div></div>'
                    % (e(label), e(m[name]), e(note)))
     out.append("</div></section>")

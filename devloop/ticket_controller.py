@@ -467,12 +467,39 @@ class Controller:
                 if row.get("kind") == "env" and row.get("ref") == gid]
         return sorted(rows)[-1][1].get("text") if rows else ""
 
+    def job_fate(self, gid, job, rc):
+        """What happened to a regression that wrote no result: rc None (adopted and gone), the
+        signal that killed it, or its exit code; then its log's last non-empty line."""
+        stamp = job.get("stamp") or {}
+        if rc is None:
+            text = ("regression.py (pid %s, started %s) is no longer running and wrote no result; "
+                    "it was not this controller's child, so its exit status is unknown"
+                    % (stamp.get("pid"), stamp.get("started")))
+        elif rc < 0:
+            try:
+                name = signal.Signals(-rc).name
+            except ValueError:
+                name = "signal"
+            text = ("regression.py (pid %s) was killed by signal %s (%d) before it wrote a result"
+                    % (stamp.get("pid"), name, -rc))
+        else:
+            text = "regression.py (pid %s) exited with rc %s without writing a result" % (stamp.get("pid"), rc)
+        log = os.path.abspath(os.path.join(self.cfg.runs_dir("regression", gid), "regression.log"))
+        try:
+            with open(log, errors="replace") as fh:
+                lines = [ln.strip() for ln in fh.read().splitlines() if ln.strip()]
+        except OSError:
+            lines = []
+        return "%s; log %s: %s" % (text, log, lines[-1] if lines else "(empty)")
+
     def after_regression(self, gid, job, rc):
         report = {}
         try:
             report = osx.read_json(job.get("out"), {}) or {}
         except osx.OSFailure:
             report = {}
+        if not isinstance(report.get("summary"), str):
+            report = dict(report, summary=self.job_fate(gid, job, rc))
         status = report.get("status") or "unmeasured"
         flaky = report.get("flaky") if isinstance(report.get("flaky"), list) else []
         if flaky:

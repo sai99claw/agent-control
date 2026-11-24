@@ -25,21 +25,29 @@ written to --out as {"status", "sha", "summary", "failures", "flaky"}: failures 
 rows of the still-red cases (the summary names only those), flaky is [{"id", "message"}, ...] of the
 cases that passed on a rerun (quick's first, then full's; message from the first run, null when it
 had none), [] when none did.
+
+SIGTERM, SIGINT or SIGHUP stops it: the worktree is removed, the slot (or machine) released, the
+live record dropped, and --out says {"status": "unmeasured", "signal": "<SIGNAME>", "summary":
+"stopped by <SIGNAME> during <stage>; ...", ...} (exit 2). The test command it had started is not
+stopped (it runs in its own session).
 """
 
 import argparse
 import os
+import signal
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import inflight, osx, slots, testrun, worktrees  # noqa: E402
+from core import agents, inflight, osx, slots, testrun, worktrees  # noqa: E402
 from core.config import Config  # noqa: E402
 from core.gitx import Git  # noqa: E402
 
 RERUN_AT_MOST = 5
 CODES = {testrun.GREEN: 0, testrun.RED: 1, testrun.ENV: 86, testrun.UNMEASURED: 2}
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+NOW = {}   # the stage and sha of the live record last written: what a stop signal interrupted
 
 
 def live_name(branch):
@@ -48,6 +56,7 @@ def live_name(branch):
 
 def put_live(cfg, branch, sha, out_path, stage, stamp=None):
     """Write (or rewrite) this regression's live record; `since` is when `stage` began."""
+    NOW.update(stage=stage, sha=sha)
     inflight.put(cfg, live_name(branch), {
         "kind": "regression", "stamp": stamp or osx.stamp(),
         "group": branch[len("int/"):] if branch.startswith("int/") else branch,
@@ -145,15 +154,42 @@ def _verify(cfg, repo, branch, sha, out_path, deadline):
     return CODES[result.status]
 
 
+def stopped_report(signum, stage, sha):
+    """The --out of a regression stopped by `signum` during `stage` (sha None when not known)."""
+    name = signal.Signals(signum).name
+    report = {"status": testrun.UNMEASURED, "signal": name,
+              "summary": "stopped by %s during %s; nothing was measured (a controller restart "
+                         "leaves a running regression alone, so whatever sent it stopped the "
+                         "controller's processes too)" % (name, stage),
+              "failures": [], "flaky": [], "at": osx.now()}
+    if sha:
+        report["sha"] = sha
+    return report
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--branch", required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
     cfg = None
+    got = []
+    def on_signal(signum, frame):
+        for sig in STOP_SIGNALS:            # the cleanup in the finally blocks runs undisturbed
+            signal.signal(sig, signal.SIG_IGN)
+        got.append(signum)
+        raise agents.Interrupted("signal %d" % signum)
+    for sig in STOP_SIGNALS:
+        signal.signal(sig, on_signal)
     try:
         cfg = Config()
         return verify(cfg, args.branch, args.out)
+    except agents.Interrupted:
+        try:
+            osx.write_json(args.out, stopped_report(got[0], NOW.get("stage", "start"), NOW.get("sha")))
+        except osx.OSFailure as exc:
+            print("regression: %s" % exc, file=sys.stderr)
+        return 2
     except osx.OSFailure as exc:
         print("regression: %s" % exc, file=sys.stderr)
         try:
