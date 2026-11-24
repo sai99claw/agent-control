@@ -195,3 +195,36 @@ class T119Acceptance(LoopCase):
         section = m.group(1)
         for word in ("`group`", "new-g1", "new-g2", "`notes`"):
             self.assertIn(word, section)
+
+
+class T122Acceptance(LoopCase):
+    """#122 acceptance 7: the opener refuses a placement only when it makes the group order a
+    cycle. Helpers are copied from T119Acceptance, not inherited (that would re-run its cases)."""
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k)
+
+    def group(self, gid, state, members):
+        def change(tx):
+            tx.put_group({"id": gid, "branch": "int/" + gid, "state": state, "members": list(members),
+                          "fix_round": 0, "job": None, "created": STAMP,
+                          "history": [{"at": STAMP, "event": "opened by the opener for "
+                                       + ", ".join("#" + m for m in members)}]})
+        self.pool.update(change, "test: group %s" % gid)
+
+    def test_a_placement_that_makes_a_cycle_is_refused_with_the_path(self):
+        self.add(1, group="g1", state="ready")
+        self.add(2, deps=[1], group="g2", state="ready")
+        self.group("g1", "open", ["1"])
+        self.group("g2", "open", ["2"])
+        self.plan(creator={"-": ["into_g1_after_2"]})
+        res = self.run_py("ticket_creator.py", "--request", "x")
+        self.assertEqual(res.returncode, 1, res.stdout[-2000:] + res.stderr[-2000:])
+        pages = [p for p in self.snap().inbox.values()
+                 if p.get("kind") == "decision" and p.get("ref") == "request"]
+        self.assertEqual(len(pages), 1, list(self.snap().inbox.values()))
+        lines = pages[0].get("text", "").split("\n")
+        self.assertIn("- new-1: group g1 makes the group order a cycle: g1 -> g2 -> g1", lines)
+        self.assertNotIn("3", self.snap().tickets)
