@@ -3,5 +3,7 @@
   "ref": "137,138",
   "text": "opened #137 #16 D-098: every issuer round starts on its target's current head with only the ticket's own commits; #138 #16 D-098: a round-start replay that conflicts ends the round at once as a free conflict round with the branch at its start point",
   "at": "2026-11-24T14:34:21Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-24T16:03:06Z"
 }
