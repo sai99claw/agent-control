@@ -323,10 +323,35 @@ class T136Acceptance(LoopCase):
         lines = self.page_lines(unacked=True)
         self.assertIn("g1 waits for this decision; groups after it in the chain: g2", lines)
 
-    def test_2_a_lone_ticket_names_its_group_and_none_after(self):
-        self.add(1)
-        self.plan(worker={"1": ["blocked"]})
-        lines = self.page_lines(unacked=False)
+    def test_2_a_held_last_group_names_none_after(self):
+        import ticket_issuer
+        from core.config import Config
+        self.add(1, state="running", target="int/g1", group="g1")
+        self.add(2, group="g1")
+
+        def change(tx):
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": "open", "members": ["1", "2"],
+                          "fix_round": 0, "job": None, "created": osx.now(), "history": []})
+        self.pool.update(change, "test: group g1")
+        snap = self.snap()
+        self.assertEqual(sorted(snap.groups), ["g1"])
+        self.assertEqual(snap.ticket("2")["state"], "ready")
+
+        calls = []
+        real = self.pool
+
+        class StandInPool:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def report(self, kind, ref, text, **kw):
+                calls.append((kind, str(ref), text))
+
+        issuer = ticket_issuer.Issuer(Config(self.proj), StandInPool(), "1", "int/g1")
+        issuer.stuck("decision", "need the user")
+        self.assertEqual(self.snap().ticket("1")["state"], "stuck")
+        self.assertEqual([c[:2] for c in calls], [("decision", "1")], calls)
+        lines = [ln.strip() for ln in calls[0][2].splitlines()]
         self.assertIn("g1 waits for this decision; groups after it in the chain: none", lines)
 
 
