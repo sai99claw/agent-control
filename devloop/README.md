@@ -131,7 +131,9 @@ gone; a config or `dag.json` that still has them is accepted.
 
 Groups form one chain (issue #6), ordered by the DAG (issue #13), so a group id is only a name.
 Group B waits for group A when a ticket of B depends directly on a ticket of A, neither ticket nor
-group landed or cancelled. Taking the groups by creation key (`created`, then the id in natural
+group landed or cancelled. Group B also waits for group A when dag.json's `group_after` lists A
+under B (D-099: `{"B": ["A"]}`), while neither group is landed or cancelled; such an edge to a
+landed or cancelled group stays in dag.json but orders nothing. Taking the groups by creation key (`created`, then the id in natural
 order: g2 < g10, g62 < g62a < g63), each group comes after every group it waits for that is not
 placed yet (pulled ahead, recursively), so a dependency moves its group ahead (g75 before g63); a
 cycle (only hand edits make one) is broken without an error. A group in pr or fixing

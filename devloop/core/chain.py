@@ -4,7 +4,9 @@ regression once.
 
 The chain is ordered by the DAG (issue #13), so a group id is only a name. Group B waits for
 group A when a ticket of B depends directly on a ticket of A (A != B), neither ticket landed or
-cancelled, neither group landed or cancelled. Taking the open groups by creation key (the
+cancelled, neither group landed or cancelled. Group B also waits for group A when dag.json's
+`group_after` lists A under B (D-099: {"B": ["A"]}), while neither group is landed or cancelled;
+such an edge to a landed or cancelled group stays in dag.json but orders nothing. Taking the open groups by creation key (the
 group's 'created', missing = '', then its id in natural order: g2 < g10, g62 < g62a < g63), each
 group is placed after every group it waits for that is not placed yet (pulled ahead
 recursively, by the same key). A cycle (only hand edits make one) never raises: a group already
@@ -12,6 +14,7 @@ being placed is skipped.
 
 Pure functions of a core.pool Snapshot:
 
+  after_edges(snap)    dag.json's well-formed group_after edges {A: [B, ...]}, live or not
   order(snap)          ids of the groups not landed or cancelled, in that order
   sequence(snap)       the landed and cancelled groups by creation key, then order(snap)
   cycle(snap)          None, or one cycle of the waits-for relation as group ids, each waiting
@@ -57,7 +60,21 @@ def waits(snap):
             a = dt.get("group")
             if a in live and a != b and dt.get("state") not in DONE:
                 out[b].add(a)
+    for a, bs in after_edges(snap).items():
+        for b in bs:
+            if a in live and b in live and a != b:
+                out[a].add(b)
     return out
+
+
+def after_edges(snap):
+    """D-099: dag.json's well-formed `group_after` edges {A: [B, ...]} (A comes after each B),
+    all of them, landed or not; anything that is not a str key with a list of str is skipped."""
+    raw = (snap.raw.get("dag") or {}).get("group_after")
+    if not isinstance(raw, dict):
+        return {}
+    return {a: [b for b in bs if isinstance(b, str)] for a, bs in raw.items()
+            if isinstance(a, str) and isinstance(bs, list)}
 
 
 def order(snap):

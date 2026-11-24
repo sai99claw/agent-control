@@ -310,6 +310,55 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class GroupAfterUnits(unittest.TestCase):
+    """#139 (D-099): dag.json's group_after edges in core.chain.waits (the implementer's)."""
+
+    def snap(self, states, group_after, tickets=None, deps=None):
+        groups = {gid: {"id": gid, "state": st, "members": [],
+                        "created": "2026-11-20T00:00:%02dZ" % (i + 1)}
+                  for i, (gid, st) in enumerate(states)}
+        dag = {"tickets": deps or {}, "group_after": group_after}
+        return Snapshot({"dag": dag, "tickets": tickets or {}, "groups": groups, "inbox": {},
+                         "lessons": {}, "memory_state": {}})
+
+    def test_edge_between_live_groups_is_waited_for(self):
+        from core import chain
+        snap = self.snap([("g1", "open"), ("g2", "pr"), ("g3", "open")], {"g1": ["g3", "g2"]})
+        self.assertEqual(chain.waits(snap), {"g1": {"g2", "g3"}, "g2": set(), "g3": set()})
+
+    def test_done_unknown_and_self_edges_order_nothing(self):
+        from core import chain
+        snap = self.snap([("g1", "open"), ("g2", "landed"), ("g3", "cancelled"), ("g4", "open")],
+                         {"g1": ["g1", "g2", "g3", "g9"], "g9": ["g4"], "g2": ["g4"]})
+        self.assertEqual(chain.waits(snap), {"g1": set(), "g4": set()})
+        self.assertEqual(chain.after_edges(snap),
+                         {"g1": ["g1", "g2", "g3", "g9"], "g9": ["g4"], "g2": ["g4"]})
+
+    def test_ticket_part_unchanged_and_merged_with_edges(self):
+        from core import chain
+        tickets = {"1": {"id": "1", "state": "ready", "group": "g1"},
+                   "2": {"id": "2", "state": "ready", "group": "g2"}}
+        snap = self.snap([("g1", "open"), ("g2", "open"), ("g3", "open")], {"g2": ["g3"]},
+                         tickets, {"2": {"depends_on": ["1"]}})
+        self.assertEqual(chain.waits(snap), {"g1": set(), "g2": {"g1", "g3"}, "g3": set()})
+
+    def test_hand_edits_never_raise(self):
+        from core import chain
+        for bad in (["g1"], "g1", {"g2": "g1"}, {"g2": [1, None, ["g1"], {"g1": 1}]}, {"g2": {"g1": 1}},
+                    None, {1: ["g1"], ("g2",): ["g1"]}):
+            snap = self.snap([("g1", "open"), ("g2", "open")], bad)
+            self.assertEqual(chain.order(snap), ["g1", "g2"], bad)
+            self.assertIsNone(chain.cycle(snap), bad)
+            self.assertEqual(chain.waits(snap), {"g1": set(), "g2": set()}, bad)
+
+    def test_after_edges_keeps_only_well_formed(self):
+        from core import chain
+        snap = self.snap([("g1", "open")], {"g2": [1, "g1", None], "g3": "g1", 4: ["g1"]})
+        self.assertEqual(chain.after_edges(snap), {"g2": ["g1"]})
+        no_dag = Snapshot({"tickets": {}, "groups": {}, "inbox": {}, "lessons": {}, "memory_state": {}})
+        self.assertEqual(chain.after_edges(no_dag), {})
+
+
 class BehindLine(unittest.TestCase):
     """#120: the stuck-group page line from core.chain.behind (the implementer's)."""
 
