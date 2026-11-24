@@ -3,5 +3,7 @@
   "ref": "130,131,132,133,134,135,136",
   "text": "opened #130 #15: one issuer per ticket - the issuer holds a per-ticket lock for its life and the controller honours it; #131 #15 #14: an issuer whose ticket is no longer its own stops without writing anything; #132 #14: a command that cannot start because its working directory is gone says so; #133 #14: the issuer makes a missing ticket worktree again from its branch before an agent command starts; #134 #16: an open group with a stuck member waits for its decision unless nothing needs it (D-097); #135 #16: the controller gives no new group to a ticket that left one; it waits for the main session (D-097 3); #136 #16: a stuck ticket's page says that its group and the groups after it wait for the decision",
   "at": "2026-11-24T14:06:06Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-24T16:03:01Z"
 }
