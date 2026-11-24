@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import agents, inflight, memory, osx, pages  # noqa: E402
 from core import chain as chainmod  # noqa: E402
 from core import dag as dagmod  # noqa: E402
+from core import dagedit  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import Snapshot, event, frozen_reason, leave_group, new_group  # noqa: E402
 
@@ -447,9 +448,26 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
 
 # ---------------------------------------------------------------- revising
 
-def user_reset(pool, ident, state, note, changes=None, cases_wrong=False, by=None):
-    """The user decided: the ticket goes back to ready (round 0) or is cancelled."""
+def with_dag(body, ident, part, why):
+    """A pool change running `body(tx)` and then the opener's 'dag' part on the ticket as body left it.
+    With a part, the whole change runs on a dagedit.Dry first: a refusal raises dagedit.Refused and
+    nothing is written."""
+    def run(tx):
+        body(tx)
+        if part is not None:
+            dagedit.replace(tx, ident, "opener", why or "revised by the opener", part)
+
     def change(tx):
+        if part is not None:
+            run(dagedit.Dry(tx.data))
+        run(tx)
+    return change
+
+
+def user_reset(pool, ident, state, note, changes=None, cases_wrong=False, by=None, dag=None):
+    """The user decided: the ticket goes back to ready (round 0) or is cancelled. `dag` is the
+    opener's 'dag' part (with_dag); a refusal raises dagedit.Refused, nothing written."""
+    def body(tx):
         row = tx.ticket(ident)
         frozen = frozen_reason(ident, row.get("state"))
         if frozen:
@@ -466,7 +484,7 @@ def user_reset(pool, ident, state, note, changes=None, cases_wrong=False, by=Non
         event(row, "user decision: %s" % state, note=note[:500], fields=sorted(changes or {}),
               **({"by": by} if by else {}))
         tx.put_ticket(row)
-    pool.update(change, "#%s: %s (user decision)" % (ident, state))
+    pool.update(with_dag(body, ident, dag, note), "#%s: %s (user decision)" % (ident, state))
 
 
 def decide(cfg, pool, ident, decision, text, via, page, by=None):
@@ -499,10 +517,11 @@ def decide(cfg, pool, ident, decision, text, via, page, by=None):
 
 def apply_revised(cfg, pool, ident, source, res, run_name, applied_by=None):
     """Write the opener's kind 'revised' hand-in `res` into the pool; returns the fields it changed.
-    `run_name` is the revise-* directory the hand-in came from (it is the event's run field)."""
+    `run_name` is the revise-* directory the hand-in came from (it is the event's run field).
+    A 'dag' part is applied in the same write (with_dag); its refusal raises dagedit.Refused."""
     changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in editable(cfg)}
 
-    def change(tx):
+    def body(tx):
         row = tx.ticket(ident)
         frozen = frozen_reason(ident, row.get("state"))
         if frozen:
@@ -514,7 +533,7 @@ def apply_revised(cfg, pool, ident, source, res, run_name, applied_by=None):
         event(row, "revised", source=source, fields=sorted(changes),
               cases_wrong=bool(res.get("cases_wrong")), run=run_name, **extra)
         tx.put_ticket(row)
-    pool.update(change, "#%s: revised (%s)" % (ident, source))
+    pool.update(with_dag(body, ident, res.get("dag"), res.get("note")), "#%s: revised (%s)" % (ident, source))
     return changes
 
 
@@ -545,9 +564,27 @@ def apply_unapplied(cfg, pool, ident, since):
         history = pool.snapshot().ticket(ident).get("history") or []
         if any(e.get("event") == "revised" and e.get("run") == name for e in history):
             continue
-        apply_revised(cfg, pool, ident, source, res, name, applied_by="issuer")
+        try:
+            apply_revised(cfg, pool, ident, source, res, name, applied_by="issuer")
+        except dagedit.Refused:
+            continue
         applied.append(name)
     return applied
+
+
+def dag_part(snap, ident):
+    """The reviser.md paragraph for a user or main revision: the ticket's state, group and depends_on,
+    and the hand-in's optional 'dag' key."""
+    t = snap.ticket(ident)
+    return (
+        "State: %s; group: %s; depends_on: %s.\n\n"
+        "A \"revised\" hand-in may also carry \"dag\": {\"depends_on\": [\"<id>\", ...], \"group\": "
+        "\"<an open group id>\" or \"new\"}, each key optional: depends_on replaces the whole list, an absent "
+        "key leaves that part as it is. It is applied after the ticket goes back to ready, with the checks "
+        "of `actl dag` (ready ticket, known ids, no cycle in the ticket DAG or the group order, an open "
+        "group); a dependency the ticket text mentions (#M) may be dropped here: you judge it. A refused "
+        "\"dag\" writes nothing of the revision.\n\n" % (
+            t.get("state"), t.get("group") or "none", json.dumps(dagmod.deps(snap.dag, ident))))
 
 
 def revise(cfg, pool, ident, source, reason, via="main", by=None):
@@ -572,6 +609,7 @@ def _revise(cfg, pool, ident, source, reason, via, by):
         "ticket_id": ident, "source": source, "reason": reason, "why": why,
         "ticket_json": json.dumps({k: t.get(k) for k in editable(cfg) + ("cases",)}, indent=2, ensure_ascii=False),
         "dag_json": json.dumps(snap.dag.get(ident) or {}, indent=2, ensure_ascii=False),
+        "dag_part": dag_part(snap, ident) if source == "user" else "",
         "result_path": os.path.join(run_dir, "result.json"),
     })
     osx.write_json(os.path.join(run_dir, "revise.json"), {"ticket": ident, "source": source})
@@ -596,7 +634,12 @@ def _revise(cfg, pool, ident, source, reason, via, by):
     if source == "user" and res.get("kind") in ("revised", "unchanged"):
         changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in editable(cfg)} \
             if res.get("kind") == "revised" else {}
-        user_reset(pool, ident, "ready", res.get("note") or "", changes, bool(res.get("cases_wrong")), by=by)
+        try:
+            user_reset(pool, ident, "ready", res.get("note") or "", changes, bool(res.get("cases_wrong")), by=by,
+                       dag=res.get("dag") if res.get("kind") == "revised" else None)
+        except dagedit.Refused as exc:
+            print("REVISE FAILED: %s" % exc)
+            return 1
         print("READY AGAIN after your decision: %s" % (res.get("note") or ""))
         return 0
     if res.get("kind") == "question":
@@ -613,7 +656,11 @@ def _revise(cfg, pool, ident, source, reason, via, by):
               "{\"kind\": \"blocked\", \"text\": \"waiting for the user's decision\"}." % res.get("text"))
         return 3
     if res.get("kind") == "revised":
-        changes = apply_revised(cfg, pool, ident, source, res, os.path.basename(run_dir))
+        try:
+            changes = apply_revised(cfg, pool, ident, source, res, os.path.basename(run_dir))
+        except dagedit.Refused as exc:
+            print("REVISE FAILED: %s" % exc)
+            return 1
         print("REVISED: %s\nChanged: %s%s" % (res.get("note") or "", ", ".join(sorted(changes)) or "nothing",
               "\nThe verifier's cases were judged wrong; they are written again next round."
               if res.get("cases_wrong") else ""))

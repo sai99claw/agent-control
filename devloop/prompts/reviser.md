@@ -14,7 +14,7 @@ DAG entry:
 {dag_json}
 ```
 
-Decide one of three:
+{dag_part}Decide one of three:
 
 - the ticket is wrong or unclear -> fix it (only the fields that need it). If the verifier's cases
   test the wrong thing, set "cases_wrong": true and they are written again.

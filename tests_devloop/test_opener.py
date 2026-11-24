@@ -617,6 +617,119 @@ class LastFullSecondsUnit(unittest.TestCase):
         self.assertIn("took 30 seconds.", text)
 
 
+class ReviseDagUnit(LoopCase):
+    """#127 (issue #9): a revised hand-in's 'dag' part (ticket_creator.with_dag, core.dagedit.replace);
+    the implementer's unit cases."""
+
+    def setUp(self):
+        super().setUp()
+        import ticket_creator
+        from core.config import Config
+        self.tc, self.cfg = ticket_creator, Config(self.proj)
+        self.add(1, group="g1", state="stuck", objective="needs #2 first")
+        self.add(2, group="g2", state="ready")
+        for gid, members in (("g1", ["1"]), ("g2", ["2"])):
+            def change(tx, gid=gid, members=members):
+                tx.put_group({"id": gid, "branch": "int/" + gid, "state": "open", "members": members,
+                              "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z", "history": []})
+            self.pool.update(change, "test: group %s" % gid)
+
+    def dag_events(self, ident):
+        return [e for e in self.snap().ticket(ident).get("history") or [] if e["event"].startswith("dag: ")]
+
+    def frozen(self):
+        snap = self.snap()
+        return snap.ticket("1"), snap.dag.get("1"), sorted(snap.groups), snap.groups["g1"]
+
+    def test_user_reset_applies_the_dag_after_the_ticket_is_ready_again(self):
+        from core import chain
+        self.tc.user_reset(self.pool, "1", "ready", "wait for #2", {"acceptance": ["b"]},
+                           dag={"depends_on": ["2"]})
+        snap = self.snap()
+        t = snap.ticket("1")
+        self.assertEqual((t["state"], t["acceptance"], snap.dag["1"]["depends_on"]), ("ready", ["b"], ["2"]))
+        ev = self.dag_events("1")
+        self.assertEqual([(e["event"], e.get("by"), e.get("why")) for e in ev],
+                         [("dag: depends on #2", "opener", "wait for #2")])
+        self.assertEqual(chain.order(snap), ["g2", "g1"])
+
+    def test_group_new_and_depends_on_together(self):
+        self.tc.user_reset(self.pool, "1", "ready", "n", dag={"group": "new", "depends_on": ["2"]})
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1")["group"], "g3")
+        self.assertEqual(snap.groups["g3"]["members"], ["1"])
+        self.assertEqual(snap.groups["g1"]["state"], "cancelled")
+        self.assertEqual(snap.dag["1"]["depends_on"], ["2"])
+
+    def test_a_refusal_after_a_move_writes_nothing(self):
+        """The move runs before the add: without the dry run g3 would already be written."""
+        before = self.frozen()
+        with self.assertRaises(self.tc.dagedit.Refused) as ctx:
+            self.tc.user_reset(self.pool, "1", "ready", "n", {"acceptance": ["b"]},
+                               dag={"group": "new", "depends_on": ["9"]})
+        self.assertEqual(str(ctx.exception), "#9 does not exist")
+        self.assertEqual(self.frozen(), before)
+        self.assertFalse(os.path.exists(os.path.join(self.pool_path, "groups", "g3.json")))
+
+    def test_the_opener_may_drop_a_mentioned_dependency_actl_dag_may_not(self):
+        from core import dagedit
+        self.add(1, deps=["2"], group="g1", state="ready", objective="needs #2 first")
+        out = {}
+
+        def change(tx):
+            out["dag"] = dagedit.apply(tx, "1", "main-session", "x", drop="2")
+        self.pool.update(change, "test: actl dag drop")
+        self.assertIn("mentions #2", out["dag"])
+        self.pool.update(lambda tx: dagedit.replace(tx, "1", "opener", "x", {"depends_on": []}), "test: drop")
+        self.assertEqual(self.snap().dag["1"]["depends_on"], [])
+
+    def test_an_unchanged_part_is_no_step_but_a_not_ready_ticket_is_refused(self):
+        from core import dagedit
+        self.add(1, deps=["2"], group="g1", state="ready")
+        self.pool.update(lambda tx: dagedit.replace(tx, "1", "opener", "x", {"depends_on": ["2"], "group": "g1"}),
+                         "test: same")
+        self.assertEqual(self.dag_events("1"), [])
+        self.add(1, group="g1", state="running")
+        res = {"kind": "revised", "ticket": {"acceptance": ["b"]}, "note": "n", "dag": {"depends_on": []}}
+        before = self.frozen()
+        with self.assertRaises(dagedit.Refused) as ctx:
+            self.tc.apply_revised(self.cfg, self.pool, "1", "worker", res, "revise-x")
+        self.assertIn("#1 is running", str(ctx.exception))
+        self.assertEqual(self.frozen(), before)
+
+    def test_a_malformed_part_is_refused(self):
+        from core import dagedit
+        for part in ([], {"depends": []}, {"depends_on": "2"}, {"depends_on": [True]}, {"group": 3}):
+            with self.subTest(part=part):
+                with self.assertRaises(dagedit.Refused):
+                    self.tc.user_reset(self.pool, "1", "ready", "n", dag=part)
+                self.assertEqual(self.state(1), "stuck")
+
+    def test_apply_revised_without_dag_is_unchanged(self):
+        res = {"kind": "revised", "ticket": {"acceptance": ["b"]}, "note": "n"}
+        self.assertEqual(self.tc.apply_revised(self.cfg, self.pool, "1", "worker", res, "revise-x"),
+                         {"acceptance": ["b"]})
+        self.assertEqual(self.dag_events("1"), [])
+
+    def revise_prompt(self, *args):
+        self.plan(creator={"1": ["revised"]})
+        res = self.run_py("ticket_creator.py", "--revise", "1", "--reason", "x", *args)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        paths = sorted(glob.glob(os.path.join(self.tmp, "wt", "runs", "1", "revise-*", "prompt.md")))
+        with open(paths[-1]) as fh:
+            return fh.read()
+
+    def test_the_prompt_names_dag_only_for_user_or_main(self):
+        prompt = self.revise_prompt("--from", "main")
+        self.assertIn('State: stuck; group: g1; depends_on: [].', prompt)
+        self.assertIn('"dag": {"depends_on"', prompt)
+        self.assertNotIn("{dag_part}", prompt)
+        self.add(1, group="g1", state="running")
+        prompt = self.revise_prompt("--from", "worker")
+        self.assertNotIn('"dag"', prompt)
+        self.assertNotIn("{dag_part}", prompt)
+
+
 class OpenerGroupChoice(LoopCase):
     """#119 (issue #6 part 3): ticket_creator.group_problems / write_new (implementer's unit cases)."""
 

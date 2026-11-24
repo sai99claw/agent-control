@@ -106,8 +106,9 @@ new tickets in their groups, new groups made last; the sentence is `<key>: group
 order a cycle: g1 -> g2 -> g1`; a landed or cancelled dependency or one without a group imposes
 nothing); the check runs on the snapshot and again inside the pool write (a group that went
 to pr meanwhile). The sentences go to the opener's one retry; a second refusal is the decision page
-`the opener could not produce valid tickets:`. A ticket's group is not an editable field: the
-reviser cannot change it. A ready ticket starts only in its own group
+`the opener could not produce valid tickets:`. The reviser may change a ticket's depends_on and
+group through the hand-in's `dag` (`{"depends_on": [ids], "group": "gK"|"new"}`, each key optional),
+in the same pool write and under the refusals of `actl dag` except 'mentions #M'. A ready ticket starts only in its own group
 while that group is open, once each dependency is landed or merged in the same group and, with a
 landed one, the group's branch contains main or does not exist yet; the controller makes the branch
 from main's current sha right before the first start and records that sha as the group's `base`.
@@ -140,7 +141,8 @@ the one pool write on the data it reads). Each refuses with one line, exit 2 and
 a blank `--reason`; N unknown or not ready (running, stuck, merged or landed tickets are frozen; a
 stuck one is readied first); M unknown, M == N, a dependency N already has, a cancelled M (N would
 wait forever), dropping one N does not have or one N's text mentions (`#M`: that is ticket content,
-`actl new --revise N`); a group that does not exist, is not open or already holds N; and a change
+so the route for a mentioned dependency is `actl new --revise N`, whose opener judges it and may change
+depends_on and group through its hand-in's `dag`); a group that does not exist, is not open or already holds N; and a change
 that makes the ticket DAG or the group order a cycle.
 
 A fix round that leaves the branch redder is dropped (#74). auto_fixer records `fix_start_sha` (the

@@ -6,7 +6,8 @@ scheduling, not ticket content, so these changes never touch a ticket's text.
 runs inside one pool write (Pool.update). Every check runs on the data `tx` read, on an in-memory
 copy of the changed dag.json entry and group fields, before anything is written. Returns the
 refusal as one line (nothing written), or None after writing the change and its events through
-`tx`. A later ticket reuses this for `actl new --revise`.
+`tx`. `actl new --revise` reuses it through replace(): the opener's hand-in may set a ticket's whole
+depends_on and its group, and the opener judges a mentioned dependency itself (mentions=False).
 """
 
 import copy
@@ -31,8 +32,31 @@ def _mentions(t, ident):
     return False
 
 
-def _refusal(data, n, why, add, drop, to):
-    """The first refusal for the change on `data` (a Snapshot, not modified), or None."""
+class Refused(Exception):
+    """A change refused by its check; nothing was written. str() is the refusal line."""
+
+
+class Dry:
+    """A Tx on an in-memory copy of `data`: a change runs here first, so a refusal halfway writes nothing."""
+
+    def __init__(self, data):
+        self.data = Snapshot(copy.deepcopy(data.raw))
+
+    def ticket(self, ident):
+        return self.data.ticket(ident)
+
+    def put_ticket(self, ticket):
+        self.data.tickets[ticket["id"]] = ticket
+
+    def put_group(self, group):
+        self.data.groups[group["id"]] = group
+
+    def put_dag(self, dag):
+        self.data.raw["dag"] = dag
+
+
+def _ticket_refusal(data, n, why):
+    """The refusal for any change to #n (a blank reason, an unknown or not ready ticket), or None."""
     if not str(why or "").strip():
         return "--reason is required and must not be blank"
     t = data.tickets.get(n)
@@ -41,6 +65,15 @@ def _refusal(data, n, why, add, drop, to):
     state = t.get("state")
     if state != "ready":
         return frozen_reason(n, state) or "#%s is %s; only a ready ticket's dependencies and group change" % (n, state)
+    return None
+
+
+def _refusal(data, n, why, add, drop, to, mentions=True):
+    """The first refusal for the change on `data` (a Snapshot, not modified), or None."""
+    bad = _ticket_refusal(data, n, why)
+    if bad:
+        return bad
+    t = data.tickets[n]
     if to is None:
         m = add if add is not None else drop
         if m not in data.tickets:
@@ -56,7 +89,7 @@ def _refusal(data, n, why, add, drop, to):
         else:
             if m not in have:
                 return "#%s does not depend on #%s" % (n, m)
-            if _mentions(t, m):
+            if mentions and _mentions(t, m):
                 return ("#%s's ticket text mentions #%s: drop the dependency with `actl new --revise %s`"
                         % (n, m, n))
     elif to != "new":
@@ -95,11 +128,11 @@ def _changed(data, n, add, drop, to):
     return snap
 
 
-def check(data, n, why, add=None, drop=None, to=None):
+def check(data, n, why, add=None, drop=None, to=None, mentions=True):
     """The refusal line for the change, or None when it may be written."""
     n = str(n)
     add, drop = (None if add is None else str(add)), (None if drop is None else str(drop))
-    bad = _refusal(data, n, why, add, drop, to)
+    bad = _refusal(data, n, why, add, drop, to, mentions)
     if bad:
         return bad
     after = _changed(data, n, add, drop, to)
@@ -112,9 +145,9 @@ def check(data, n, why, add=None, drop=None, to=None):
     return None
 
 
-def apply(tx, n, by, why, add=None, drop=None, to=None):
+def apply(tx, n, by, why, add=None, drop=None, to=None, mentions=True):
     """Check, then write the change through `tx`. Returns the refusal line, or None when written."""
-    bad = check(tx.data, n, why, add=add, drop=drop, to=to)
+    bad = check(tx.data, n, why, add=add, drop=drop, to=to, mentions=mentions)
     if bad:
         return bad
     n = str(n)
@@ -160,3 +193,36 @@ def apply(tx, n, by, why, add=None, drop=None, to=None):
     event(t, "dag: moved from %s to %s" % (old_name, gid), by=by, why=why)
     tx.put_ticket(t)
     return None
+
+
+def replace(tx, n, by, why, part):
+    """Apply an opener's 'dag' part {'depends_on': [ids], 'group': gid | 'new'} (each key optional;
+    depends_on replaces the whole list) to #n through `tx`, as single apply() steps without the
+    'mentions #M' refusal: drops, then the move, then adds, so no step sees an edge or group the
+    result lacks. Raises Refused with the first refusal line; run it on a Dry first so a refusal
+    writes nothing."""
+    n = str(n)
+    if not isinstance(part, dict) or set(part) - {"depends_on", "group"}:
+        raise Refused("'dag' must be an object with only 'depends_on' and 'group'")
+    want, group = part.get("depends_on"), part.get("group")
+    if want is not None and (not isinstance(want, list)
+                             or not all(isinstance(d, (str, int)) and not isinstance(d, bool) for d in want)):
+        raise Refused("'dag'.'depends_on' must be a list of ticket ids")
+    if group is not None and not isinstance(group, str):
+        raise Refused("'dag'.'group' must be an open group id or 'new'")
+    bad = _ticket_refusal(tx.data, n, why)
+    if bad:
+        raise Refused(bad)
+    steps = []
+    if want is not None:
+        want = list(dict.fromkeys(str(d) for d in want))
+        have = dagmod.deps(tx.data.dag, n)
+        steps += [{"drop": d} for d in have if d not in want]
+    if group is not None and group != (tx.data.tickets.get(n) or {}).get("group"):
+        steps.append({"to": group})
+    if want is not None:
+        steps += [{"add": d} for d in want if d not in have]
+    for step in steps:
+        bad = apply(tx, n, by, why, mentions=False, **step)
+        if bad:
+            raise Refused(bad)
