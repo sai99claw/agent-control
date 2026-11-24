@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "The fake worker merges the cases branch at its start and commits whatever that merge leaves, conflict markers included, so a change that moves the cases branch onto newer target content can turn a loop test's expected step-6 conflict into a clean merge with markers.",
+  "source": "request (opener)",
+  "at": "2026-11-24T14:34:15Z"
+}
