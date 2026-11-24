@@ -1,7 +1,7 @@
 {
   "id": "g7",
   "branch": "int/g7",
-  "state": "open",
+  "state": "pr",
   "members": [
     "122",
     "125",
@@ -26,6 +26,10 @@
     {
       "at": "2026-11-24T03:51:48Z",
       "event": "main moved to 4d3f47505f8b: it conflicts with int/g7; not merged"
+    },
+    {
+      "at": "2026-11-24T03:56:45Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "base": "5564e9b5086bad099feabad440a6477d3edc18d7",
