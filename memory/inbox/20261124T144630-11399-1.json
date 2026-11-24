@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "ticket_creator.write_new and the loop harness's add rewrite dag.json as {'tickets': ...} only, dropping every other top-level key (first_ticket_id was lost from the live pool this way); until that is fixed, a fixture that writes another dag.json key writes it after every add().",
+  "source": "request (opener)",
+  "at": "2026-11-24T14:46:29Z"
+}

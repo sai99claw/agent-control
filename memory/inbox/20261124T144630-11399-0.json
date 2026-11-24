@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a request adds a key to a shared state file, list every writer of that file and check that each keeps keys it does not know; a writer that rebuilds the file from the parts it knows erases the new key silently, and the loss shows only later as a setting that undid itself.",
+  "source": "request (opener)",
+  "at": "2026-11-24T14:46:29Z"
+}
