@@ -101,6 +101,51 @@ class AgentChains(LoopCase):
             agents.with_effort(["claude"], "huge")
 
 
+class T133Acceptance(LoopCase):
+    """#133: a ticket worktree that vanished before an agent command starts is made again from its
+    branch, or the ticket is stuck (env) with 'worktree missing: <path>'."""
+
+    def setUp(self):
+        super().setUp()
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(k, None)
+
+    def run_with_first(self, extra=""):
+        first = os.path.join(self.tmp, "first.sh")
+        with open(first, "w") as fh:
+            fh.write('#!/bin/sh\nrm -rf "$PWD"\n%sexec python3 %s\n'
+                     % (extra, os.path.join(HERE, "fake_agent.py")))
+        os.chmod(first, 0o755)
+        agents_cfg = json.load(open(os.path.join(self.proj, "board", "config.json")))["devloop"]["agents"]
+        chain = [["sh", first], AGENT]
+        self.config(agents=dict(agents_cfg, worker=chain, worker_simple=chain))
+        self.add(1)
+        self.plan(worker={"1": ["quota", "ok"]})
+        return self.controller()
+
+    def test_1_a_removed_worktree_is_made_again_and_the_ticket_lands(self):
+        res = self.run_with_first()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1), t.get("stuck"))
+        made = [h for h in t.get("history") or [] if h.get("event") == "worktree made again"]
+        self.assertEqual(len(made), 1, t.get("history"))
+        self.assertEqual(made[0].get("path"), os.path.join(self.tmp, "wt", "t1"))
+        self.assertEqual(made[0].get("branch"), "t/1")
+
+    def test_2_a_removed_worktree_without_its_branch_is_stuck_env(self):
+        res = self.run_with_first('git -C "$AC_ROOT" worktree prune\ngit -C "$AC_ROOT" branch -D t/1\n')
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "stuck", (t["state"], res.stdout + res.stderr))
+        self.assertEqual(t["stuck"]["reason"], "env", t["stuck"])
+        self.assertTrue(t["stuck"]["text"].startswith("worktree missing: " + os.path.join(self.tmp, "wt", "t1")),
+                        t["stuck"])
+        env_pages = [r for r in self.snap().inbox.values()
+                     if r.get("kind") == "env" and not r.get("acked")]
+        self.assertEqual(len(env_pages), 1, env_pages)
+        self.assertEqual(env_pages[0].get("ref"), "1", env_pages)
+
+
 class OpenerOtherFailureRetries(LoopCase):
     def test_a_non_quota_failure_still_gets_the_second_attempt(self):
         for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
