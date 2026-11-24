@@ -1,7 +1,7 @@
 {
   "id": "g8",
   "branch": "int/g8",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "128"
   ],
@@ -32,9 +32,16 @@
     {
       "at": "2026-11-24T04:47:49Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-24T04:47:55Z",
+      "event": "landed (release failed)"
     }
   ],
   "base": "2266d4ede7aaebded308a9fb1f41b04defd29ba4",
   "last_regression": "green",
-  "verified_sha": "b7bb3b7e469d9775593c2e244b3aadba676d1c9e"
+  "verified_sha": "b7bb3b7e469d9775593c2e244b3aadba676d1c9e",
+  "landed_sha": "b7bb3b7e469d9775593c2e244b3aadba676d1c9e",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g8.log"
 }
