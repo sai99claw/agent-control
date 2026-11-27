@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a premise can only be checked on a machine or OS this run cannot reach, build the ticket on a reading that already runs there and fails open (an unknown value changes nothing), and write into the ticket the exact commands that would check it on that machine.",
+  "source": "request (opener)",
+  "at": "2026-11-27T23:57:46Z"
+}
