@@ -1,0 +1,7 @@
+{
+  "kind": "created",
+  "ref": "142,143,144,145,146,147",
+  "text": "opened #142 Landing records landed before the release, and the release runs as a background job; #143 While a full test run holds the machine, agents keep running and only test runs wait; #144 The release takes what a regression takes: a machine slot, or with regression_exclusive the whole machine; #145 The controller starts no new agent or regression while available memory is below devloop.min_free_memory_gib; #146 The board's 進行中 tab shows the controller's memory hold; #147 Stopping a regression also stops the test command it started",
+  "at": "2026-11-27T23:57:53Z",
+  "acked": false
+}
