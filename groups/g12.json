@@ -1,0 +1,21 @@
+{
+  "id": "g12",
+  "branch": "int/g12",
+  "state": "open",
+  "members": [
+    "142",
+    "143",
+    "144",
+    "145",
+    "146"
+  ],
+  "fix_round": 0,
+  "job": null,
+  "created": "2026-11-27T23:57:49Z",
+  "history": [
+    {
+      "at": "2026-11-27T23:57:49Z",
+      "event": "opened by the opener for #142, #143, #144, #145, #146"
+    }
+  ]
+}
