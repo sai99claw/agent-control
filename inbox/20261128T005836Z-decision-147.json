@@ -3,7 +3,7 @@
   "ref": "147",
   "text": "#147 is stuck (hard_block): the change touches hard_block: pattern 'os\\\\.kill', pattern 'killpg'",
   "at": "2026-11-28T00:58:36Z",
-  "acked": false,
+  "acked": true,
   "question": "#147's change touches hard_block: change the ticket, or cancel it?",
   "options": [
     {
@@ -22,5 +22,7 @@
       "consequence": "#147 runs again as written and stops at the same place unless hard_block changed"
     }
   ],
-  "recommendation": "the change the ticket asks for touches hard_block, so a retry stops at the same place"
+  "recommendation": "the change the ticket asks for touches hard_block, so a retry stops at the same place",
+  "acked_at": "2026-11-28T11:51:54Z",
+  "acked_by": "main-session"
 }
