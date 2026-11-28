@@ -20,6 +20,7 @@
   把票移到別的群組是 `actl dag move N --to gK|new --reason "…"`。
   把整組排到另一組後面是 `actl dag after gA --add gB --reason "…"`(票已合入的組也可以)。
 - agent-control 自己也是一個專案:它的改動一樣開票、走 devloop(票要填 `vision` 與 `removes`)。使用者明說「直接改」才例外。
+- 重啟 controller 只停 controller 這一個程序:launchd 用 `launchctl kill TERM gui/$(id -u)/<label>`,停了再 `launchctl kickstart gui/$(id -u)/<label>`;systemd 用 `systemctl --user restart <unit>`(範本設了 `KillMode=process`);手動起的,對 `<worktrees>/controller.lock` 裡的 pid 送 SIGTERM。不停它的程序群組,也不用名稱比對整批停(issue #11:連它起的 regression 一起停,結果變 unmeasured);issuer、regression、fixer 繼續跑,下一個 controller 接手。範本在 `devloop/README.md`。
 
 ## 不可違反的
 - **票是唯一的工作單位**;票的內容只有開題者那條路能寫,其他腳本只改狀態。

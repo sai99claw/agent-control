@@ -52,6 +52,164 @@ Agents run their tests with `python3 devloop/run_tests.py <ids>` (output stays i
 
 Run them from the project (or set `AC_ROOT` to it).
 
+## Running the controller and the board as a service
+
+The controller should not be the child of an interactive session that may be ended (Claude Code ended one once when memory ran short). Run `actl run --forever` and the board as a user service: it starts at login, and `AbandonProcessGroup` (launchd) or `KillMode=process` (systemd) keep the issuers, regressions and fixers it started running when the controller stops or restarts; the next controller adopts them. The templates follow the plists of a project that runs agent-control under launchd; they are not that project's own files.
+
+Placeholders: `{{AC_HOME}}` is the agent-control clone, `{{PROJECT_DIR}}` the project, `{{HOME}}` the home folder, `{{NAME}}` the project's name. Fill them into a copy, from the project folder:
+
+```sh
+sed -e "s|{{AC_HOME}}|$AC_HOME|g" -e "s|{{PROJECT_DIR}}|$PWD|g" -e "s|{{HOME}}|$HOME|g" -e "s|{{NAME}}|$(basename "$PWD")|g" template > file
+```
+
+```xml devloop-launchd-controller
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agent-control.{{NAME}}.controller</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>{{AC_HOME}}/bin/actl</string>
+    <string>-C</string>
+    <string>{{PROJECT_DIR}}</string>
+    <string>run</string>
+    <string>--forever</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{PROJECT_DIR}}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{HOME}}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+  <key>ExitTimeOut</key>
+  <integer>600</integer>
+  <key>StandardOutPath</key>
+  <string>{{HOME}}/Library/Logs/agent-control/{{NAME}}-controller.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{HOME}}/Library/Logs/agent-control/{{NAME}}-controller.log</string>
+</dict>
+</plist>
+```
+
+```xml devloop-launchd-board
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agent-control.{{NAME}}.board</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>{{AC_HOME}}/bin/actl</string>
+    <string>-C</string>
+    <string>{{PROJECT_DIR}}</string>
+    <string>board</string>
+    <string>serve</string>
+    <string>--port</string>
+    <string>8765</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{PROJECT_DIR}}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{HOME}}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+  <key>ExitTimeOut</key>
+  <integer>600</integer>
+  <key>StandardOutPath</key>
+  <string>{{HOME}}/Library/Logs/agent-control/{{NAME}}-board.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{HOME}}/Library/Logs/agent-control/{{NAME}}-board.log</string>
+</dict>
+</plist>
+```
+
+```ini devloop-systemd-controller
+[Unit]
+Description=agent-control controller for {{NAME}}
+
+[Service]
+ExecStart=/bin/sh {{AC_HOME}}/bin/actl -C {{PROJECT_DIR}} run --forever
+WorkingDirectory={{PROJECT_DIR}}
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin" "LANG=C.UTF-8"
+Restart=on-failure
+RestartSec=300
+KillMode=process
+TimeoutStopSec=600
+
+[Install]
+WantedBy=default.target
+```
+
+```ini devloop-systemd-board
+[Unit]
+Description=agent-control board for {{NAME}}
+
+[Service]
+ExecStart=/bin/sh {{AC_HOME}}/bin/actl -C {{PROJECT_DIR}} board serve --port 8765
+WorkingDirectory={{PROJECT_DIR}}
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin" "LANG=C.UTF-8"
+Restart=on-failure
+RestartSec=300
+KillMode=process
+TimeoutStopSec=600
+
+[Install]
+WantedBy=default.target
+```
+
+PATH: put first the folder of every agent command the project uses (`dirname "$(command -v claude)"`, the same for codex and agy); launchd's own PATH is only /usr/bin:/bin:/usr/sbin:/sbin. In the units, every variable goes in ONE `Environment=` line (a repeated key fails a strict parser); systemd output goes to the journal.
+
+**macOS (launchd).** `mkdir -p ~/Library/Logs/agent-control`. Save the files as `~/Library/LaunchAgents/com.agent-control.<name>.controller.plist` and `com.agent-control.<name>.board.plist`, then `plutil -lint <file>`.
+
+- Load: `launchctl bootstrap gui/$(id -u) <file>`
+- Status: `launchctl print gui/$(id -u)/<label>`
+- Stop and unload: `launchctl bootout gui/$(id -u)/<label>`
+- Restart only the controller: `launchctl kill TERM gui/$(id -u)/<label>`, then, once `launchctl print` says it is not running, `launchctl kickstart gui/$(id -u)/<label>`.
+
+**Linux (systemd user units).** Save the files as `~/.config/systemd/user/agent-control-<name>-controller.service` and `agent-control-<name>-board.service`. Then:
+
+- `systemctl --user daemon-reload`
+- `systemctl --user enable --now <unit>`
+- `systemctl --user restart <unit>` (KillMode=process: only the main process gets SIGTERM)
+- `systemctl --user stop <unit>`
+- `journalctl --user -u <unit> -f`
+- `loginctl enable-linger "$USER"` so it runs without a login session.
+
+**Exits.** A stop by SIGTERM ends the controller with `exit 0` and neither manager starts it again. Any other exit is restarted after 300 s. A controller that stopped itself on an error (exit 2 or 3) wrote a page first, so a cause that persists writes one such page per restart until it is fixed or the service is stopped. `ExitTimeOut` / `TimeoutStopSec` 600 give the current tick time to finish before the manager forces it. A manually started controller is stopped by sending SIGTERM to the pid in `<worktrees>/controller.lock`.
+
 ## Project settings (`board/config.json`, key `devloop`)
 
 `release` is required (every project ships a release script; the controller only calls it, with
