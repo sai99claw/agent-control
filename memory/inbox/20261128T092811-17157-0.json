@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "A lone ticket stopped for any reason ends ungrouped: its group goes on without it and is cancelled (D-097), so every answer that re-queues it (ready, retry, approve) also needs `actl dag move N --to gK|new` before the controller starts it. (measured 2026-11-28)",
+  "source": "request (opener)",
+  "at": "2026-11-28T09:28:10Z"
+}

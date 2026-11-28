@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a request re-queues a ticket 'so the issuer runs its merge step again', check what a re-run starts: a re-dispatched ticket starts its worker again in round 1, which can change the very change being approved; say in the ticket whether the first round skips the worker and what ends the skip.",
+  "source": "request (opener)",
+  "at": "2026-11-28T09:28:10Z"
+}

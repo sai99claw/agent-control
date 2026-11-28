@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "The board renders page options through its ACT_LABELS lookup: a new page action needs its board label (and a decision on whether the board may run it) in the same change, or the decide tab fails on the first page that carries it.",
+  "source": "request (opener)",
+  "at": "2026-11-28T09:28:10Z"
+}
