@@ -1168,6 +1168,10 @@ def main(argv=None):
         print("ticket_controller: %s" % exc, file=sys.stderr)
         return 2
     ctl = Controller(cfg, pool)
+    if not cfg.values.get("notify"):
+        print("ticket_controller: devloop.notify is not set: decision and env pages reach you "
+              "only through actl tickets inbox or the board (devloop/README.md, devloop.notify)",
+              file=sys.stderr)
     sampler = host.Sampler(cfg).start()      # #44: one line per devloop.host_sample_seconds
 
     def on_signal(signum, frame):

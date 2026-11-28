@@ -291,6 +291,11 @@ def doctor_rows(root):
     if notify is not None and not (isinstance(notify, str) and notify):
         rows.append(("error", "devloop.notify must be null or a shell command (a non-empty "
                      "string), not %r" % (notify,), "edit board/config.json"))
+    elif notify is None:
+        rows.append(("warning", "devloop.notify is not set - decision and env pages reach you only "
+                     "when someone reads actl tickets inbox or the board",
+                     "set devloop.notify in board/config.json to a shell command (examples in "
+                     "devloop/README.md)"))
     hard_block = conf.get("hard_block") if isinstance(conf.get("hard_block"), dict) else {}
     if hard_block.get("dirs"):
         rows.append(("warning", "hard_block.dirs is not read by devloop - a directory inside the "
