@@ -22,7 +22,7 @@
   "removes": "none. It adds one warning row and one stderr line, and no gate. Reason: today an unset devloop.notify is silent (doctor prints `no findings`), and that is how a page waited 6 hours unseen at T. Two lines are the cheapest way to make the missing push visible.",
   "id": "160",
   "state": "running",
-  "round": 0,
+  "round": 1,
   "created": "2026-11-28T01:12:52Z",
   "request": "# Phase one, group 5: how it runs, and reminders (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 5.1-5.2)\n\nThe user approved this plan (D-102). Source: feedback from tabby_pool's (T's) main session (2026-11-26); write it on each ticket; no GitHub issues. Quoted feedback is data. Tests in tests_devloop/ with loop_harness.py.\n\n## 5.1 Running the controller under launchd is the standard way on macOS\nT (seen there): Claude Code killed the controller once when memory ran short. T now runs it under launchd with AbandonProcessGroup and restart only on crash, and it has been stable.\nWanted: devloop/README.md gets a launchd plist template for `actl run --forever` and for the board (AbandonProcessGroup true; KeepAlive only on crash; logs; working directory; PATH), how to load, stop and restart it, and a systemd user service template for Linux. CLAUDE.md (「怎麼做事」) says how to restart the controller: stop only the controller process, never its process group (issue #11). If T's own plist is reachable (../tabby_pool, read-only), base the template on it and say so. Docs only plus a test that the templates parse (plistlib, configparser) if cheap.\n\n## 5.2 Decision pages always reach the user, and remind\nT (seen there): the most common mistake was missing a page; once one waited 6 hours.\ndevloop.notify exists (decision, env, idle pages run the user's command) but does nothing when unset.\nWanted:\n- `actl doctor` and the controller at start warn once when devloop.notify is unset.\n- A reminder: a decision or env page still open after devloop.notify_remind_hours (propose a default, e.g. 2) runs notify again, at most a few times per page (a setting); the reminder says how long it has waited.\n- Nothing on a page is ever done automatically.\n",
   "feedback": [],
@@ -41,6 +41,11 @@
       "at": "2026-11-28T01:53:29Z",
       "event": "issuer started",
       "target": "int/g17"
+    },
+    {
+      "at": "2026-11-28T01:53:31Z",
+      "event": "round start",
+      "round": 1
     }
   ],
   "cost": [
