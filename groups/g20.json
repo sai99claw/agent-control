@@ -57,5 +57,24 @@
   "main_tried": "d137c1e097edb0af3421c978b72ed15271600734",
   "fix_report": "/home/user/agent-control-devloop/runs/regression/g20/main-moved.json",
   "fix_agent_round": 1,
-  "fix_start_sha": "31ef27d416d736d81005ba84a49ee7c5df0fec71"
+  "fix_start_sha": "31ef27d416d736d81005ba84a49ee7c5df0fec71",
+  "cost": [
+    {
+      "role": "fixer",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": null,
+      "seconds": 2385.6,
+      "at": "2026-11-28T11:18:47Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/fix/g20/r1",
+      "input_tokens": 10,
+      "output_tokens": 2282,
+      "cache_read_tokens": 291645,
+      "cache_write_tokens": 2539,
+      "usd": 0.9496566000000003,
+      "session_id": "10a9871e-105a-4b84-81ed-e3e731e39e33"
+    }
+  ]
 }
