@@ -14,10 +14,13 @@ Each tick, in this order:
                     gets a regression (or a fix round) only when
                     every earlier group is landed or cancelled - a stuck group with no merged ticket holds no one; red -> auto_fixer (at most devloop.max_rounds);
                     green -> main fast-forwards to the integration branch (a main that moved
-                    meanwhile is merged in and verified again) and the project's release runs;
-                    a release that exits 1 (the product failed a check) has the opener open a
+                    meanwhile is merged in and verified again), the group and its tickets are
+                    written landed with release "pending", and the project's release runs as a
+                    background job (release_job.py) collected in step 1 of a later tick; a
+                    release that exits 1 (the product failed a check) has the opener open a
                     fix ticket (none while one opened this way is still open) and runs once
-                    more on the same sha, and that run decides the page
+                    more on the same sha, and that run decides the page; a release job gone
+                    without a result is failed with a page and not run again (D-080)
   3. dispatch     - a ticket's group is written when it is opened; the controller only follows
                     it. A ready ticket written before groups existed (no 'group' field) gets a
                     group of its own at the end of the chain once its dependencies can still
@@ -29,8 +32,14 @@ Each tick, in this order:
                     made from main); up to devloop.max_parallel at a time
   4. memory       - one memory_keeper at a time for a memory file whose lessons are due
 
+While available memory (core/host.memory_available) is below devloop.min_free_memory_gib (#145),
+no new issuer, regression, fixer or memory_keeper starts: a fix round that comes due waits with
+fix_retry, running jobs go on, landing and releases are not held. The live record
+runs/live/hold-memory.json says so while it lasts, and a run without --forever whose work only
+waits for memory ends with the idle page's first line saying why.
+
 Everything it knows is in the pool and in git, so a restart picks up where it was; issuers,
-regressions and fixers run detached and are adopted by the next controller.
+regressions, fixers and release jobs run detached and are adopted by the next controller.
 
     python3 devloop/ticket_controller.py            # run until nothing is left to do
     python3 devloop/ticket_controller.py --forever  # keep watching the pool for new tickets
@@ -50,13 +59,15 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import agents, chain, codemap, host, memory, osx, pages, release, ticketlock  # noqa: E402
+from core import agents, chain, codemap, host, inflight, memory, osx, pages, release, ticketlock  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import close_pages, event, leave_group, new_group  # noqa: E402
 
 LOOP = os.path.dirname(os.path.abspath(__file__))
 LOST = "lost"   # merge_no_reverify: the branch moved under the compare-and-swap
+HOLD = "hold-memory"   # #145: the live record kept while memory is short
+GIB = 2 ** 30
 
 
 def under_paths(path, entries):
@@ -174,6 +185,39 @@ class Controller:
         self.release_cmd = cfg.require_release()
         self.stopping = False
         self.forever = False        # run(forever) sets it: an env result pauses the group instead of Stop(3)
+        self.hold_since = None      # #145: when the current memory hold began
+
+    def memory_short(self):
+        """#145: the available bytes when they are below devloop.min_free_memory_gib, else None.
+        An unknown reading or a null setting is never short. Reads the machine each call."""
+        gib = self.cfg.values.get("min_free_memory_gib")
+        if gib is None:
+            return None
+        avail = host.memory_available()
+        if avail is None or avail >= gib * GIB:
+            return None
+        return avail
+
+    def memory_line(self, avail):
+        return ("memory short: %.1f GiB available, below devloop.min_free_memory_gib %g: no new agent "
+                "or regression is started until more is free"
+                % (avail / GIB, self.cfg.values.get("min_free_memory_gib")))
+
+    def keep_hold_record(self):
+        """Write runs/live/hold-memory.json while memory is short (its 'since' kept for the whole
+        hold); remove it once it is not. Returns the available bytes when short, else None."""
+        avail = self.memory_short()
+        if avail is None:
+            self.hold_since = None
+            inflight.drop(self.cfg, HOLD)
+            return None
+        if self.hold_since is None:
+            self.hold_since = osx.now()
+        gib = self.cfg.values.get("min_free_memory_gib")
+        inflight.put(self.cfg, HOLD, {"kind": "hold", "reason": "memory", "stamp": osx.stamp(),
+                                      "available": avail, "threshold": int(gib * GIB), "setting": gib,
+                                      "since": self.hold_since, "result": None})
+        return avail
 
     # ------------------------------------------------------------ loop
 
@@ -197,6 +241,9 @@ class Controller:
         lines = idle_lines(self.pool.snapshot())
         if not lines:
             return None
+        avail = self.memory_short()
+        if avail is not None:
+            lines = [self.memory_line(avail)] + lines
         text = "\n".join(["nothing more can move; left undone:"] + lines)
         print(text, file=sys.stderr)
         return self.pool.report("idle", "controller", text, **pages.ask(
@@ -213,6 +260,7 @@ class Controller:
             print("ticket_controller: reminder failed: %s" % exc, file=sys.stderr)
 
     def tick(self):
+        self.keep_hold_record()
         snap = self.pool.snapshot()
         self.finish_jobs(snap)
         snap = self.pool.snapshot()
@@ -222,10 +270,11 @@ class Controller:
         snap = self.pool.snapshot()
         keeping = self.consolidate(snap)
         running = [t for t in snap.tickets.values() if t.get("state") == "running"]
+        short = self.memory_short() is not None   # work that only waits for memory is not busy
         active = [g for g in snap.groups.values()
                   if g.get("state") == "verified" or g.get("job")
-                  or (g.get("state") == "open" and self.open_has_work(snap, g))
-                  or (g.get("state") in ("pr", "fixing") and chain.waits_for(snap, g["id"]) is None)]
+                  or (not short and g.get("state") == "open" and self.open_has_work(snap, g))
+                  or (not short and g.get("state") in ("pr", "fixing") and chain.waits_for(snap, g["id"]) is None)]
         return bool(started or keeping or running or active or self.children)
 
     # ------------------------------------------------------------ 1. jobs
@@ -252,6 +301,8 @@ class Controller:
         for g in snap.groups.values():
             job = g.get("job")
             if not job:
+                if g.get("state") == "landed" and g.get("release") == "pending":
+                    self.release_lost(g["id"])  # stopped between landing and the job's start
                 continue
             key = "%s:%s" % (job["kind"], g["id"])
             proc = self.children.get(key)
@@ -266,6 +317,8 @@ class Controller:
             self.children.pop(key, None)
             if job["kind"] == "regression":
                 self.after_regression(g["id"], job, rc)
+            elif job["kind"] == "release":
+                self.after_release(g["id"], job, rc)
             else:
                 self.after_fixer(g["id"], rc)
 
@@ -300,6 +353,8 @@ class Controller:
                     continue                   # an earlier group still holds the chain
                 if g.get("paused") and self.forever:
                     continue                   # waits for `tickets.py rerun gN`
+                if self.memory_short() is not None:
+                    continue                   # #145: no regression or fix round while memory is short
                 if behind:
                     self.fix_main_moved(g)     # main conflicts with the branch: the fixer merges it
                     continue
@@ -465,16 +520,21 @@ class Controller:
         argv = ["python3", os.path.join(LOOP, "regression.py"), "--branch", g["branch"], "--out", out]
         self._start_job(g["id"], "regression", argv, out)
 
-    def _regression_out(self, gid):
+    def _regression_out(self, gid, kind="regression"):
         """A fresh report path result-<seconds>[-<n>].json: a fix round's base report (fix_report)
         must survive the next regression even when both start within the same second (#74)."""
-        folder, stamp = self.cfg.runs_dir("regression", gid), int(time.time())
+        folder, stamp = self.cfg.runs_dir(kind, gid), int(time.time())
         out, n = os.path.join(folder, "result-%d.json" % stamp), 1
         while os.path.exists(out):
             out, n = os.path.join(folder, "result-%d-%d.json" % (stamp, n)), n + 1
         return out
 
     def start_fixer(self, gid, report_path, rnd):
+        avail = self.memory_short()
+        if avail is not None:                   # #145: the fix_retry path of advance_groups starts it later
+            self.set_group(gid, "pr", "fix round %d waits: memory short (%.1f GiB available)" % (rnd, avail / GIB),
+                           fix_retry=True, fix_report=report_path, fix_round=rnd - 1)
+            return
         argv = ["python3", os.path.join(LOOP, "auto_fixer.py"), "--group", gid, "--report", report_path]
         self.set_group(gid, "fixing", "fix round %d" % rnd, drop=("fix_retry", "paused"),
                        fix_round=rnd, fix_report=report_path)
@@ -735,13 +795,7 @@ class Controller:
         ids = [i for i in g.get("members") or []
                if (snap.tickets.get(i) or {}).get("state") == "merged"
                and (snap.tickets.get(i) or {}).get("group") == gid]
-        released, rel_text = self.release(dict(g, members=ids), sha)
         rel_log = release.log_path(self.cfg, gid)
-        rerun = None                            # issue #1: rc 1 -> a fix ticket and one rerun
-        if not released and release.product_failed(rel_text):
-            rerun = self.release_rerun(dict(g, members=ids), sha, rel_log, rel_text)
-            released, rel_text = rerun["ok"], rerun["text"]
-        fix = self.flaky_fix(snap.groups.get(gid) or g, sha)
 
         def change(tx):
             for i in ids:
@@ -752,39 +806,99 @@ class Controller:
                 tx.put_ticket(t)
                 close_pages(tx, i, "superseded", before)
             grp = tx.data.groups[gid]
-            grp["state"], grp["landed_sha"], grp["release"] = "landed", sha, "ok" if released else "failed"
+            grp["state"], grp["landed_sha"], grp["release"] = "landed", sha, "pending"
             grp["release_log"] = rel_log
-            event(grp, "landed" + ("" if released else " (release failed)"))
-            if rerun is not None:
-                event(grp, "release rc 1, run once more", fix_tickets=rerun["fix_tickets"],
-                      fix_open=rerun["fix_open"], rerun="ok" if released else "failed")
+            event(grp, "landed")
             tx.put_group(grp)
             close_pages(tx, gid, "superseded", before)
         self.pool.update(change, "group %s landed" % gid)
         self.repo.remove_worktree(os.path.join(self.cfg.worktree_root, "fix-" + gid))
+        self.start_release(gid, sha, ids)
+
+    def start_release(self, gid, sha, ids, rerun=None):
+        """Start release_job.py for a landed group and record it as the group's job; acks no page.
+        `rerun` (the rc-1 context: fix_tickets, fix_open, line) marks the one run more and is kept
+        on the group as release_rerun until that run is collected."""
+        out = self._regression_out(gid, "release-job")
+        argv = ["python3", os.path.join(LOOP, "release_job.py"), "--group", gid, "--sha", sha,
+                "--tickets", ",".join(ids), "--out", out]
+        log = os.path.join(self.cfg.runs_dir("release-job", gid), "release-job.log")
+        proc = osx.spawn(argv, cwd=self.cfg.root, env=self.cfg.env(), log_path=log)
+        self.children["release:" + gid] = proc
+        job = {"kind": "release", "stamp": {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(),
+                                             "started": osx.now()}, "out": out}
+        fields = {}
+        if rerun is not None:
+            job["rerun"], fields["release_rerun"] = True, rerun
+        self.set_group(gid, None, "release %sstarted" % ("rerun " if rerun is not None else ""), job=job, **fields)
+
+    def release_lost(self, gid):
+        """A landed group whose release job ended without a result, or that has release pending and
+        no job: release failed and one decision page; the release is not run again (D-080)."""
+        g = self.set_group(gid, None, "release job ended without a result", drop=("release_rerun",),
+                           job=None, release="failed")
+        main, sha12 = self.cfg.main_branch, (g.get("landed_sha") or "")[:12]
+        self.pool.report("decision", gid, "group %s is in %s (%s) but its release job ended without a result - "
+                         "the release is not run again (D-080); release log: %s" % (
+                             gid, main, sha12, g.get("release_log")), **release_ask(gid, main, sha12))
+
+    def after_release(self, gid, job, rc):
+        """Collect a release job (rc None when adopted): its --out decides the release and the page.
+        A first run that exited 1 gets the fix ticket and one run more instead."""
+        try:
+            res = osx.read_json(job.get("out"), {}) or {}
+        except osx.OSFailure:
+            res = {}
+        if not isinstance(res, dict) or not isinstance(res.get("ok"), bool):
+            self.release_lost(gid)
+            return
+        snap = self.pool.snapshot()
+        g, main = snap.groups[gid], self.cfg.main_branch
+        sha, rel_log = g["landed_sha"], g.get("release_log") or release.log_path(self.cfg, gid)
+        ids = [i for i in g.get("members") or []
+               if (snap.tickets.get(i) or {}).get("state") == "landed"
+               and (snap.tickets.get(i) or {}).get("group") == gid]
+        released, rel_text = res["ok"], str(res.get("text") or "")
+        if not job.get("rerun") and not released and release.product_failed(rel_text):
+            self.start_release(gid, sha, ids, rerun=self.release_fix(dict(g, members=ids), sha, rel_log, rel_text))
+            return
+        rerun = g.get("release_rerun") if job.get("rerun") else None
+        fix = self.flaky_fix(g, sha, landing=ids)   # its own tickets count as open, as at landing before #142
+
+        def change(tx):
+            grp = tx.data.groups[gid]
+            grp["release"], grp["job"] = "ok" if released else "failed", None
+            grp.pop("release_rerun", None)
+            event(grp, "release " + ("ok" if released else "failed"))
+            if rerun is not None:
+                event(grp, "release rc 1, run once more", fix_tickets=rerun["fix_tickets"],
+                      fix_open=rerun["fix_open"], rerun="ok" if released else "failed")
+            tx.put_group(grp)
+        self.pool.update(change, "group %s: release %s" % (gid, "ok" if released else "failed"))
+        g = self.pool.snapshot().groups.get(gid) or g
         if released:
             text = "group %s landed and released: #%s (%s); release log: %s" % (
                 gid, ", #".join(ids), sha[:12], rel_log)
             if rerun is not None:
                 text += "\nthe first release run failed with rc 1 and passed when run once more\n" + rerun["line"]
-            self.pool.report("landed", gid, with_flaky(text, snap.groups.get(gid) or g, fix))
+            self.pool.report("landed", gid, with_flaky(text, g, fix))
         elif rerun is not None:
             self.pool.report("decision", gid, with_flaky("group %s is in %s (%s) but the release failed "
                              "twice (rc 1, then %s when run once more) - not rolled back (release log: %s):\n%s\n%s" % (
                                  gid, main, sha[:12], rel_text.split("\n")[0], rel_log,
                                  release.failure_text(rel_log, rel_text), rerun["line"]),
-                             snap.groups.get(gid) or g, fix), **release_ask(gid, main, sha[:12]))
+                             g, fix), **release_ask(gid, main, sha[:12]))
         else:
             self.pool.report("decision", gid, with_flaky("group %s is in %s (%s) but the release failed - "
                              "not retried, not rolled back (release log: %s):\n%s" % (
                                  gid, main, sha[:12], rel_log, release.failure_text(rel_log, rel_text)),
-                             snap.groups.get(gid) or g, fix), **release_ask(gid, main, sha[:12]))
+                             g, fix), **release_ask(gid, main, sha[:12]))
 
-    def release_rerun(self, g, sha, rel_log, rel_text):
+    def release_fix(self, g, sha, rel_log, rel_text):
         """Issue #1: the release exited 1 (the product failed a check). Unless a fix ticket for a
-        release is still open, the opener opens one; then the release runs once more on the same
-        sha. Changes nothing on main or in the release. Returns ok/text of the rerun, the ticket
-        ids (opened, already open) and the page line naming them."""
+        release is still open, the opener opens one (the caller then runs the release once more on
+        the same sha). Changes nothing on main or in the release. Returns the ticket ids (opened,
+        already open) and the page line naming them."""
         gid = g["id"]
         snap = self.pool.snapshot()
         fix_open = sorted((i for i, t in snap.tickets.items()
@@ -810,21 +924,22 @@ class Controller:
                 line = "fix ticket: " + ", ".join("#" + i for i in fix_tickets)
             else:
                 line = "no fix ticket opened: " + (problem or "the opener opened no ticket for it")
-        ok, text = self.release(g, sha)
-        return {"ok": ok, "text": text, "fix_tickets": fix_tickets, "fix_open": fix_open, "line": line}
+        return {"fix_tickets": fix_tickets, "fix_open": fix_open, "line": line}
 
-    def flaky_fix(self, g, sha):
+    def flaky_fix(self, g, sha, landing=()):
         """Issue #2: the group's flaky ids (as flaky_line lists them) that no open ticket (any state
         but landed or cancelled) with origin kind 'flaky' carries get one fix ticket from the opener.
         Writes one 'flaky fix' group event and returns the flaky line's fix text, or None when the
-        group has no flaky events (no event, no opener)."""
+        group has no flaky events (no event, no opener). `landing` (the ids the group just landed)
+        still count as open: the release is collected after they are written landed (#142)."""
         gid, seen = g["id"], flaky_entries(g)
         if not seen:
             return None
         snap = self.pool.snapshot()
         carriers = sorted((i for i, t in snap.tickets.items()
                            if (t.get("origin") or {}).get("kind") == "flaky"
-                           and t.get("state") not in ("landed", "cancelled")), key=dagmod._order_key)
+                           and (t.get("state") not in ("landed", "cancelled") or i in landing)),
+                          key=dagmod._order_key)
         already = {}
         for ident in seen:
             for i in carriers:
@@ -977,9 +1092,6 @@ class Controller:
             except osx.OSFailure:
                 pass
 
-    def release(self, g, sha):
-        return release.run(self.cfg, g, sha)
-
     # ------------------------------------------------------------ 4. memory
 
     def consolidate(self, snap):
@@ -994,7 +1106,7 @@ class Controller:
             self.children.pop("keeper", None)
             self._keeper_job(None)
         due = memory.due(snap)
-        if not due:
+        if not due or self.memory_short() is not None:
             return False
         layer, name = due[0]
         argv = ["python3", os.path.join(LOOP, "memory_keeper.py"), "--layer", layer, "--name", name]
@@ -1031,6 +1143,8 @@ class Controller:
                 continue
             if ticketlock.held(self.cfg, ident):
                 continue                       # its last issuer has not exited yet: a later tick starts it
+            if self.memory_short() is not None:
+                break                          # #145: no new issuer while memory is short
             self.make_branch(g)
             self.start_issuer(ident, g["id"])
             snap = self.pool.snapshot()
@@ -1203,6 +1317,7 @@ def main(argv=None):
             pass
         return 2
     finally:
+        inflight.drop(cfg, HOLD)
         sampler.stop()
         lock.release()
 

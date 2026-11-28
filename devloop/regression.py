@@ -8,7 +8,9 @@ full does not run. An unusable environment is not red: it is reported as "env" a
 to fix code for it.
 
 Holds one machine slot (devloop.machine_slots) from before preflight until full has ended, or with
-devloop.regression_exclusive the whole machine (the gate and every slot); the wait for it is
+devloop.regression_exclusive the whole machine (the mark slots/exclusive, then slots/tests once every
+other test run has ended; agents keep running beside it); its test commands run with
+DEVLOOP_MACHINE=<the mark's path> and take nothing. The wait for it is
 limited by regression_timeout_seconds, and the run gets its own regression_timeout_seconds from
 when the slot (or the machine) is taken: preflight, quick, full and the rerun share it.
 
@@ -83,6 +85,8 @@ def verify(cfg, branch, out_path):
                                   "summary": "could not measure: " + busy(cfg, time.time() - began),
                                   "failures": [], "flaky": [], "at": osx.now()})
         return CODES[testrun.UNMEASURED]
+    if cfg.regression_exclusive and slot.path:
+        os.environ[slots.MACHINE_ENV] = slot.path   # testrun.run passes cfg.env(), a copy of os.environ
     try:
         return _verify(cfg, repo, branch, sha, out_path, time.time() + cfg.regression_timeout_seconds)
     finally:

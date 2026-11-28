@@ -440,6 +440,10 @@ def live_release_step(path):
     return logtail.stage(path)
 
 
+LIVE_HOLD_MEMORY = ("記憶體不足:可用 %.1f GiB,低於 devloop.min_free_memory_gib %g GiB;"
+                    "不派新的 agent,也不開新的 regression")
+
+
 def live_pid(rec):
     return (rec.get("stamp") or {}).get("pid")
 
@@ -502,7 +506,7 @@ def live_rows(cfg, snap):
     """One dict per row of the tab (read only: records, their status and their logs)."""
     from core import inflight
     recs = [(name, rec, inflight.status(rec)) for name, rec in inflight.records(cfg)]
-    recs = [(n, r, s) for n, r, s in recs if s != "handed_in"]
+    recs = [(n, r, s) for n, r, s in recs if s != "handed_in" and r.get("kind") != "hold"]
     running = [(n, r) for n, r, s in recs if s == "running"]
     agents = [(n, r) for n, r in running if r.get("kind") == "agent"]
 
@@ -563,6 +567,8 @@ def live_rows(cfg, snap):
                 text = live_agent_state_text(agent)
                 row.update(state=agent.get("state"), agent=agent,
                            text=text if agent.get("state") == "quota" else "agent " + text)
+        elif kind == "release" and rec.get("stage") in ("slot", "machine"):
+            row.update(state="slot", text=LIVE_STAGE_TEXT[rec["stage"]])
         elif kind == "release":
             row.update(state="running", text=live_release_step(rec.get("log")) or LIVE_AGENT_STATE["running"],
                        log=rec.get("log"), tail=True)
@@ -579,15 +585,14 @@ def live_rows(cfg, snap):
     for row in rows:
         row["started"] = pool_seconds((row["rec"].get("stamp") or {}).get("started"))
     rows.sort(key=lambda r: (r["state"] == "ended", r["started"] is None, r["started"] or 0, r["name"]))
-    exclusive = sorted(str(r.get("group")) for _, r in running if r.get("kind") == "regression" and r.get("exclusive"))
-    live_queue(rows, exclusive[0] if exclusive else None)
+    live_queue(rows)
     return rows
 
 
-def live_queue(rows, exclusive_group):
-    """Number the rows that wait for a machine slot (a regression waiting for the whole machine is not one):
-    data-queue k/n by the waiting record's `since`, oldest first, and name the exclusive regression they give way to."""
-    queued = [r for r in rows if r["state"] == "slot" and not (r["kind"] == "regression"
+def live_queue(rows):
+    """Number the rows that wait for a machine slot (a regression or release waiting for the whole machine is not one):
+    data-queue k/n by the waiting record's `since`, oldest first."""
+    queued = [r for r in rows if r["state"] == "slot" and not (r["kind"] in ("regression", "release")
                                                               and r["rec"].get("stage") == "machine")]
 
     def order(r):
@@ -597,9 +602,6 @@ def live_queue(rows, exclusive_group):
     for k, r in enumerate(sorted(queued, key=order), 1):
         r["text"] = "等機器名額:第 %d 個(共 %d 個在等)" % (k, len(queued))
         r["attrs"]["data-queue"] = "%d/%d" % (k, len(queued))
-        if exclusive_group is not None:
-            r["text"] += ",讓位給 %s 的獨占 regression" % exclusive_group
-            r["attrs"]["data-yield"] = exclusive_group
 
 
 def dep_satisfied(snap, ident):
@@ -640,6 +642,23 @@ def live_ticket_rows(snap):
                      "text": "等 %s 落地" % "、".join(waits) if waits else STATE_TEXT["ready"],
                      "what": live_ticket_text(snap, ident), "model": "", "attrs": {"data-ticket": ident},
                      "run_dir": None, "log": None, "tail": False, "rec": {}, "started": None, "bare": True})
+    return rows
+
+
+def live_hold_rows(cfg):
+    """One row for a live hold-memory record (the controller holds new work back, #145); a dead one gives none."""
+    from core import inflight
+    rows = []
+    for name, rec in inflight.records(cfg):
+        if rec.get("kind") != "hold" or rec.get("reason") != "memory" or inflight.status(rec) != "running":
+            continue
+        try:
+            text = LIVE_HOLD_MEMORY % (rec["available"] / 2 ** 30, rec["setting"])
+        except (KeyError, TypeError):
+            continue
+        rows.append({"name": name, "kind": "hold", "state": "memory", "text": text, "what": "controller",
+                     "model": "", "attrs": {}, "run_dir": None, "log": None, "tail": False, "rec": rec,
+                     "started": pool_seconds(rec.get("since")), "bare": True})
     return rows
 
 
@@ -707,12 +726,13 @@ def render_live_tab(cfg, snap, key, query, now):
     from core import host as hostmod
     rows = live_rows(cfg, snap)
     ended = [r for r in rows if r["state"] == "ended"]
-    rows = [r for r in rows if r["state"] != "ended"] + live_ticket_rows(snap) + live_decision_rows(snap, now) + ended
+    holds = live_hold_rows(cfg)
+    rows = holds + [r for r in rows if r["state"] != "ended"] + live_ticket_rows(snap) + live_decision_rows(snap, now) + ended
     used = hostmod.slots_in_use(cfg)
     slots_text = None if used is None else "%d/%d" % (used, cfg.machine_slots)
     out = [LIVE_STYLE, '<section><a class="refresh" href="?tab=live">重新整理</a><h2>進行中</h2>']
     from core import inflight
-    if not any(inflight.status(rec) == "running" for _, rec in inflight.records(cfg)):
+    if not holds and not any(inflight.status(rec) == "running" for _, rec in inflight.records(cfg)):
         reason, sentence = live_idle_reason(cfg, snap, now)
         out.append('<p class="why" data-why="%s">%s</p>' % (e(reason), e(sentence)))
     if not rows:
@@ -984,7 +1004,7 @@ def render_tickets_tab(cfg, snap, key, query, now):
             e(g["id"]), e(group_state_text(g)), e(CATEGORY_TEXT.get(group_category(snap, g), "")),
             '<a href="?group=%s">%s</a>' % (quote(str(g["id"])), e(g.get("branch") or g["id"])),
             e(" ".join("#" + i for i in g.get("members") or [])), e(g.get("fix_round", 0)),
-            e((g.get("last_regression") or "")[:160]), e({"ok": "成功", "failed": "失敗"}.get(g.get("release"), ""))))
+            e((g.get("last_regression") or "")[:160]), e({"ok": "成功", "failed": "失敗", "pending": "發版中"}.get(g.get("release"), ""))))
     out.append("</table></div></section>")
 
     pages = [(k, v) for k, v in sorted(snap.inbox.items(), reverse=True) if not v.get("acked")]
@@ -1174,7 +1194,7 @@ def render_group_detail(snap, gid):
              ("原因", e(CATEGORY_TEXT.get(group_category(snap, g), ""))),
              ("分支", e(g.get("branch"))), ("修補輪", e(g.get("fix_round", 0))),
              ("最後一次 regression", e(g.get("last_regression") or "")),
-             ("發版", e({"ok": "成功", "failed": "失敗"}.get(g.get("release"), g.get("release") or ""))),
+             ("發版", e({"ok": "成功", "failed": "失敗", "pending": "發版中"}.get(g.get("release"), g.get("release") or ""))),
              ("票", "<ul>%s</ul>" % "".join(members))]
     if notes:
         pairs.append(("備註", "<ul>%s</ul>" % notes))
