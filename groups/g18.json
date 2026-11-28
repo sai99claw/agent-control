@@ -1,7 +1,7 @@
 {
   "id": "g18",
   "branch": "int/g18",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "162"
   ],
@@ -36,9 +36,16 @@
     {
       "at": "2026-11-28T10:15:57Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-28T10:16:01Z",
+      "event": "landed"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
   "last_regression": "green",
-  "verified_sha": "abf49852381e3bef69ba1b5014d31bedb9ff2780"
+  "verified_sha": "abf49852381e3bef69ba1b5014d31bedb9ff2780",
+  "landed_sha": "abf49852381e3bef69ba1b5014d31bedb9ff2780",
+  "release": "pending",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g18.log"
 }
