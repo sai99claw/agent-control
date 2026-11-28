@@ -1,7 +1,7 @@
 {
   "id": "g15",
   "branch": "int/g15",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "152",
     "153",
@@ -48,10 +48,17 @@
     {
       "at": "2026-11-28T04:35:00Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-28T04:35:05Z",
+      "event": "landed (release failed)"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
   "main_tried": "e8472cca1e837b7b996a7dd6509c5d7f438096d7",
   "last_regression": "green",
-  "verified_sha": "2a29a8ceb4f8d5d975cb7e1333b2e8b5b36036ce"
+  "verified_sha": "2a29a8ceb4f8d5d975cb7e1333b2e8b5b36036ce",
+  "landed_sha": "2a29a8ceb4f8d5d975cb7e1333b2e8b5b36036ce",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g15.log"
 }
