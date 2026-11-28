@@ -24,8 +24,12 @@
     {
       "at": "2026-11-28T00:28:58Z",
       "event": "main moved to 1130ccd3fe67: fast-forwarded int/g12 to it"
+    },
+    {
+      "at": "2026-11-28T00:29:27Z",
+      "event": "main moved to 7e1214b5222b: fast-forwarded int/g12 to it"
     }
   ],
   "base": "26948b9ab503a2d09132ea6ef33fefda07d3e616",
-  "main_tried": "1130ccd3fe679c902d7148ad32c75b2aafd839f6"
+  "main_tried": "7e1214b5222b0a49f3bc99561a2d1ad749cb06a3"
 }
