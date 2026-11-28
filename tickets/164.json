@@ -81,5 +81,9 @@
     "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
     "started": "2026-11-28T10:09:31Z"
   },
-  "claimed_at": "2026-11-28T10:09:30Z"
+  "claimed_at": "2026-11-28T10:09:30Z",
+  "branch_base": {
+    "t/164-cases": "c6ed98d16da9ca840851f6b75fba7d0a37f99b46",
+    "t/164": "c6ed98d16da9ca840851f6b75fba7d0a37f99b46"
+  }
 }
