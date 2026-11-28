@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py takes unittest ids relative to the tests.unittest roots (e.g. test_issuer, test_controller.FollowMainUnits), not paths or tests_devloop.* dotted names; those give an ImportError for every id.",
+  "source": "group g20 fix r1",
+  "at": "2026-11-28T11:18:49Z"
+}

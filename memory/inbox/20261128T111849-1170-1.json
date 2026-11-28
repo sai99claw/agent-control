@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "fixer",
+  "text": "When a ticket names one test to rewrite because an internal seam changed signature, grep for every stub of that seam: other tests using the same stub on the changed path go red the same way and need the same rewrite.",
+  "source": "group g20 fix r1",
+  "at": "2026-11-28T11:18:49Z"
+}
