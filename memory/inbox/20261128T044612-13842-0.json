@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "worker",
+  "text": "A case that checks a ticket's feedback text must read the ticket before it is merged: the merge clears t['feedback'], so a landed ticket's list is always empty.",
+  "source": "#157 r2 worker",
+  "at": "2026-11-28T04:46:12Z"
+}
