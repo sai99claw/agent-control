@@ -505,8 +505,9 @@ class Controller:
         members = g.get("members") or []
         return bool(members) and all((snap.tickets.get(i) or {}).get("state") == "cancelled" for i in members)
 
-    def set_group(self, gid, state, why, drop=(), superseded=False, **fields):
-        """`superseded` (or state cancelled) also acks every page of gid as 'superseded'."""
+    def set_group(self, gid, state, why, drop=(), superseded=False, before=None, **fields):
+        """`superseded` (or state cancelled) also acks every page of gid as 'superseded'.
+        `before` is one more event written ahead of `why`."""
         def change(tx):
             g = tx.data.groups[gid]
             if state is not None:
@@ -514,6 +515,8 @@ class Controller:
             g.update(fields)
             for key in drop:
                 g.pop(key, None)
+            if before:
+                event(g, before)
             event(g, why)
             tx.put_group(g)
             if superseded or state == "cancelled":
@@ -541,18 +544,21 @@ class Controller:
             self.set_group(gid, "pr", "fix round %d waits: memory short (%.1f GiB available)" % (rnd, avail / GIB),
                            fix_retry=True, fix_report=report_path, fix_round=rnd - 1)
             return
-        argv = ["python3", os.path.join(LOOP, "auto_fixer.py"), "--group", gid, "--report", report_path]
-        self.set_group(gid, "fixing", "fix round %d" % rnd, drop=("fix_retry", "paused"),
-                       fix_round=rnd, fix_report=report_path)
-        self._start_job(gid, "fixer", argv, report_path)
+        argv = ["python3", os.path.join(LOOP, "auto_fixer.py"), "--group", gid, "--report", report_path,
+                "--round", str(rnd)]
+        self._start_job(gid, "fixer", argv, report_path, state="fixing", before="fix round %d" % rnd,
+                        drop=("fix_retry", "paused"), fix_round=rnd, fix_report=report_path)
 
-    def _start_job(self, gid, kind, argv, out):
+    def _start_job(self, gid, kind, argv, out, state=None, before=None, drop=None, **fields):
+        """Spawn first, then one group write; a failed spawn writes nothing."""
         log = os.path.join(self.cfg.runs_dir(kind, gid), "%s.log" % kind)
         proc = osx.spawn(argv, cwd=self.cfg.root, env=self.cfg.env(), log_path=log)
         self.children["%s:%s" % (kind, gid)] = proc
         stamp = {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(), "started": osx.now()}
-        self.set_group(gid, None, "%s started" % kind, job={"kind": kind, "stamp": stamp, "out": out},
-                       drop=("paused",) if kind == "regression" else (), superseded=True)
+        if drop is None:
+            drop = ("paused",) if kind == "regression" else ()
+        self.set_group(gid, state, "%s started" % kind, job={"kind": kind, "stamp": stamp, "out": out},
+                       drop=drop, superseded=True, before=before, **fields)
 
     def pause(self, gid, reason, text):
         """Mark a group whose environment broke; a --forever controller leaves it alone until

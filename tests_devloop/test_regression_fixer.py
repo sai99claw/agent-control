@@ -2769,14 +2769,13 @@ class FixAgentRoundUnits(LoopCase):
         self.put("g1", state="pr", job=None, fix_round=0, fix_retry=True,
                  paused={"reason": "fixer", "at": "t", "text": ""})
         ctl = self.ctl()
-        jobs = []
-        ctl._start_job = lambda gid, kind, argv, out: jobs.append((gid, kind, out))
-        ctl.start_fixer("g1", "/r.json", 1)
+        with mock.patch.object(ticket_controller.osx, "spawn", return_value=mock.Mock(pid=4242)):
+            ctl.start_fixer("g1", "/r.json", 1)
         g = self.snap().groups["g1"]
         self.assertEqual((g["state"], g["fix_round"], g["fix_report"]), ("fixing", 1, "/r.json"))
         self.assertNotIn("fix_retry", g)
         self.assertNotIn("paused", g)
-        self.assertEqual(jobs, [("g1", "fixer", "/r.json")])
+        self.assertEqual(g["job"]["kind"], "fixer")
 
     def advance(self, **fields):
         self.add(1, state="merged", group="g1")   # #118: a group with no members left is cancelled
