@@ -1,7 +1,6 @@
 # You consolidate one memory file: {path} ({layer} layer, {name})
 
-Every agent that starts in this role or on this model reads this file, so every line costs
-every session. Keep only what is worth that cost. You decide what to write and how long it is.
+{readers}
 
 ## What belongs in each layer (the one text of this contract)
 

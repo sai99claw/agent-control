@@ -30,4 +30,4 @@ Every ticket gets a DAG entry with two fields:
   `"new-g1"` (`"new-g2"`, ... for more than one; tickets naming the same placeholder share one new
   group, made at the end of the chain). The DAG orders the groups: a group comes after every
   group holding a ticket its own tickets depend on, so a choice must never make the group order a
-  cycle. Say in the ticket's `notes` why this group.
+  cycle. Say in the ticket's `notes` why this group. A fix ticket the controller asked for (a request that starts with "Flaky cases in group" or "Release red at landing") goes into the earliest open group in the chain whose tickets it does not conflict with; open a new group for it only when none fits, since every group costs one full regression.

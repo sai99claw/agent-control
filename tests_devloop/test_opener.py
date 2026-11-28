@@ -374,6 +374,143 @@ class RequiredFields(LoopCase):
         self.assertIn('"vision" is required by this project', page)
 
 
+class T154Acceptance(LoopCase):
+    """#154: the opener's prompt lists the project's hard_block, and a ticket whose outline, test_plan
+    or acceptance matches a pattern is refused unless hard_block_approval says why. Expected strings
+    come from the ticket's acceptance text; the fixture uses zz_ words only."""
+
+    HEAD = "## Merge stop (hard_block)"
+    SENTENCE = ("A ticket whose own change touches one of these stops before merging and waits for the "
+                "user's ruling.")
+    LINE = ('tickets[0]: "test_plan" matches hard_block pattern `zz_forbidden`: a change that does this '
+            'stops before merge for the user; avoid it, or say in "hard_block_approval" why this ticket '
+            "needs the user's approval at merge")
+    APPROVAL = "it must call zz_forbidden to stop its child"
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        self.hard_block({"paths": ["docs/X.md", "keep/"], "dirs": ["elsewhere/"],
+                         "patterns": ["zz_forbidden", "zz_other\\("]})
+
+    # ------------------------------------------------------------ helpers
+
+    def hard_block(self, hb):
+        """Rewrite the top-level hard_block of the harness's config (None drops the key)."""
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        if hb is None:
+            cfg.pop("hard_block", None)
+        else:
+            cfg["hard_block"] = hb
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+
+    def request(self, rc):
+        res = self.run_py("ticket_creator.py", "--request", "x")
+        self.assertEqual(res.returncode, rc, res.stdout + res.stderr)
+        return res
+
+    def prompts(self, suffix="*"):
+        return sorted(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*-a%s" % suffix, "prompt.md")))
+
+    def newest_prompt(self):
+        paths = self.prompts()
+        self.assertTrue(paths, "no opener prompt written")
+        with open(paths[-1]) as fh:
+            return fh.read()
+
+    def section(self, prompt):
+        lines = prompt.splitlines()
+        self.assertIn(self.HEAD, lines, "no '%s' heading" % self.HEAD)
+        start = lines.index(self.HEAD)
+        end = next((k for k in range(start + 1, len(lines)) if lines[k].startswith("## ")), len(lines))
+        return lines[start + 1:end]
+
+    def pages(self, kind):
+        return [p for p in self.snap().inbox.values() if p.get("kind") == kind]
+
+    # ------------------------------------------------------------ acceptance 1
+
+    def test_section_sits_between_required_fields_and_time_limits_and_lists_the_entries(self):
+        self.request(0)
+        prompt = self.newest_prompt()
+        heads = [l for l in prompt.splitlines() if l.startswith("## ")]
+        self.assertIn(self.HEAD, heads, heads)
+        k = heads.index(self.HEAD)
+        self.assertEqual(heads[k - 1], "## Fields this project requires", heads)
+        self.assertEqual(heads[k + 1], "## Time limits", heads)
+        body = "\n".join(self.section(prompt))
+        self.assertIn(self.SENTENCE, body)
+        for entry in ("`docs/X.md`", "`keep/`", "`zz_forbidden`", "`zz_other\\(`"):
+            self.assertIn(entry, body)
+        self.assertIn("hard_block_approval", body)
+        self.assertNotIn("elsewhere/", body, "hard_block.dirs is not listed")
+
+    # ------------------------------------------------------------ acceptance 2
+
+    def test_no_paths_and_no_patterns_says_the_project_has_none(self):
+        for hb in ({"paths": [], "dirs": ["elsewhere/"], "patterns": []}, {}, None):
+            with self.subTest(hard_block=hb):
+                shutil.rmtree(os.path.join(self.tmp, "wt", "runs"), ignore_errors=True)
+                self.hard_block(hb)
+                self.request(0)
+                body = [l for l in self.section(self.newest_prompt()) if l.strip()]
+                self.assertTrue(body, "the section is empty")
+                self.assertEqual(body[0], "This project has no hard_block.")
+
+    # ------------------------------------------------------------ acceptance 3 and 4
+
+    def test_a_matching_test_plan_handed_in_twice_opens_nothing_and_the_page_lists_the_line(self):
+        self.plan(creator={"-": ["hb_plan", "hb_plan"]})
+        self.request(1)
+        self.assertEqual(self.snap().tickets, {})
+        texts = [p.get("text") or "" for p in self.pages("decision")]
+        self.assertEqual(len(texts), 1, texts)
+        self.assertTrue(texts[0].startswith("the opener could not produce valid tickets:"), texts[0])
+        self.assertIn("- " + self.LINE, texts[0].splitlines())
+
+    def test_a_valid_second_hand_in_is_opened_and_its_prompt_lists_the_line(self):
+        self.plan(creator={"-": ["hb_plan", "tickets"]})
+        self.request(0)
+        self.assertEqual(sorted(self.snap().tickets), ["1", "2"])
+        second = self.prompts("2")
+        self.assertEqual(len(second), 1, "a second attempt ran")
+        with open(second[0]) as fh:
+            prompt = fh.read()
+        self.assertIn("## Your previous hand-in was rejected", prompt)
+        tail = prompt[prompt.index("## Your previous hand-in was rejected"):]
+        self.assertIn("- " + self.LINE, tail.splitlines())
+
+    # ------------------------------------------------------------ acceptance 5 and 6
+
+    def test_an_approved_match_is_opened_with_the_field_and_the_created_page_says_it_stops(self):
+        self.plan(creator={"-": ["hb_plan_approved"]})
+        self.request(0)
+        self.assertEqual(len(self.prompts()), 1, "one attempt")
+        self.assertEqual(sorted(self.snap().tickets), ["1"])
+        self.assertEqual(self.snap().ticket("1").get("hard_block_approval"), self.APPROVAL)
+        created = self.pages("created")
+        self.assertEqual(len(created), 1, created)
+        self.assertIn("#1 stops before merge for your approval (hard_block): " + self.APPROVAL,
+                      (created[0].get("text") or "").splitlines())
+
+    def test_the_created_page_of_tickets_without_the_field_is_unchanged(self):
+        # the default fake hand-in matches no pattern; its page is the one the old code writes
+        self.request(0)
+        created = self.pages("created")
+        self.assertEqual(len(created), 1, created)
+        self.assertEqual(created[0].get("text"), "opened #1 first; #2 second")
+        # the positive half: the same setup with an approved match gets the stop line
+        self.plan(creator={"-": ["hb_plan_approved"]})
+        self.request(0)
+        texts = [p.get("text") or "" for p in self.pages("created")]
+        self.assertTrue(any("#3 stops before merge for your approval (hard_block): " + self.APPROVAL
+                            in t.splitlines() for t in texts), texts)
+
+
 class T111Acceptance(LoopCase):
     """#111: --decision is never silently ignored - --from main acts like --from user, every other
     use of --decision is refused. Expected values come from the ticket's acceptance text."""
@@ -589,6 +726,51 @@ class T12Acceptance(LoopCase):
                 self.full_result("int-g2", {"schema": 1, "command": "full", "seconds": 30}, 3600)
                 self.assertIn("The project's last full run took 30 seconds.", self.opener_prompt())
 
+
+class LiveDagInPrompt(LoopCase):
+    """#153: '## Current DAG' holds the tickets not landed or cancelled and their direct dependencies."""
+
+    POOL = (("1", "landed", []), ("2", "cancelled", []), ("3", "landed", []),
+            ("4", "ready", ["3"]), ("5", "stuck", ["4", "2"]), ("6", "landed", ["1"]))
+
+    opener_prompt = T12Acceptance.opener_prompt
+
+    def dag_block(self, text):
+        part = text.split("## Current DAG", 1)[1].split("## Groups", 1)[0]
+        return json.loads(part.split("```json", 1)[1].split("```", 1)[0])
+
+    def test_prompt_dag_holds_only_the_live_part(self):
+        for ident, state, deps in self.POOL:
+            self.add(ident, deps=deps, state=state)
+        text = self.opener_prompt()
+        shown = self.dag_block(text)
+        self.assertEqual(list(shown), ["2", "3", "4", "5"])
+        full = self.pool.snapshot().dag
+        for k in shown:
+            self.assertEqual(shown[k], full[k])
+        heads = [l for l in text.splitlines() if l.startswith("## ")]
+        i = heads.index("## Current DAG")
+        self.assertEqual(heads[i - 1], "## Tickets still open")
+        self.assertEqual(heads[i + 1], "## Groups")
+
+    def test_dag_key_without_a_ticket_record_is_kept(self):
+        sys.path.insert(0, LOOP)
+        import ticket_creator
+        snap = pool_mod.Snapshot({"dag": {"tickets": {"7": {"depends_on": []}, "8": {"depends_on": []}}},
+                                  "tickets": {"8": {"state": "landed"}}})
+        self.assertEqual(list(ticket_creator.live_dag(snap)), ["7"])
+
+    def test_hand_in_depending_on_a_landed_ticket_is_accepted(self):
+        sys.path.insert(0, LOOP)
+        import ticket_creator
+        for ident, state, deps in self.POOL:
+            self.add(ident, deps=deps, state=state)
+        result = {"tickets": [{"key": "new-1", "title": "t", "objective": "o", "acceptance": ["a"],
+                               "token_estimate": 1000, "needs_verifier": False, "complexity": "simple"}],
+                  "dag": {"new-1": {"depends_on": ["1"], "group": "new-g1"}}}
+        self.assertEqual(ticket_creator.check_new(result, self.pool.snapshot()), [])
+
+
 class T127Acceptance(LoopCase):
     """#127 acceptance 4 (a)-(e) (the test_plan's ReviseDagAcceptance): a revised hand-in's 'dag' part
     changes the ticket's depends_on and group. The creator is fake_agent.py's 'revised_dag' action,
@@ -721,6 +903,20 @@ class T127Acceptance(LoopCase):
         self.assertCostKept(t0, t1)
 
 
+class FixGroupRule(unittest.TestCase):
+    """#155: the opener's group rule says where a controller-asked fix ticket goes."""
+    SENTENCE = ('A fix ticket the controller asked for (a request that starts with "Flaky cases in group" '
+                'or "Release red at landing") goes into the earliest open group in the chain whose tickets '
+                'it does not conflict with; open a new group for it only when none fits, since every group '
+                'costs one full regression.')
+
+    def test_rules_file_and_chain_contain_the_sentence(self):
+        import ticket_creator
+        with open(os.path.join(LOOP, "prompts", "creator", "02-rules.md")) as f:
+            self.assertIn(self.SENTENCE, f.read())
+        self.assertIn(self.SENTENCE, ticket_creator.chain())
+
+
 class LastFullSecondsUnit(unittest.TestCase):
     """limits_section / last_full_seconds helpers of ticket_creator."""
 
@@ -747,6 +943,58 @@ class LastFullSecondsUnit(unittest.TestCase):
         text = ticket_creator.limits_section(cfg)
         self.assertIn("limited to 75 seconds", text)
         self.assertIn("took 30 seconds.", text)
+
+
+class HardBlockCheckUnit(unittest.TestCase):
+    """hard_block_section / check_new with hard_block patterns (ticket #154)."""
+
+    class Cfg:
+        required_fields = {}
+        hard_paths = ["docs/X.md"]
+        hard_patterns = ["zz_forbidden", "(unclosed"]
+
+    class Snap:
+        tickets = {}
+        dag = {}
+        groups = {}
+
+    def check(self, **over):
+        import ticket_creator
+        t = {"key": "new-1", "title": "o", "objective": "o", "acceptance": ["a"], "needs_verifier": True,
+             "complexity": "simple", "token_estimate": 1000}
+        t.update(over)
+        with mock.patch.object(ticket_creator, "group_problems", return_value=[]):
+            got = ticket_creator.check_new({"tickets": [t], "dag": {"new-1": {}}}, self.Snap(), self.Cfg())
+        return [g for g in got if "hard_block" in g]
+
+    def test_matches_per_field(self):
+        got = self.check(acceptance=["a", "uses zz_forbidden"], outline="do zz_forbidden")
+        self.assertEqual(len(got), 2)
+        self.assertIn('tickets[0]: "acceptance[1]" matches hard_block pattern `zz_forbidden`: a change '
+                      'that does this stops before merge for the user; avoid it, or say in '
+                      '"hard_block_approval" why this ticket needs the user\'s approval at merge', got)
+        self.assertTrue(any('"outline" matches' in g for g in got))
+
+    def test_notes_title_and_bad_pattern_not_refused(self):
+        self.assertEqual(self.check(notes="zz_forbidden", title="zz_forbidden (unclosed"), [])
+
+    def test_approval(self):
+        self.assertEqual(self.check(outline="zz_forbidden", hard_block_approval="because"), [])
+        msg = ('tickets[0]: "hard_block_approval" must be a sentence saying why the ticket needs the '
+               "user's approval at merge, or left out")
+        self.assertEqual(self.check(hard_block_approval=""), [msg])
+        self.assertEqual(self.check(hard_block_approval=5), [msg])
+
+    def test_section(self):
+        import ticket_creator
+        text = ticket_creator.hard_block_section(self.Cfg())
+        self.assertIn("`docs/X.md`", text)
+        self.assertIn("`zz_forbidden`", text)
+
+        class Empty:
+            hard_paths = hard_patterns = []
+        self.assertEqual(ticket_creator.hard_block_section(Empty()).split("\n")[-1],
+                         "This project has no hard_block.")
 
 
 class ReviseDagUnit(LoopCase):

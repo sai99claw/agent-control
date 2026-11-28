@@ -4,10 +4,12 @@ main moves, so it always matches main; nobody edits it by hand and tickets never
 
 Python files list their classes and functions with the first line of each docstring (from the
 syntax tree); other source files list their first comment line. Tests and generated files are
-included only by path.
+included only by path: test files (test_*.py) are listed by path only, and private ('_')
+functions are not listed.
 """
 
 import ast
+import fnmatch
 import os
 
 from .gitx import Git
@@ -48,7 +50,7 @@ def python_entries(path):
             for sub in node.body:
                 if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and not sub.name.startswith("_"):
                     out.append("  - `%s(%s)` %s" % (sub.name, args(sub), first_line(ast.get_docstring(sub))))
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
             out.append("- `%s(%s)` %s" % (node.name, args(node), first_line(ast.get_docstring(node))))
     return first_line(ast.get_docstring(tree)), out
 
@@ -78,7 +80,9 @@ def build(tree, skip=()):
         if not rel.endswith(SOURCE):
             continue
         path = os.path.join(tree, rel)
-        if rel.endswith(".py"):
+        if fnmatch.fnmatchcase(os.path.basename(rel), "test_*.py"):
+            out.append("## %s" % rel)
+        elif rel.endswith(".py"):
             doc, entries = python_entries(path)
             out.append("## %s%s" % (rel, " - " + doc if doc else ""))
             out.extend(entries)

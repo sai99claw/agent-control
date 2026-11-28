@@ -219,7 +219,7 @@ PATH: put first the folder of every agent command the project uses (`dirname "$(
 `agents.<role>` (the command that starts an agent; prompt on stdin),
 `memory` (D-088: the folder of the memory files; default `<pool>/memory`, a relative path is against the project root; see Memory).
 Tests run through the project's existing test interface (`tests.preflight`, optional `tests.quick`, `tests.run`, `tests.full`; `scripts/testiface.py`).
-`hard_block.paths` / `patterns`: a ticket whose own change touches them stops before merging (what it merged in from main does not count).
+`hard_block.paths` / `patterns`: a ticket whose own change touches them stops before merging (what it merged in from main does not count). The opener's prompt lists them; a ticket whose outline, test_plan or acceptance matches a pattern is opened only with `hard_block_approval` (why it needs the user's approval at merge), which the created page shows.
 
 `devloop.no_reverify_paths` (D-090; default `["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"]`,
 a project's list replaces it, `[]` turns it off): when main moved after a group was verified and
@@ -267,7 +267,7 @@ members, event `member #N added by the opener`) or a new-group placeholder `new-
 the same placeholder share one new group; new groups are made at the end of the chain in the order
 their placeholder first appears in `tickets`, first event `opened by the opener for #N, #M`), all in
 the same pool write as the tickets; the opening makes no git branch, and `dag.json` keeps only
-`depends_on` per ticket and keeps the file's other top-level keys (`first_ticket_id`, `group_after`). The opener's prompt has a `## Groups` section after `## Current DAG`: the chain, one
+`depends_on` per ticket and keeps the file's other top-level keys (`first_ticket_id`, `group_after`). The opener's prompt has a `## Groups` section after `## Current DAG`, which holds the tickets not landed or cancelled and their direct dependencies (the hand-in is checked against the whole DAG): the chain, one
 line per group not landed or cancelled with its state, whether it takes new tickets and its members.
 A hand-in is refused, with nothing written, when an entry has no group, names a group that does not
 exist or is not open, or places a ticket so that the group order becomes a cycle (the pool's tickets plus the
@@ -538,7 +538,7 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   retries in the test. The verifier writes its cases into existing test modules of the layer that covers the
   change, never one new file per ticket.
 - `index_path` (default `CODE-MAP.md`): a code index generated from the code and committed onto
-  the integration branch just before main moves. Agents read it before searching.
+  the integration branch just before main moves. Agents read it before searching. Test files (`test_*.py`) are listed by path only and private (`_`) functions are not listed.
 - `required_fields`: extra ticket fields the opener must fill (agent-control requires `vision` and
   `removes`).
 - Cost rows: role, model, effort, round, seconds, tokens (input, output, cache read and write),
@@ -567,7 +567,7 @@ push is a decision page. The working state stays in the pool: `memory/inbox/` (w
 Agents start with their role and model memory in the prompt (project memory by path). They never
 edit memory; a hand-in may carry `"lessons": [{"layer", "text"}]`, which the scripts put in
 `memory/inbox/`. The controller starts `memory_keeper.py` for one file at a time once 5 lessons wait
-(or the oldest waited 3 days, at most once per 24 h per file); the consolidator agent rewrites the file. What
+(or the oldest waited 3 days, at most once per 24 h per file); the consolidator agent rewrites the file. The consolidator is told the file's readers (the models of the role's command chains in the config, the model itself for a model file, the reading roles' models for `project.md`) and sizes the file for them, with no length cap (D-101). What
 belongs in which layer is written once, in `prompts/consolidator.md`. `tickets.py init` seeds the
 folder with the files it lacks, never overwriting: a role or model file starts as agent-control's memory/
 file of that name when it has one, else with a heading only; `project.md` starts with its heading. So a

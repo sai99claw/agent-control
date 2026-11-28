@@ -67,6 +67,25 @@ class LessonsHelpers(unittest.TestCase):
         self.assertEqual(len(tx.rows), 2)
 
 
+class ReadersHelpers(unittest.TestCase):
+    class Cfg:
+        chains = {"creator": ["c"], "worker": ["a", "b"], "worker_simple": ["s", "a"],
+                  "verifier": ["v"], "reviewer": ["r"], "fixer": ["f"]}
+
+        def agent_chain(self, role):
+            return [["x", "--model", m] for m in self.chains[role]]
+
+    def test_readers_by_layer(self):
+        from core import memory
+        cfg = self.Cfg()
+        self.assertEqual(memory.readers(cfg, "role", "worker"), ["a", "b", "s"])
+        self.assertEqual(memory.readers(cfg, "role", "consolidator"), [])
+        self.assertEqual(memory.readers(cfg, "model", "m"), ["m"])
+        self.assertEqual(memory.readers(cfg, "project", "project"), ["c", "a", "b", "s", "v", "r", "f"])
+        text = memory.readers_section(cfg, "role", "consolidator")
+        self.assertIn("- no agent's prompt includes this file", text)
+
+
 class Memory(LoopCase):
     def test_init_seeds_every_role_and_starts_model_memory_from_agent_control(self):
         res = self.run_py("tickets.py", "init")
@@ -135,6 +154,172 @@ class KeeperInterrupt(LoopCase):
         self.assertEqual([c["outcome"] for c in run["cost"]], ["interrupted"])
         self.assertEqual(len(snap.lessons), 5)
         self.assertNotIn("memory/role/worker.md", snap.memory_state.get("last", {}))
+
+
+class T156Acceptance(LoopCase):
+    """Ticket #156: the consolidator (and its peer) is told which models read the file it rewrites."""
+
+    HEADING = "## Who reads this file"
+    NOBODY = "- no agent's prompt includes this file"
+    SIZE = "Size and phrase the file for these readers; there is no length cap."
+    OLD = "Every agent that starts in this role or on this model reads this file, so every line costs every session."
+    LAYERS_SECTION = (
+        "## What belongs in each layer (the one text of this contract)\n\n"
+        "- **role**: principles for doing this role well, true on any project (\"assert a symbol exists\n"
+        "  before asserting its value\"). Not how this project works.\n"
+        "- **model**: how this model tends to go wrong and what helps, true on any project.\n"
+        "- **project**: this project's design reasons and invariants - why things are the way they are and\n"
+        "  what must stay true. Not commands, paths, line numbers or flags (those go stale; the code is\n"
+        "  where to look them up).\n"
+        "- Nowhere: the story of an incident (tickets hold that), concrete examples, anything that only\n"
+        "  restates the rules already in the agent's prompt, and routing or staffing policy (\"this model\n"
+        "  does not open tickets\") - that is configuration.\n"
+        "- **Stale**: a lesson about a tool, script, step or rule the current loop does not have (the loop\n"
+        "  is described in {loop_readme}) - drop it, even if it was true once. Lessons imported from\n"
+        "  before devloop are often like that.\n\n"
+        "Write principles, ways of thinking and rules of conduct, not cases. A ticket number may be cited\n"
+        "as the source of a principle.\n")
+    WORKER = ["- m-w1", "- m-w2", "- m-ws"]
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    @staticmethod
+    def cmd(model):
+        return ["python3", AGENT[1], "--model", model]
+
+    OMIT = object()
+
+    def agents(self, worker_simple=True):
+        """worker_simple: True -> [m-ws, m-w1]; OMIT -> key left out; anything else -> that value."""
+        c = self.cmd
+        out = {"creator": [c("m-creator")], "worker": [c("m-w1"), c("m-w2")],
+               "verifier": [c("m-v")], "reviewer": [c("m-r")], "fixer": [c("m-f")],
+               "consolidator": [c("m-c")], "consolidator_peer": [c("m-c")]}
+        if worker_simple is True:
+            out["worker_simple"] = [c("m-ws"), c("m-w1")]
+        elif worker_simple is not self.OMIT:
+            out["worker_simple"] = worker_simple
+        return out
+
+    def queue(self, layer, name):
+        def change(tx):
+            tx.write("memory/inbox/t156-%s-%s.json" % (layer, name),
+                     {"layer": layer, "name": name, "text": "a lesson for #156", "source": "test",
+                      "at": osx.now()})
+        self.pool.update(change, "test: a lesson for %s/%s" % (layer, name))
+
+    def keep(self, layer, name):
+        self.queue(layer, name)
+        res = self.run_py("memory_keeper.py", "--layer", layer, "--name", name)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        found = sorted(glob.glob(os.path.join(self.tmp, "wt", "runs", "memory", "%s-%s-*" % (layer, name))))
+        self.assertTrue(found, "no run folder for %s/%s" % (layer, name))
+        return found[-1]
+
+    @staticmethod
+    def text(path):
+        with open(path) as fh:
+            return fh.read()
+
+    def section(self, prompt):
+        lines = prompt.splitlines()
+        self.assertTrue(self.HEADING in lines, "the prompt has a line exactly %r" % self.HEADING)
+        start = lines.index(self.HEADING) + 1
+        body = []
+        for line in lines[start:]:
+            if line.startswith("## "):
+                break
+            body.append(line)
+        return "\n".join(body), [line for line in body if line.startswith("- ")]
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_readers_from_the_config(self):
+        from core import memory
+        from core.config import Config
+        self.assertTrue(hasattr(memory, "readers"), "core.memory has readers()")
+        self.config(agents=self.agents())
+        cfg = Config(self.proj)
+        expect = {
+            ("role", "creator"): ["m-creator"],
+            ("role", "worker"): ["m-w1", "m-w2", "m-ws"],
+            ("role", "verifier"): ["m-v"],
+            ("role", "reviewer"): ["m-r"],
+            ("role", "fixer"): ["m-f"],
+            ("role", "consolidator"): [],
+            ("role", "worker_simple"): [],
+            ("role", "nosuchrole"): [],
+            ("model", "m-v"): ["m-v"],
+            ("model", "anything"): ["anything"],
+            ("project", "project"): ["m-creator", "m-w1", "m-w2", "m-ws", "m-v", "m-r", "m-f"],
+        }
+        for (layer, name), want in expect.items():
+            with self.subTest(layer=layer, name=name):
+                self.assertEqual(list(memory.readers(cfg, layer, name)), want)
+        # worker_simple configured [] or null: cfg.agent_chain falls back to the worker chain
+        for empty in ([], None):
+            with self.subTest(worker_simple=empty):
+                self.config(agents=self.agents(worker_simple=empty))
+                cfg = Config(self.proj)
+                self.assertEqual(list(memory.readers(cfg, "role", "worker")), ["m-w1", "m-w2"])
+                self.assertEqual(list(memory.readers(cfg, "project", "project")),
+                                 ["m-creator", "m-w1", "m-w2", "m-v", "m-r", "m-f"])
+        # worker_simple left out: Config fills the default sonnet command, a reader like any other
+        with self.subTest(worker_simple="left out"):
+            self.config(agents=self.agents(worker_simple=self.OMIT))
+            cfg = Config(self.proj)
+            self.assertEqual(list(memory.readers(cfg, "role", "worker")), ["m-w1", "m-w2", "sonnet"])
+            self.assertEqual(list(memory.readers(cfg, "project", "project")),
+                             ["m-creator", "m-w1", "m-w2", "sonnet", "m-v", "m-r", "m-f"])
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_consolidator_prompt_lists_the_readers(self):
+        self.config(agents=self.agents())
+        cases = [("role", "worker", self.WORKER), ("role", "creator", ["- m-creator"]),
+                 ("model", "m-v", ["- m-v"]),
+                 ("project", "project", ["- m-creator", "- m-w1", "- m-w2", "- m-ws", "- m-v", "- m-r", "- m-f"]),
+                 ("role", "consolidator", [self.NOBODY])]
+        for layer, name, want in cases:
+            with self.subTest(layer=layer, name=name):
+                prompt = self.text(os.path.join(self.keep(layer, name), "prompt.md"))
+                self.assertEqual(self.section(prompt)[1], want)
+
+    # ------------------------------------------------------------ items 3 and 4
+
+    def test_item3_item4_section_wording_and_old_sentence_gone(self):
+        self.config(agents=self.agents())
+        for layer, name, words in (("role", "worker", ("whole file", "every prompt")),
+                                   ("model", "m-v", ("whole file", "every prompt")),
+                                   ("project", "project", ("touches", "path"))):
+            with self.subTest(layer=layer):
+                prompt = self.text(os.path.join(self.keep(layer, name), "prompt.md"))
+                body, _ = self.section(prompt)
+                flat = " ".join(body.split())
+                self.assertIn(self.SIZE, flat)
+                for w in words:
+                    self.assertIn(w, flat)
+                self.assertNotIn(self.OLD, " ".join(prompt.split()))
+        with open(os.path.join(LOOP, "prompts", "consolidator.md")) as fh:
+            template = fh.read()
+        self.assertNotIn(self.OLD, " ".join(template.split()))
+        self.assertIn(self.LAYERS_SECTION, template, "'## What belongs in each layer' is unchanged")
+
+    # ------------------------------------------------------------ item 5
+
+    def test_item5_peer_and_revised_prompts_have_the_same_section(self):
+        self.config(agents=self.agents(), unlimited_tokens=True)
+        run = self.keep("role", "worker")
+        for sub in ("peer", "revised"):
+            with self.subTest(prompt=sub):
+                path = os.path.join(run, sub, "prompt.md")
+                self.assertTrue(os.path.isfile(path), "%s/prompt.md written" % sub)
+                body, bullets = self.section(self.text(path))
+                self.assertEqual(bullets, self.WORKER)
+                self.assertIn(self.SIZE, " ".join(body.split()))
 
 
 class MemoryFolderHelpers(LoopCase):

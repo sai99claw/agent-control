@@ -9,6 +9,8 @@ nowhere (incident stories, examples, routing policy, rules the prompt already gi
 line about a tool or step the current loop ({loop_readme}) does not have, two lines that say the
 same thing, a line made vaguer than the lesson it came from.
 
+{readers}
+
 ## The file before
 
 {current}

@@ -251,6 +251,37 @@ def import_lessons(tx, texts, layer, name, path):
     return queue(tx, texts, layer, name, "lessons import from %s" % path, prefix)
 
 
+READERS = {"creator": ("creator",), "worker": ("worker", "worker_simple"), "verifier": ("verifier",),
+           "reviewer": ("reviewer",), "fixer": ("fixer",)}
+
+
+def readers(cfg, layer, name):
+    """The distinct models (chain order) whose agents read the file of this layer and name."""
+    from . import agents
+    if layer == "model":
+        return [name]
+    roles = [r for rs in READERS.values() for r in rs] if layer == "project" else READERS.get(name, ())
+    found = []
+    for role in roles:
+        for argv in cfg.agent_chain(role):
+            m = agents.model_of(argv)
+            if m not in found:
+                found.append(m)
+    return found
+
+
+def readers_section(cfg, layer, name):
+    """The '## Who reads this file' section the consolidator prompts carry (D-101)."""
+    models = readers(cfg, layer, name)
+    if layer == "project":
+        how = "These readers read it when their work touches it (their prompts give its path)."
+    else:
+        how = "These readers get the whole file in every prompt."
+    bullets = "\n".join("- " + m for m in models) or "- no agent's prompt includes this file"
+    return ("## Who reads this file\n\n%s\n\n%s Size and phrase the file for these readers; "
+            "there is no length cap." % (bullets, how if models else "Nothing reads it."))
+
+
 def for_prompt(cfg, role, model):
     """What a starting agent reads: its role memory and its model memory (from the folder)."""
     parts = []
