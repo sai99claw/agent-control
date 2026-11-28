@@ -95,6 +95,12 @@
     {
       "at": "2026-11-28T11:39:52Z",
       "event": "release failed"
+    },
+    {
+      "at": "2026-11-28T11:51:40Z",
+      "event": "page acknowledged",
+      "page": "20261128T113954Z-decision-g20",
+      "by": "main-session"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
