@@ -52,6 +52,7 @@ ticket holds its lock <worktrees>/locks/issuer-<N>.lock), or the ticket is no lo
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -82,9 +83,18 @@ class NotOwned(Exception):
 
 
 class Stuck(Exception):
-    def __init__(self, reason, text, page=True):
+    def __init__(self, reason, text, page=True, detail=None):
         super().__init__(text)
-        self.reason, self.text, self.page = reason, text, page
+        self.reason, self.text, self.page, self.detail = reason, text, page, detail
+
+
+def change_fingerprint(paths, triples):
+    """sha256 of a change's inspected paths and its added and removed lines (sign, path, text):
+    the same commits replayed onto a newer target give the same value."""
+    body = {"paths": list(paths),
+            "added": [[path, text] for sign, path, text in triples if sign == "+"],
+            "removed": [[path, text] for sign, path, text in triples if sign == "-"]}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 THROWN_OUT = ("the ticket was revised during this round and the revision threw out the "
@@ -689,22 +699,34 @@ class Issuer:
         if own:
             from_main = set(g.changed_files(main))
             files = [f for f in files if f in from_main]
-        hits = [f for f in files if any(f == p or f.startswith(p.rstrip("/") + "/")
-                                        for p in self.cfg.hard_paths)]
-        if self.cfg.hard_patterns:
-            added = g.added_lines(self.target)
-            if own:
-                from_main = set(g.added_lines(main))
-                added = [line for line in added if line in from_main]
-            for pat in self.cfg.hard_patterns:
-                try:
-                    rx = re.compile(pat)
-                except re.error:
-                    continue
-                if any(rx.search(line) for line in added):
-                    hits.append("pattern %r" % pat)
-        if hits:
-            raise Stuck("hard_block", "the change touches hard_block: %s" % ", ".join(hits))
+        paths = [f for f in files if any(f == p or f.startswith(p.rstrip("/") + "/")
+                                         for p in self.cfg.hard_paths)]
+        rxs = []
+        for pat in self.cfg.hard_patterns:
+            try:
+                rxs.append((pat, re.compile(pat)))
+            except re.error:
+                continue
+        if not paths and not rxs:
+            return
+        triples = g.diff_lines(self.target)
+        if own:
+            from_main = set(g.diff_lines(main))
+            triples = [x for x in triples if x in from_main]
+        lines = []
+        for sign, path, text in triples:
+            matched = [pat for pat, rx in rxs if rx.search(text)] if sign == "+" else []
+            if matched:
+                lines.append({"file": path, "text": text, "patterns": matched})
+        if not paths and not lines:
+            return
+        detail = {"paths": paths, "lines": lines, "fingerprint": change_fingerprint(files, triples)}
+        hit_pats = [pat for pat, _ in rxs if any(pat in x["patterns"] for x in lines)]
+        out = ["the change touches hard_block: %s" % ", ".join(paths + ["pattern %r" % p for p in hit_pats])]
+        out += ["  path %s" % p for p in paths]
+        out += ["  line %s: %s  (pattern %s)" % (x["file"], x["text"], ", ".join(x["patterns"])) for x in lines]
+        out.append("  fingerprint %s" % detail["fingerprint"])
+        raise Stuck("hard_block", "\n".join(out), detail=detail)
 
     # ------------------------------------------------------------ agents
 
@@ -824,11 +846,13 @@ class Issuer:
 
     # ------------------------------------------------------------ endings
 
-    def stuck(self, reason, text, page=True):
+    def stuck(self, reason, text, page=True, detail=None):
         def mutate(t):
             t["state"], t["run"] = "stuck", None
             t.pop("waiting", None)
             t["stuck"] = {"reason": reason, "text": text, "at": osx.now()}
+            if detail is not None:
+                t["stuck"]["hard_block"] = detail
             event(t, "stuck", reason=reason)
         self.save(mutate, "stuck (%s)" % reason)
         if page:   # not when the worker's revise escalated in this round: that page is the page
@@ -838,7 +862,10 @@ class Issuer:
             if gid in snap.groups and snap.groups[gid].get("state") == "open" and chain.stuck_holds(snap, self.id, gid):
                 page_text += "\n%s waits for this decision; groups after it in the chain: %s" % (
                     gid, ", ".join(chain.behind(snap, gid)) or "none")
-            self.pool.report("env" if reason == "env" else "decision", self.id, page_text, **self.stuck_ask(reason))
+            extra = self.stuck_ask(reason)
+            if detail is not None:
+                extra["hard_block"] = detail
+            self.pool.report("env" if reason == "env" else "decision", self.id, page_text, **extra)
 
     def stuck_ask(self, reason):
         i = self.id
@@ -971,7 +998,7 @@ def _outcome(issuer):
         return issuer.go()
     except Stuck as exc:
         issuer.stop_agents()
-        _safe(lambda: issuer.stuck(exc.reason, exc.text, exc.page))
+        _safe(lambda: issuer.stuck(exc.reason, exc.text, exc.page, exc.detail))
         print("ticket_issuer: #%s stuck (%s): %s" % (issuer.id, exc.reason, exc.text), file=sys.stderr)
         return 1
     except Interrupted as exc:

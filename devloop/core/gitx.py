@@ -13,6 +13,15 @@ class GitError(OSFailure):
     pass
 
 
+def _header_path(rest, prefix):
+    """The path of a '--- '/'+++ ' diff header, None for /dev/null (git ends a path with a space by a tab)."""
+    if rest.endswith("\t"):
+        rest = rest[:-1]
+    if rest == "/dev/null":
+        return None
+    return rest[len(prefix):] if rest.startswith(prefix) else rest
+
+
 class Git:
     def __init__(self, cwd, timeout=600):
         self.cwd = cwd
@@ -48,10 +57,24 @@ class Git:
         text = self.out("diff", "--name-only", "%s...%s" % (base, head))
         return [line for line in text.splitlines() if line]
 
-    def added_lines(self, base, head="HEAD"):
-        text = self.out("diff", "--unified=0", "%s...%s" % (base, head))
-        return [line[1:] for line in text.splitlines()
-                if line.startswith("+") and not line.startswith("+++")]
+    def diff_lines(self, base, head="HEAD"):
+        """Every added and removed line of `base`...`head` as (sign, path, text), sign '+' or '-',
+        in diff order. The path is the file's new path, or its old path when it was deleted."""
+        text = self.run("-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", "--no-ext-diff",
+                        "--src-prefix=a/", "--dst-prefix=b/", "%s...%s" % (base, head)).out
+        out, old, path, in_hunk = [], None, None, False
+        for line in text.split("\n"):
+            if line.startswith("diff --git "):
+                old, path, in_hunk = None, None, False
+            elif not in_hunk and line.startswith("--- "):
+                old = _header_path(line[4:], "a/")
+            elif not in_hunk and line.startswith("+++ "):
+                path = _header_path(line[4:], "b/") or old
+            elif line.startswith("@@"):
+                in_hunk = True
+            elif in_hunk and line[:1] in ("+", "-"):
+                out.append((line[0], path, line[1:]))
+        return out
 
     def toplevel(self):
         return self.out("rev-parse", "--show-toplevel")

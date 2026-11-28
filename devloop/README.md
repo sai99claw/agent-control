@@ -222,7 +222,7 @@ PATH: put first the folder of every agent command the project uses (`dirname "$(
 `agents.<role>` (the command that starts an agent; prompt on stdin),
 `memory` (D-088: the folder of the memory files; default `<pool>/memory`, a relative path is against the project root; see Memory).
 Tests run through the project's existing test interface (`tests.preflight`, optional `tests.quick`, `tests.run`, `tests.full`; `scripts/testiface.py`).
-`hard_block.paths` / `patterns`: a ticket whose own change touches them stops before merging (what it merged in from main does not count). The opener's prompt lists them; a ticket whose outline, test_plan or acceptance matches a pattern is opened only with `hard_block_approval` (why it needs the user's approval at merge), which the created page shows.
+`hard_block.paths` / `patterns`: a ticket whose own change touches them stops before merging (what it merged in from main does not count). The opener's prompt lists them; a ticket whose outline, test_plan or acceptance matches a pattern is opened only with `hard_block_approval` (why it needs the user's approval at merge), which the created page shows. The stop's page and the ticket's `stuck.hard_block` list each hit path and each matching added line (file, text, patterns) and the fingerprint of the ticket's own change (sha256 over its inspected paths, added and removed lines), which a replay onto a newer target (D-098) does not change.
 
 `devloop.no_reverify_paths` (D-090; default `["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"]`,
 a project's list replaces it, `[]` turns it off): when main moved after a group was verified and
