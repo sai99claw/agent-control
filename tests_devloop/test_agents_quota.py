@@ -846,6 +846,114 @@ class UnderscoredQuotaUnits(LoopCase):
         self.assertEqual(hand.cost["outcome"], "out of quota")
 
 
+class T148Acceptance(LoopCase):
+    """#148: quota is read from the CLI's own error (a claude result object, codex error events), not
+    from the agent's words. Expected values come from the ticket's acceptance items 2-5."""
+
+    CLAUDE_OK = json.dumps({
+        "type": "result", "subtype": "success", "is_error": False, "api_error_status": None,
+        "duration_ms": 900, "num_turns": 3, "session_id": "s1", "total_cost_usd": 0.01,
+        "usage": {"input_tokens": 5, "output_tokens": 7, "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0},
+        "terminal_reason": "completed",
+        "result": "I stopped: the API said usage limit reached, resets 3pm"})
+    QUOTA_RESULT = "Claude AI usage limit reached"
+    EPOCH_RESULT = "Claude AI usage limit reached|1900000000"
+    CLAUDE_QUOTA = json.dumps({
+        "type": "result", "subtype": "success", "is_error": True, "api_error_status": 429,
+        "duration_ms": 900, "num_turns": 3, "session_id": "s2", "total_cost_usd": 0,
+        "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0},
+        "terminal_reason": "api_error", "result": QUOTA_RESULT})
+    CLAUDE_EPOCH = json.dumps(dict(json.loads(CLAUDE_QUOTA), result=EPOCH_RESULT))
+    CODEX_AGENT = "\n".join(json.dumps(e) for e in (
+        {"type": "thread.started", "thread_id": "t1"},
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message",
+                                            "text": "The test hit a rate limit, so I stopped."}}))
+    PAGE_TEXT = ("the opener is out of quota; nothing was opened:\n"
+                 "Claude AI usage limit reached|1900000000\n"
+                 "the limit resets at 2030-03-17T17:46:40Z: send the request again after that time with "
+                 "`actl new --request`")
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def fixture(self, name, text):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w") as fh:
+            fh.write(text + "\n")
+        return path
+
+    def agents_cfg(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    def second(self):
+        ran = os.path.join(self.tmp, "second-ran")
+        return ran, ["sh", "-c", "cat >/dev/null; touch %s; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"" % ran]
+
+    def chain_no_hand_in(self, log_text, code):
+        from core import agents
+        from core.config import Config
+        said = self.fixture("said.txt", log_text)
+        first = ["sh", "-c", "cat >/dev/null; cat %s; exit %d" % (said, code)]
+        ran, second = self.second()
+        self.config(agents=dict(self.agents_cfg(), worker=[first, second]))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj,
+                            os.path.join(self.tmp, "run"), 30).finish()
+        self.assertIsNone(hand.result)
+        self.assertEqual((hand.cost or {}).get("outcome"), "no hand-in")
+        self.assertFalse(os.path.exists(ran), "the next command of the chain was started")
+
+    def test_item2_claude_is_error_false_is_not_quota(self):
+        self.chain_no_hand_in(self.CLAUDE_OK, 0)
+
+    def test_item3_codex_agent_message_is_not_quota(self):
+        self.chain_no_hand_in(self.CODEX_AGENT, 1)
+
+    def test_item4_wait_text_is_the_result_string(self):
+        from core import agents
+        from core.config import Config
+        said = self.fixture("said.txt", self.CLAUDE_QUOTA)
+        count = os.path.join(self.tmp, "count")
+        argv = ["sh", "-c", 'cat >/dev/null; n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s; '
+                'if [ "$n" -lt 1 ]; then cat %s; exit 1; fi; '
+                'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"' % (count, count, said)]
+        self.config(agents=dict(self.agents_cfg(), worker=argv), quota_retry_seconds=1)
+        calls = []
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append((phase, text, until, time.time()))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj,
+                            os.path.join(self.tmp, "run"), 30, on_quota=hook).finish()
+        waits = [c for c in calls if c[0] == "wait"]
+        self.assertEqual(len(waits), 1, [c[0] for c in calls])
+        self.assertTrue(waits[0][1] == self.QUOTA_RESULT, "the wait text is not the result string")
+        self.assertAlmostEqual(waits[0][2], waits[0][3] + 1, delta=0.5)   # quota_retry_seconds
+        self.assertEqual(hand.kind, "done")
+
+    def test_item5_opener_page_text(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        said = self.fixture("said.txt", self.CLAUDE_EPOCH)
+        self.config(agents=dict(self.agents_cfg(),
+                                creator=["sh", "-c", "cat >/dev/null; cat %s; exit 1" % said]))
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1)
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+        rows = list(self.snap().inbox.values())
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0].get("text") == self.PAGE_TEXT, "the page text is not the one acceptance 5 gives")
+
+
 class T32Acceptance(LoopCase):
     """#32: auto_fixer and memory_keeper wait for the quota reset instead of failing the run.
     Expected values come from the ticket's acceptance items (D-091 item 5), not from the code."""
