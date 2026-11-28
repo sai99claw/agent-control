@@ -791,6 +791,115 @@ class QuotaResetCodexUnits(unittest.TestCase):
         self.assertEqual(agents.quota_reset("try again in 3d", self.AT), self.AT + 3 * 86400)
 
 
+class CliErrorUnits(unittest.TestCase):
+    """agents.cli_error per log format and _says_quota on top of it (implementer's tests of #148)."""
+
+    OK = {"type": "result", "subtype": "success", "is_error": False, "api_error_status": None,
+          "usage": {"input_tokens": 1}, "result": "the agent said usage limit reached, resets 3pm"}
+    QUOTA_TEXT = "Claude AI usage limit reached"
+    BARE_429 = "API Error: 429"
+    CODEX_QUOTA = ("You\u2019ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) "
+                   "or try again in 2 days 3 hours")
+    AGENT_WORDS = "The test hit a rate limit, so I stopped."
+    PLAIN_QUOTA = "error: rate limit, resets in 2h\n"
+    PLAIN_429 = ("HTTP 429\n", "status 429, retrying\n")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.n = 0
+
+    def log(self, *lines, raw=None):
+        self.n += 1
+        path = os.path.join(self.tmp, "log%d" % self.n)
+        with open(path, "w") as fh:
+            fh.write(raw if raw is not None else "".join(
+                (json.dumps(x) if isinstance(x, dict) else x) + "\n" for x in lines))
+        os.utime(path, (1800000000, 1800000000))
+        return path
+
+    def claude(self, **over):
+        return dict(self.OK, **over)
+
+    def test_claude_object_gives_result_only_when_is_error(self):
+        from core import agents
+        self.assertEqual(agents.cli_error(self.log("noise", self.claude())), ("", 1800000000))
+        err = self.claude(is_error=True, result=self.QUOTA_TEXT)
+        self.assertEqual(agents.cli_error(self.log(err)), (self.QUOTA_TEXT, 1800000000))
+
+    def test_last_claude_object_wins(self):
+        from core import agents
+        err = self.claude(is_error=True, result=self.QUOTA_TEXT)
+        self.assertEqual(agents.cli_error(self.log(err, self.claude()))[0], "")
+        self.assertEqual(agents.cli_error(self.log(self.claude(), err))[0], self.QUOTA_TEXT)
+
+    def test_result_line_without_is_error_is_a_plain_log(self):
+        from core import agents
+        path = self.log({"type": "result", "usage": {"input_tokens": 1}}, self.PLAIN_QUOTA)
+        self.assertEqual(agents.cli_error(path), agents._log_tail(path))
+
+    def test_codex_error_texts_in_order_and_nothing_else(self):
+        from core import agents
+        path = self.log({"type": "thread.started", "thread_id": "t"}, {"type": "turn.started"},
+                        {"type": "error", "message": "one"},
+                        {"type": "item.completed", "item": {"type": "agent_message", "text": self.AGENT_WORDS}},
+                        {"type": "item.completed", "item": {"type": "reasoning", "text": self.AGENT_WORDS}},
+                        {"type": "item.completed", "item": {"type": "command_execution",
+                                                            "aggregated_output": self.AGENT_WORDS}},
+                        {"type": "item.completed", "item": {"type": "error", "message": "two"}},
+                        {"type": "turn.failed", "error": {"message": "three"}})
+        self.assertEqual(agents.cli_error(path), ("one\ntwo\nthree", 1800000000))
+
+    def test_codex_without_error_is_empty(self):
+        from core import agents
+        path = self.log({"type": "thread.started", "thread_id": "t"}, {"type": "turn.started"},
+                        {"type": "item.completed", "item": {"type": "agent_message", "text": self.AGENT_WORDS}},
+                        {"type": "turn.completed", "usage": {"input_tokens": 1}})
+        self.assertEqual(agents.cli_error(path), ("", 1800000000))
+        self.assertFalse(agents._says_quota(path))
+
+    def test_plain_log_is_its_tail(self):
+        from core import agents
+        path = self.log(raw="x" * 9000 + self.PLAIN_QUOTA)
+        text, at = agents.cli_error(path)
+        self.assertEqual((text, at), agents._log_tail(path))
+        self.assertEqual(len(text), 8000)
+        self.assertTrue(agents._says_quota(path))
+
+    def test_missing_log(self):
+        from core import agents
+        before = time.time()
+        text, at = agents.cli_error(os.path.join(self.tmp, "none"))
+        self.assertEqual(text, "")
+        self.assertTrue(before <= at <= time.time())
+
+    def test_quota_only_from_what_the_cli_said(self):
+        from core import agents
+        self.assertFalse(agents._says_quota(self.log(self.claude())))
+        self.assertTrue(agents._says_quota(self.log(self.claude(is_error=True, result=self.QUOTA_TEXT))))
+        codex = self.log({"type": "thread.started", "thread_id": "t"},
+                         {"type": "turn.failed", "error": {"message": self.CODEX_QUOTA}})
+        self.assertTrue(agents._says_quota(codex))
+        text, at = agents.cli_error(codex)
+        self.assertEqual(agents.quota_reset(text, at), 1800000000 + 2 * 86400 + 3 * 3600)
+        codex_err = self.log({"type": "turn.started"}, {"type": "error", "message": self.CODEX_QUOTA})
+        self.assertTrue(agents._says_quota(codex_err))
+
+    def test_bare_429_is_not_quota(self):
+        from core import agents
+        for raw in self.PLAIN_429:
+            self.assertFalse(agents._says_quota(self.log(raw=raw)), raw)
+        err = self.claude(is_error=True, api_error_status=429, result=self.BARE_429)
+        self.assertFalse(agents._says_quota(self.log(err)))
+
+    def test_readme_says_where_quota_is_read(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            section = fh.read().split("## Agents, models and tests")[1].split("\n## ")[0]
+        for phrase in ("--output-format json", "`is_error` is true", "never when it is false",
+                       "exec --json", "turn.failed", "any other log its\n  tail"):
+            self.assertIn(phrase, section)
+
+
 class UnderscoredQuotaUnits(LoopCase):
     """#102: usage_limit_reached and rate_limit_error read as out of quota; the excerpt keeps the CLI's words."""
 

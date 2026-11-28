@@ -402,7 +402,7 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
         if hand.cost:
             rows.append(hand.cost)
         if (hand.cost or {}).get("outcome") == "out of quota":
-            seen, at = agents._log_tail(hand.log)
+            seen, at = agents.cli_error(hand.log)
             reset = agents.quota_reset(seen, at)
             if reset is not None:
                 when = ("the limit resets at %s: send the request again after that time with "

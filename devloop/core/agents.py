@@ -331,7 +331,7 @@ class Pending:
         slot held, then start the whole chain again with a fresh clock (D-091)."""
         self._release()
         row = self._cost(None, None, False, True, outcome="quota")
-        text, at = _log_tail(self.log)
+        text, at = cli_error(self.log)
         now = time.time()
         retry = getattr(self.cfg, "quota_retry_seconds", None) or 1800
         wait = quota_wait(text, at, now, retry)
@@ -391,8 +391,57 @@ def _log_tail(log):
         return "", time.time()
 
 
+_CODEX_EVENTS = ("thread.started", "turn.started", "turn.completed", "turn.failed")
+
+
+def cli_error(log):
+    """(what the CLI itself said went wrong, the log's mtime as _log_tail gives it).
+
+    A claude `--output-format json` log (its last JSON-object line with "type": "result" and an
+    "is_error" key) gives that object's "result" when is_error is true and "" when it is false. A
+    codex `exec --json` log (a JSON-object line of type thread.started, turn.started,
+    turn.completed or turn.failed) gives, in log order joined by newlines, the message of every
+    error event, the error.message of every turn.failed event and the item.message of every
+    item.completed event whose item is an error; agent messages never count. Any other log gives
+    its tail, as _log_tail; a missing log ("", now)."""
+    tail, at = _log_tail(log)
+    try:
+        with open(log, errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return tail, at
+    events = []
+    for line in lines:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(data, dict):
+            events.append(data)
+    results = [e for e in events if e.get("type") == "result" and "is_error" in e]
+    if results:
+        last = results[-1]
+        text = last.get("result") if last.get("is_error") is True else ""
+        return (text if isinstance(text, str) else ""), at
+    if not any(e.get("type") in _CODEX_EVENTS for e in events):
+        return tail, at
+    said = []
+    for e in events:
+        if e.get("type") == "error":
+            said.append(e.get("message"))
+        elif e.get("type") == "turn.failed" and isinstance(e.get("error"), dict):
+            said.append(e["error"].get("message"))
+        elif (e.get("type") == "item.completed" and isinstance(e.get("item"), dict)
+              and e["item"].get("type") == "error"):
+            said.append(e["item"].get("message"))
+    return "\n".join(m for m in said if isinstance(m, str)), at
+
+
 def _says_quota(log):
-    text, at = _log_tail(log)
+    text, at = cli_error(log)
     low = text.lower().replace("_", " ")
     return any(sign in low for sign in QUOTA_SIGNS) or quota_reset(text, at) is not None
 

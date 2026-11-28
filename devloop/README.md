@@ -276,7 +276,10 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 
 - `agents.<role>` is one command or a chain of commands; the next one is tried when a command is
   not installed or its run ends saying the account is out of quota (a quota phrase or a readable
-  reset in its log, without a hand-in). When the last command of the chain says quota, the issuer
+  reset in what the CLI itself said, without a hand-in: for a claude `--output-format json` log
+  its result object's `result` when `is_error` is true, never when it is false; for a codex
+  `exec --json` log its error and turn.failed events (and error items); for any other log its
+  tail; `agents.cli_error`). When the last command of the chain says quota, the issuer
   waits for the reset read from the CLI's message ("resets 3pm", "resets 3:30pm", "resets at
   15:00", "will reset at 5pm" as local time; "resets in 2h 30m" / "in 45m" / "in 1 hour";
   codex's "try again at Nov 11th, 2026 2:23 AM" (year optional), "try again at 2:23 AM" and
