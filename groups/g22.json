@@ -1,7 +1,7 @@
 {
   "id": "g22",
   "branch": "int/g22",
-  "state": "open",
+  "state": "pr",
   "members": [
     "171"
   ],
@@ -16,6 +16,10 @@
     {
       "at": "2026-11-28T11:40:09Z",
       "event": "branch int/g22 made from main f6067cdb06de"
+    },
+    {
+      "at": "2026-11-28T11:42:12Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "base": "f6067cdb06def20aa96ba01f8f7949058c974e56"
