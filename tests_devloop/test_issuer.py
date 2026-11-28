@@ -3091,7 +3091,7 @@ class T163Acceptance(LoopCase):
             "  path docs/DECISIONS.md",
             "  line impl.py: z = 3  # FORBIDDEN_MARK  (pattern FORBIDDEN_MARK)",
             "  fingerprint " + hb["fingerprint"]])
-        self.assertEqual([o.get("action") for o in row.get("options") or []], ["revise", "cancel", "retry"])
+        self.assertEqual([o.get("action") for o in row.get("options") or []], ["revise", "approve", "cancel", "retry"])
 
 
 class BlockedCheckUnits(unittest.TestCase):
