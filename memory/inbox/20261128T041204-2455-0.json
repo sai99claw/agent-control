@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "Moving a step that reads ticket states (such as the open-carrier check of flaky_fix) to after a state write changes what it sees; pass the just-written ids explicitly so the check keeps its old meaning.",
+  "source": "group g12 fix r2",
+  "at": "2026-11-28T04:12:04Z"
+}
