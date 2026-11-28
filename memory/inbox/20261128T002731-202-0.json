@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a request asks for a CLI's real error texts, take them from the installed CLI: grep its binary for the message literals and run it once in a clean environment with a credential or model that fails before the model runs (an invalid token, an unknown model) to measure the output shape; on a hosted machine the host may supply credentials even with HOME and the environment cleared, and a call that succeeds spends tokens. Label each text measured or read.",
+  "source": "request (opener)",
+  "at": "2026-11-28T00:27:31Z"
+}
