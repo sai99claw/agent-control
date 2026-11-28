@@ -27,7 +27,13 @@
   "created": "2026-11-28T09:49:29Z",
   "request": "Phase one, group 4 of the improvement plan: honest acceptance and reliability (D-100, D-102). Source: external audit\nP0-2, P0-3, P0-6, P1-6, each confirmed by the main session reading the code; T main session agreed (2026-11-26).\nKeep these as one group, three tickets.\n\n4.1 Acceptance results must be honest.\n- Problem (read in code): a skipped acceptance case (rc 0) counts as green; `red_check()` treats skip as red but\n  expectedFailure is recorded as `pass`; nothing checks whether the worker edited the `T<N>Acceptance` cases.\n- Layer 1: `run_cases()` requires each case to be exactly `pass`; `red_check()` requires exactly `fail`.\n  expectedFailure is recorded as `xfail` (not pass).\n- Layer 2: from round 2 on, a worker change that alters the `T<N>Acceptance` definitions is sent back. Compare by\n  AST (classes and functions), and check the count of same-named definitions. A round that went through `--revise`\n  (the ticket was rewritten) is not a violation. The verifier prompt gets one line: helpers specific to this ticket\n  go inside the class.\n\n4.2 Controller lock uses flock.\n- Problem (read in code): `PidLock` creates an empty file and then writes JSON; two `actl run` starting at once can\n  both take the lock.\n- Do: keep the lock file (do not delete it), use `fcntl.flock`, clear the stamp on release; `controller_alive()` and\n  existing tests keep passing.\n\n4.3 start_fixer writes once.\n- Do: `start_fixer()` writes the pool once, after the spawn, and passes `--round` to `auto_fixer.py`.\n\nvision: an acceptance result means what it says, and two controllers cannot both run.\nremoves: the two-write path in start_fixer; the create-then-write PidLock path.\n",
   "feedback": [],
-  "cases": null,
+  "cases": {
+    "branch": "t/166-cases",
+    "run": [
+      "test_adapter_unittest.T166Acceptance",
+      "test_issuer.T166Acceptance"
+    ]
+  },
   "history": [
     {
       "at": "2026-11-28T09:49:29Z",
@@ -47,6 +53,10 @@
       "at": "2026-11-28T10:07:45Z",
       "event": "round start",
       "round": 1
+    },
+    {
+      "at": "2026-11-28T10:12:39Z",
+      "event": "cases ready"
     }
   ],
   "cost": [
