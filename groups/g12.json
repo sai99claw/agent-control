@@ -1,7 +1,7 @@
 {
   "id": "g12",
   "branch": "int/g12",
-  "state": "fixing",
+  "state": "pr",
   "members": [
     "142",
     "143",
@@ -10,16 +10,7 @@
     "146"
   ],
   "fix_round": 2,
-  "job": {
-    "kind": "fixer",
-    "stamp": {
-      "pid": 2455,
-      "host": "vm",
-      "boot": "68359d25-5a2b-4e1b-a079-9393c7340584",
-      "started": "2026-11-28T04:03:24Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g12/result-1795836005.json"
-  },
+  "job": null,
   "created": "2026-11-27T23:57:49Z",
   "history": [
     {
@@ -93,6 +84,10 @@
     {
       "at": "2026-11-28T04:03:28Z",
       "event": "fixer agent started (round 2)"
+    },
+    {
+      "at": "2026-11-28T04:12:07Z",
+      "event": "fixer done (rc 0): verify again"
     }
   ],
   "base": "26948b9ab503a2d09132ea6ef33fefda07d3e616",
@@ -137,5 +132,6 @@
       "usd": 0.8471824000000001,
       "session_id": "2fd29ffa-2be1-4aae-acca-ead6d211cb95"
     }
-  ]
+  ],
+  "fix_end_sha": "c05f43cab894c5819e5a0512545c42f61eb7b104"
 }
