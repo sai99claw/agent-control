@@ -73,6 +73,11 @@
       "at": "2026-11-28T11:52:08Z",
       "event": "dispatched",
       "target": "int/g23"
+    },
+    {
+      "at": "2026-11-28T11:52:10Z",
+      "event": "issuer started",
+      "target": "int/g23"
     }
   ],
   "cost": [
@@ -104,7 +109,12 @@
   ],
   "group": "g23",
   "target": "int/g23",
-  "run": null,
+  "run": {
+    "pid": 13485,
+    "host": "vm",
+    "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
+    "started": "2026-11-28T11:52:10Z"
+  },
   "claimed_at": "2026-11-28T11:52:08Z",
   "branch_base": {
     "t/147-cases": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
