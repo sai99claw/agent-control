@@ -8,16 +8,7 @@
     "161"
   ],
   "fix_round": 0,
-  "job": {
-    "kind": "regression",
-    "stamp": {
-      "pid": 25081,
-      "host": "vm",
-      "boot": "68359d25-5a2b-4e1b-a079-9393c7340584",
-      "started": "2026-11-28T05:11:49Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g17/result-1795842709.json"
-  },
+  "job": null,
   "created": "2026-11-28T01:12:52Z",
   "history": [
     {
@@ -51,8 +42,13 @@
     {
       "at": "2026-11-28T05:11:49Z",
       "event": "regression started"
+    },
+    {
+      "at": "2026-11-28T05:19:35Z",
+      "event": "regression green"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
-  "main_tried": "67809e72adf70ca80cb387aebf3c04cc050fc31b"
+  "main_tried": "67809e72adf70ca80cb387aebf3c04cc050fc31b",
+  "last_regression": "green"
 }
