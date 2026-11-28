@@ -35,6 +35,11 @@
       "at": "2026-11-28T10:05:49Z",
       "event": "dispatched",
       "target": "int/g18"
+    },
+    {
+      "at": "2026-11-28T10:05:51Z",
+      "event": "issuer started",
+      "target": "int/g18"
     }
   ],
   "cost": [
@@ -61,6 +66,11 @@
   ],
   "group": "g18",
   "target": "int/g18",
-  "run": null,
+  "run": {
+    "pid": 28098,
+    "host": "vm",
+    "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
+    "started": "2026-11-28T10:05:51Z"
+  },
   "claimed_at": "2026-11-28T10:05:49Z"
 }
