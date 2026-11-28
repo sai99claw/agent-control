@@ -25,8 +25,12 @@
     {
       "at": "2026-11-28T10:38:58Z",
       "event": "main moved to d137c1e097ed: merged it into int/g21"
+    },
+    {
+      "at": "2026-11-28T11:27:30Z",
+      "event": "main moved to 147c47b2d745: merged it into int/g21"
     }
   ],
   "base": "abf49852381e3bef69ba1b5014d31bedb9ff2780",
-  "main_tried": "d137c1e097edb0af3421c978b72ed15271600734"
+  "main_tried": "147c47b2d7457590fe747d6d72c00cf20011e99c"
 }
