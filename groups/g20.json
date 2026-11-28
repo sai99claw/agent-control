@@ -26,8 +26,12 @@
     {
       "at": "2026-11-28T10:32:09Z",
       "event": "all tickets merged or stuck: PR ready"
+    },
+    {
+      "at": "2026-11-28T10:38:52Z",
+      "event": "main moved to d137c1e097ed: it conflicts with int/g20; not merged"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
-  "main_tried": "abf49852381e3bef69ba1b5014d31bedb9ff2780"
+  "main_tried": "d137c1e097edb0af3421c978b72ed15271600734"
 }
