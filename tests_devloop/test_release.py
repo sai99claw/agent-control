@@ -241,6 +241,155 @@ class ReleaseRerun(LoopCase):
         self.assertIn("tickets.py release", readme[cancel + 1])
 
 
+class ReleaseJobUnit(LoopCase):
+    """Ticket #142 pieces: start_release, after_release, release_lost and core.release.run's stop."""
+    EVENT = "release rc 1, run once more"
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[key]
+        self.sha = git(self.proj, "rev-parse", "main").strip()
+        self.add(1, state="landed", group="g1", landed_sha=self.sha)
+        self.log = os.path.join(self.tmp, "wt", "runs", "release", "g1.log")
+        self.pool.update(lambda tx: tx.put_group({
+            "id": "g1", "state": "landed", "landed_sha": self.sha, "branch": "int/g1", "members": ["1"],
+            "release": "pending", "release_log": self.log, "job": None, "fix_round": 0}), "test: g1 landed")
+
+    def ctl(self):
+        import ticket_controller
+        from core.config import Config
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        return c
+
+    def g1(self):
+        return self.snap().groups["g1"]
+
+    def g1_pages(self, kind):
+        return [r for r in self.snap().inbox.values() if r["kind"] == kind and r["ref"] == "g1"]
+
+    def out(self, report):
+        path = os.path.join(self.tmp, "out-%d.json" % len(os.listdir(self.tmp)))
+        with open(path, "w") as fh:
+            json.dump(report, fh)
+        return path
+
+    def test_start_release_records_the_job_and_acks_no_page(self):
+        import ticket_controller
+        self.pool.update(lambda tx: tx.write("inbox/p.json", {"kind": "decision", "ref": "g1", "text": "t",
+                                                              "at": osx.now(), "acked": False}), "test: page")
+        c = self.ctl()
+        with mock.patch.object(ticket_controller.osx, "spawn", return_value=mock.Mock(pid=4242)) as spawn:
+            c.start_release("g1", self.sha, ["1"])
+        argv = spawn.call_args[0][0]
+        self.assertTrue(argv[1].endswith("release_job.py"), argv)
+        folder = os.path.join(self.tmp, "wt", "runs", "release-job", "g1")
+        job = self.g1()["job"]
+        self.assertEqual(sorted(job), ["kind", "out", "stamp"])
+        self.assertEqual((job["kind"], job["stamp"]["pid"]), ("release", 4242))
+        self.assertEqual(os.path.dirname(os.path.realpath(job["out"])), os.path.realpath(folder))
+        self.assertRegex(os.path.basename(job["out"]), r"^result-\d+(-\d+)?\.json$")
+        self.assertEqual(argv[2:], ["--group", "g1", "--sha", self.sha, "--tickets", "1", "--out", job["out"]])
+        self.assertEqual(os.path.dirname(os.path.realpath(spawn.call_args[1]["log_path"])), os.path.realpath(folder))
+        self.assertFalse(self.snap().inbox["p"]["acked"])
+        self.assertEqual(self.g1()["release"], "pending")
+        with mock.patch.object(ticket_controller.osx, "spawn", return_value=mock.Mock(pid=4243)):
+            c.start_release("g1", self.sha, ["1"], rerun={"fix_tickets": [], "fix_open": ["9"], "line": "l"})
+        g = self.g1()
+        self.assertTrue(g["job"]["rerun"])
+        self.assertEqual(g["release_rerun"]["fix_open"], ["9"])
+
+    def test_ok_result_releases_with_the_landed_page(self):
+        self.ctl().after_release("g1", {"kind": "release", "out": self.out({"ok": True, "text": "x", "sha": self.sha})}, 0)
+        g = self.g1()
+        self.assertEqual((g["release"], g["job"]), ("ok", None))
+        pages = self.g1_pages("landed")
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0]["text"], "group g1 landed and released: #1 (%s); release log: %s" % (self.sha[:12], self.log))
+        self.assertFalse([e for e in g["history"] if e["event"] == self.EVENT])
+
+    def test_other_failure_and_a_signal_are_failed_with_the_release_page(self):
+        for report in ({"ok": False, "text": "rc 7\nboom", "sha": self.sha},
+                       {"ok": False, "signal": "SIGTERM", "text": "stopped by SIGTERM; the release command was stopped"}):
+            before = len(self.g1_pages("decision"))
+            self.ctl().after_release("g1", {"kind": "release", "out": self.out(report)}, 1)
+            self.assertEqual(self.g1()["release"], "failed")
+            pages = sorted(self.g1_pages("decision"), key=lambda r: r["at"])
+            self.assertEqual(len(pages), before + 1)
+            self.assertIn("but the release failed - not retried", pages[-1]["text"])
+            self.assertIn(report["text"].split("\n")[0], pages[-1]["text"].split("\n"))
+            self.assertEqual([o["action"] for o in pages[-1]["options"]], ["ack", "release"])
+            time.sleep(1.1)  # page names are unique to the second
+
+    def assert_lost(self):
+        g = self.g1()
+        self.assertEqual((g["release"], g.get("job")), ("failed", None))
+        pages = self.g1_pages("decision")
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0]["text"].split("\n")[0],
+                         "group g1 is in main (%s) but its release job ended without a result - the release "
+                         "is not run again (D-080); release log: %s" % (self.sha[:12], self.log))
+        self.assertEqual([o["action"] for o in pages[0]["options"]], ["ack", "release"])
+
+    def test_no_result_is_lost(self):
+        self.ctl().after_release("g1", {"kind": "release", "out": os.path.join(self.tmp, "none.json")}, None)
+        self.assert_lost()
+
+    def test_pending_without_a_job_is_lost_at_finish_jobs(self):
+        c = self.ctl()
+        c.finish_jobs(self.snap())
+        self.assert_lost()
+        c.finish_jobs(self.snap())
+        self.assertEqual(len(self.g1_pages("decision")), 1)
+
+    def test_rc1_first_run_starts_one_rerun_and_the_rerun_writes_the_event_and_page(self):
+        self.add(9, state="stuck", stuck={"reason": "decision", "text": "x"},
+                 origin={"kind": "release", "group": "g0", "sha": "0" * 40})
+        c = self.ctl()
+        with mock.patch.object(c, "start_release") as start:
+            c.after_release("g1", {"kind": "release", "out": self.out({"ok": False, "text": "rc 1\nx"})}, 1)
+        start.assert_called_once_with("g1", self.sha, ["1"], rerun={
+            "fix_tickets": [], "fix_open": ["9"], "line": "fix ticket already open: #9"})
+        self.assertEqual(self.g1()["release"], "pending")
+        self.assertEqual(self.snap().inbox, {})
+        rerun = start.call_args[1]["rerun"]
+        self.pool.update(lambda tx: tx.put_group(dict(tx.data.groups["g1"], release_rerun=rerun)), "test: rerun ctx")
+        c.after_release("g1", {"kind": "release", "rerun": True,
+                               "out": self.out({"ok": True, "text": "x", "sha": self.sha})}, 0)
+        g = self.g1()
+        self.assertEqual((g["release"], g["job"]), ("ok", None))
+        self.assertNotIn("release_rerun", g)
+        evs = [e for e in g["history"] if e["event"] == self.EVENT]
+        self.assertEqual(len(evs), 1, g["history"])
+        self.assertEqual((evs[0]["fix_open"], evs[0]["rerun"]), (["9"], "ok"))
+        lines = self.g1_pages("landed")[0]["text"].split("\n")
+        self.assertIn("the first release run failed with rc 1 and passed when run once more", lines)
+        self.assertIn("fix ticket already open: #9", lines)
+
+    def test_a_rerun_that_exits_1_again_is_the_failed_twice_page(self):
+        ctx = {"fix_tickets": [], "fix_open": ["9"], "line": "fix ticket already open: #9"}
+        self.pool.update(lambda tx: tx.put_group(dict(tx.data.groups["g1"], release_rerun=ctx)), "test: rerun ctx")
+        c = self.ctl()
+        with mock.patch.object(c, "start_release") as start:
+            c.after_release("g1", {"kind": "release", "rerun": True, "out": self.out({"ok": False, "text": "rc 1\nx"})}, 1)
+        start.assert_not_called()
+        self.assertEqual(self.g1()["release"], "failed")
+        text = self.g1_pages("decision")[0]["text"]
+        self.assertIn("failed twice (rc 1, then rc 1 when run once more)", text)
+
+    def test_core_release_run_stops_the_command_when_its_wait_is_interrupted(self):
+        from core import release
+        from core.config import Config
+        self.config(release="sleep 30")
+        with mock.patch.object(release.osx, "wait", side_effect=KeyboardInterrupt), \
+                mock.patch.object(release.osx, "kill_tree") as kill:
+            with self.assertRaises(KeyboardInterrupt):
+                release.run(Config(self.proj), {"id": "g1", "members": ["1"]}, self.sha)
+        self.assertEqual(kill.call_count, 1)
+        osx.kill_tree(kill.call_args[0][0])   # the real stop of the command the mock let run
+
+
 class T21Acceptance(LoopCase):
     """Nothing a release produces is thrown away: the log and DEVLOOP_RELEASE_DIR (ticket #21)."""
 
