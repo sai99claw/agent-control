@@ -359,6 +359,19 @@ class EnvironmentSuspect(Fixture):
                              "fail-fast stops at the threshold (8), not after all 12")
 
 
+class UnexpectedSuccess(Fixture):
+    """#166: an expectedFailure method whose body passes stays `fail` / `unexpected success`."""
+
+    def test_unexpected_success_is_a_fail_row(self):
+        self.put("test_us.py", "import unittest\n\n\nclass US(unittest.TestCase):\n"
+                               "    @unittest.expectedFailure\n    def test_us(self):\n        pass\n")
+        done = self.run_adapter("run", "test_us.US.test_us")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        rows = {row["id"]: row for row in self.result()["ids"]}
+        self.assertEqual((rows["test_us.US.test_us"]["status"], rows["test_us.US.test_us"]["message"]),
+                         ("fail", "unexpected success"))
+
+
 class MachineSuspects(unittest.TestCase):
     """Unit tests for `machine_suspects` (markers are held in constants, never in assertions)."""
 
