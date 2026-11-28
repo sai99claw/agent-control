@@ -4,14 +4,18 @@ The controller's release job (devloop/release_job.py) and `tickets.py release` b
 a throwaway detached worktree at the sha under the worktree root, the controller's environment plus the DEVLOOP_* variables,
 and devloop.release_timeout_seconds as the limit. The worktree is removed afterwards, so
 anything the release produces goes to DEVLOOP_RELEASE_DIR (<worktrees>/runs/release/<group>/,
-created before the command, never emptied or deleted by devloop). The whole output (stdout and
+created before the command, never emptied or deleted by devloop). With devloop.machine_slots set it
+first takes what a regression takes (core/slots: one slot, or the whole machine with
+devloop.regression_exclusive), waiting at most devloop.regression_timeout_seconds; the limit counts
+from then and the hold is released when run() returns. The whole output (stdout and
 stderr interleaved, also what was printed before a timeout) is kept in
 <worktrees>/runs/release/<group>.log; each run replaces it. log_path(cfg, gid) names it.
 """
 
 import os
+import time
 
-from . import inflight, logtail, osx, worktrees
+from . import inflight, logtail, osx, slots, worktrees
 from .gitx import Git
 
 
@@ -73,10 +77,20 @@ def run(cfg, group, sha):
     log = log_path(cfg, gid)
     live_name = "release-" + gid
     _write(log, "")
+    hold = None
     try:
         out_dir = os.path.abspath(cfg.runs_dir("release", gid))
+        run_env = env(cfg, group, sha, out_dir)
+        if slots.needed(cfg):
+            hold, busy = _take(cfg, gid, sha, log, live_name)
+            if hold is None:
+                with open(log, "a") as f:
+                    f.write(busy + "\n")
+                return False, "%s\n%s" % (busy, _read(log).strip()[-2000:])
+            if hold.path:
+                run_env[slots.MACHINE_ENV if cfg.regression_exclusive else slots.ENV] = hold.path
         worktrees.detached_tree(cfg, repo, tree, sha)
-        proc = osx.spawn(["sh", "-c", cmd], cwd=tree, env=env(cfg, group, sha, out_dir), log_path=log)
+        proc = osx.spawn(["sh", "-c", cmd], cwd=tree, env=run_env, log_path=log)
         inflight.put(cfg, live_name, {
             "kind": "release", "group": gid, "sha": sha, "log": log, "result": None,
             "stamp": {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(),
@@ -100,3 +114,19 @@ def run(cfg, group, sha):
             repo.remove_worktree(tree)
         except osx.OSFailure:
             pass
+        if hold is not None:
+            hold.release()
+
+
+def _take(cfg, gid, sha, log, live_name):
+    """What a regression takes (the whole machine with devloop.regression_exclusive, else one slot),
+    waiting at most devloop.regression_timeout_seconds; the live record says the release waits.
+    Returns (hold, None) or (None, the busy sentence)."""
+    stage = "machine" if cfg.regression_exclusive else "slot"
+    inflight.put(cfg, live_name, {"kind": "release", "group": gid, "sha": sha, "log": log, "result": None,
+                                  "stage": stage, "stamp": osx.stamp(), "since": osx.now()})
+    take, busy = ((slots.take_machine, slots.machine_busy) if cfg.regression_exclusive
+                  else (slots.take, slots.busy))
+    began = time.time()
+    hold = take(cfg, began + cfg.regression_timeout_seconds)
+    return hold, (None if hold is not None else busy(cfg, time.time() - began))

@@ -233,6 +233,7 @@ class ReleaseKeptOutput(unittest.TestCase):
             return {k: str(v) for k, v in extra.items() if v is not None}
 
         values = {}
+        machine_slots = None
 
     def test_log_path_is_absolute_under_runs_release(self):
         from core import release

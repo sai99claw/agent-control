@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -1212,6 +1213,177 @@ class RegressionWaitReadme(LoopCase):
                       "another group's regression runs at most `regression_timeout_seconds`"):
             self.assertIn(words, flat)
         self.assertNotIn("still counts against `regression_timeout_seconds`", flat)
+
+
+class ReleaseTakesWhatARegressionTakes(LoopCase):
+    """Ticket #144, the implementer's tests: core/release.run takes a slot or the whole machine first."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            del os.environ[key]
+        os.environ["AC_ROOT"] = self.proj
+        self.sha = git(self.proj, "rev-parse", "main").strip()
+        self.group = {"id": "g1", "members": ["1"]}
+        self.stamp = os.path.join(self.tmp, "started.txt")
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def stamping(self, then=""):
+        return "python3 -c 'import time; print(time.time())' > %s%s" % (self.stamp, then)
+
+    def started(self):
+        with open(self.stamp) as fh:
+            return float(fh.read())
+
+    def release_after(self, hold, seconds):
+        """Let go of `hold` from a thread after `seconds`; returns a dict that gets the release time."""
+        out = {}
+
+        def let_go():
+            time.sleep(seconds)
+            out["at"] = time.time()
+            hold.release()
+        thread = threading.Thread(target=let_go)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(hold.release)
+        return out
+
+    def test_item4_the_release_limit_counts_from_when_the_machine_is_taken(self):
+        from core import release, slots
+        self.config(machine_slots=2, regression_exclusive=True, release_timeout_seconds=4,
+                    release=self.stamping("; sleep 2"))
+        hold = slots.take_machine(self.cfg(), time.time() + 1)
+        self.assertTrue(hold and hold.held)
+        freed = self.release_after(hold, 3)
+        ok, text = release.run(self.cfg(), self.group, self.sha)
+        self.assertTrue(ok, text)
+        self.assertGreaterEqual(self.started(), freed["at"] - 0.1)
+
+    def test_item5_without_exclusive_the_release_takes_one_slot(self):
+        from core import release, slots
+        self.config(machine_slots=1, release=self.stamping())
+        hold = slots.take(self.cfg(), time.time() + 1)
+        self.assertTrue(hold and hold.held)
+        self.assertTrue(hold.path.endswith("slot-0"))
+        freed = self.release_after(hold, 1.5)
+        ok, text = release.run(self.cfg(), self.group, self.sha)
+        self.assertTrue(ok, text)
+        self.assertGreaterEqual(self.started(), freed["at"] - 0.1)
+
+    def test_item5_a_slot_that_does_not_come_free_is_a_failed_release_with_the_busy_line(self):
+        from core import release, slots
+        self.config(machine_slots=1, regression_timeout_seconds=1, release=self.stamping())
+        hold = slots.take(self.cfg(), time.time() + 1)
+        self.addCleanup(hold.release)
+        ok, text = release.run(self.cfg(), self.group, self.sha)
+        self.assertFalse(ok)
+        self.assertTrue(text.startswith("no machine slot came free within"), text)
+        self.assertFalse(release.product_failed(text))
+        self.assertFalse(os.path.exists(self.stamp))
+        with open(release.log_path(self.cfg(), "g1")) as fh:
+            self.assertIn("no machine slot came free within", fh.read())
+
+    def test_item6_without_slots_nothing_is_taken_and_the_record_is_the_commands(self):
+        from core import inflight, release, slots
+        self.config(machine_slots=None, release=self.stamping())
+        puts = []
+        real_put = inflight.put
+        with mock.patch.object(slots, "take", side_effect=AssertionError("take")), \
+                mock.patch.object(slots, "take_machine", side_effect=AssertionError("take_machine")), \
+                mock.patch.object(release.inflight, "put",
+                                  side_effect=lambda cfg, name, rec: (puts.append(rec), real_put(cfg, name, rec))):
+            ok, text = release.run(self.cfg(), self.group, self.sha)
+        self.assertTrue(ok, text)
+        self.assertEqual(len(puts), 1)
+        self.assertNotIn("stage", puts[0])
+        self.assertNotEqual(puts[0]["stamp"]["pid"], os.getpid())
+
+    def test_item7_the_waiting_record_then_the_commands_record(self):
+        from core import inflight, release
+        self.config(machine_slots=2, regression_exclusive=True, release=self.stamping())
+        puts = []
+        real_put = inflight.put
+        with mock.patch.object(release.inflight, "put",
+                               side_effect=lambda cfg, name, rec: (puts.append(rec), real_put(cfg, name, rec))):
+            ok, text = release.run(self.cfg(), self.group, self.sha)
+        self.assertTrue(ok, text)
+        self.assertEqual([p.get("stage") for p in puts], ["machine", None])
+        self.assertEqual(puts[0]["stamp"]["pid"], os.getpid())
+        self.assertNotEqual(puts[1]["stamp"]["pid"], os.getpid())
+
+    def check_made_inside_the_hold(self, command, detached=None):
+        from core import release, slots, worktrees
+        self.config(machine_slots=1, regression_exclusive=True, release=command)
+        seen = []
+        real = worktrees.detached_tree
+
+        def tree(*a, **kw):
+            seen.append(slots.take_machine(self.cfg(), time.time() + 0.2))   # None: the release holds it
+            if detached:
+                raise detached
+            return real(*a, **kw)
+        with mock.patch.object(release.worktrees, "detached_tree", side_effect=tree):
+            ok, text = release.run(self.cfg(), self.group, self.sha)
+        self.assertEqual(seen, [None])
+        after = slots.take_machine(self.cfg(), time.time() + 0.5)
+        self.assertTrue(after and after.held, "the hold outlived release.run")
+        after.release()
+        return ok, text
+
+    def test_item9_the_worktree_is_made_inside_the_hold_and_the_hold_is_released(self):
+        ok, text = self.check_made_inside_the_hold("true")
+        self.assertTrue(ok, text)
+
+    def test_item9_the_hold_is_released_after_a_failed_command(self):
+        ok, text = self.check_made_inside_the_hold("exit 1")
+        self.assertFalse(ok)
+        self.assertTrue(text.startswith("rc 1"), text)
+
+    def test_item9_the_hold_is_released_after_a_worktree_failure(self):
+        from core import osx as osx_mod
+        ok, text = self.check_made_inside_the_hold("true", detached=osx_mod.OSFailure("no tree"))
+        self.assertFalse(ok)
+        self.assertEqual(text, "no tree")
+
+    def test_item8_the_command_gets_its_slot(self):
+        from core import release
+        out = os.path.join(self.tmp, "env.txt")
+        self.config(machine_slots=1, release='printf "%%s|%%s" "$DEVLOOP_SLOT" "$DEVLOOP_MACHINE" > %s' % out)
+        ok, text = release.run(self.cfg(), self.group, self.sha)
+        self.assertTrue(ok, text)
+        with open(out) as fh:
+            self.assertEqual(fh.read(), os.path.join(self.tmp, "wt", "slots", "slot-0") + "|")
+
+    def test_a_release_waiting_for_the_machine_is_not_numbered_in_the_slot_queue(self):
+        import board
+        rows = [{"kind": "release", "state": "slot", "text": "等整台機器", "attrs": {},
+                 "rec": {"stage": "machine"}, "waiter": ("release-g1", {"since": None})},
+                {"kind": "release", "state": "slot", "text": "等機器名額", "attrs": {},
+                 "rec": {"stage": "slot"}, "waiter": ("release-g2", {"since": None})}]
+        board.live_queue(rows)
+        self.assertEqual(rows[0]["text"], "等整台機器")
+        self.assertIn("等機器名額", rows[1]["text"])
+        self.assertEqual(rows[1]["attrs"]["data-queue"], "1/1")
+
+    def test_item10_the_readme_names_the_release(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        slots_part = " ".join(text.split("## Machine slots", 1)[1].split("\n## ", 1)[0].split())
+        for words in ("A release (`core/release.py`, at landing and through `tickets.py release`) takes what a "
+                      "regression takes: one slot, or with `regression_exclusive` the whole machine",
+                      "It waits at most `regression_timeout_seconds`",
+                      "its run gets `release_timeout_seconds` from when the slot or machine is taken"):
+            self.assertIn(words, slots_part)
+        live = " ".join(text.split("## Live records", 1)[1].split("\n## ", 1)[0].split())
+        bullet = live.split("`release-<group>.json`", 1)[1].split(" - `", 1)[0]
+        self.assertIn("`stage` `machine` (`regression_exclusive`) or `slot`", bullet)
 
 
 class T116Acceptance(LoopCase):

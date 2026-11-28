@@ -244,6 +244,12 @@ Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file)
 environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
 `ticket_creator.py --revise`). `run_tests.py` outside a slot (the opener's way to run tests) takes
 one without waiting, or runs nothing and exits 2 with machine busy on stderr.
+A release (`core/release.py`, at landing and through `tickets.py release`) takes what a regression
+takes: one slot, or with `regression_exclusive` the whole machine. It waits at most
+`regression_timeout_seconds` (a failed release with the busy sentence when nothing comes free in
+time), and its run gets `release_timeout_seconds` from when the slot or machine is taken; its throwaway
+worktree and `worktree_setup` are made inside the hold, and its command gets `DEVLOOP_SLOT` or
+`DEVLOOP_MACHINE` so a devloop-started run inside it takes nothing.
 
 `regression_exclusive` (default false) makes a regression take the whole machine, which keeps every
 other test run off it. Agents are never kept off by the exclusive mark: an agent takes its slot as
@@ -405,7 +411,10 @@ it (`core/inflight.py`). Every record has `kind` and `stamp` (devloop's liveness
 - `release-<group>.json` (`core/release.py`, kind `release`): `group`, `sha`, `log` (the release output
   file), `result` (null). The stamp is the release command itself (the `sh -c` process). Written right
   after the spawn, removed when `release.run` returns; the controller's release job (`release_job.py`) and
-  `tickets.py release` both go through it.
+  `tickets.py release` both go through it. While the release waits for the machine or its slot (with
+  `machine_slots` set) the record is already there with `stage` `machine` (`regression_exclusive`) or
+  `slot`, `since`, and the stamp of the waiting process (`release_job.py` or `tickets.py`); the board's row
+  shows the regression's words for that stage. Once the command is spawned it is rewritten as above.
 
 A process stopped hard leaves its record behind. `inflight.status(record)` answers `running` (the
 stamp's process lives), `handed_in` (it is gone and its `result` file exists) or `ended`. Writing a

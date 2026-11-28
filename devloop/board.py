@@ -563,6 +563,8 @@ def live_rows(cfg, snap):
                 text = live_agent_state_text(agent)
                 row.update(state=agent.get("state"), agent=agent,
                            text=text if agent.get("state") == "quota" else "agent " + text)
+        elif kind == "release" and rec.get("stage") in ("slot", "machine"):
+            row.update(state="slot", text=LIVE_STAGE_TEXT[rec["stage"]])
         elif kind == "release":
             row.update(state="running", text=live_release_step(rec.get("log")) or LIVE_AGENT_STATE["running"],
                        log=rec.get("log"), tail=True)
@@ -584,9 +586,9 @@ def live_rows(cfg, snap):
 
 
 def live_queue(rows):
-    """Number the rows that wait for a machine slot (a regression waiting for the whole machine is not one):
+    """Number the rows that wait for a machine slot (a regression or release waiting for the whole machine is not one):
     data-queue k/n by the waiting record's `since`, oldest first."""
-    queued = [r for r in rows if r["state"] == "slot" and not (r["kind"] == "regression"
+    queued = [r for r in rows if r["state"] == "slot" and not (r["kind"] in ("regression", "release")
                                                               and r["rec"].get("stage") == "machine")]
 
     def order(r):
