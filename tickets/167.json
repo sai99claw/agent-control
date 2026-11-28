@@ -35,6 +35,11 @@
       "at": "2026-11-28T10:13:51Z",
       "event": "dispatched",
       "target": "int/g20"
+    },
+    {
+      "at": "2026-11-28T10:13:53Z",
+      "event": "issuer started",
+      "target": "int/g20"
     }
   ],
   "cost": [
@@ -63,6 +68,11 @@
   ],
   "group": "g20",
   "target": "int/g20",
-  "run": null,
+  "run": {
+    "pid": 16326,
+    "host": "vm",
+    "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
+    "started": "2026-11-28T10:13:52Z"
+  },
   "claimed_at": "2026-11-28T10:13:51Z"
 }
