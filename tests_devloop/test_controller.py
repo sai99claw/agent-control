@@ -868,6 +868,65 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+T167_HOLDER = (
+    "import fcntl, os, sys\n"
+    "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)\n"
+    "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+    "print(\"held\", flush=True)\n"
+    "sys.stdin.read()\n"
+)
+
+
+class T167Acceptance(unittest.TestCase):
+    """#167: the controller lock is a kernel flock on a lock file that stays (emptied) after release."""
+
+    def lock_path(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        return root, os.path.join(root, "controller.lock")
+
+    def test_b1_b2_a_flock_holder_refuses_even_on_an_empty_file_then_its_exit_lets_acquire_through(self):
+        _, path = self.lock_path()
+        open(path, "w").close()
+        proc = subprocess.Popen([sys.executable, "-c", T167_HOLDER, path],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+
+        def finish():
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            proc.wait(timeout=10)
+            proc.stdout.close()
+        self.addCleanup(finish)
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(path).acquire()
+        self.assertIn("already running", str(cm.exception))
+        self.assertIn(path, str(cm.exception))
+        self.assertTrue(os.path.exists(path), "a refused acquire must not delete the lock file")
+        self.assertEqual(os.path.getsize(path), 0, "a refused acquire must not write the lock file")
+        # B2: the holder ends (stdin closed) and is reaped; now acquire goes through.
+        proc.stdin.close()
+        proc.wait(timeout=10)
+        lock = osx.PidLock(path).acquire()
+        try:
+            self.assertEqual(osx.read_json(path)["pid"], os.getpid())
+        finally:
+            lock.release()
+
+    def test_b3_release_leaves_the_file_empty_so_no_controller_is_alive_and_a_second_release_is_harmless(self):
+        import board
+        from types import SimpleNamespace
+        root, path = self.lock_path()
+        lock = osx.PidLock(path).acquire()
+        lock.release()
+        self.assertTrue(os.path.exists(path), "release must leave the lock file in place")
+        self.assertEqual(os.path.getsize(path), 0, "release must clear the stamp")
+        self.assertFalse(board.controller_alive(SimpleNamespace(worktree_root=root)))
+        lock.release()
+
+
 class T159Acceptance(unittest.TestCase):
     """#159: devloop/README.md has launchd and systemd templates for the controller and the
     board, and CLAUDE.md names the restart that stops only the controller."""
