@@ -6,6 +6,7 @@ Works on Linux and macOS with the Python 3.8+ standard library.
 """
 
 import errno
+import fcntl
 import json
 import os
 import platform
@@ -282,46 +283,64 @@ def makedirs(path):
 
 
 class PidLock:
-    """One instance per lock file. A lock left by a dead process is taken over."""
+    """One instance per lock file. Holding the lock means holding an exclusive flock on the file
+    (kept open while held, not inherited by child processes); the stamp is written into the same
+    file in place, never through a replace, since a lock on a replaced file stops counting. The
+    file stays after release, emptied. A stamp of a live process left by a holder without a flock
+    still refuses; one left by a dead process is taken over."""
 
     def __init__(self, path):
         self.path = path
         self.held = False
+        self.fd = None
+
+    def _stamp(self):
+        try:
+            return read_json(self.path, {})
+        except OSFailure:
+            return {}
 
     def acquire(self):
         makedirs(os.path.dirname(os.path.abspath(self.path)))
-        for _ in range(2):
+        try:
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
+        except OSError as exc:
+            raise OSFailure(explain(exc, "cannot open lock %s" % self.path))
+        try:
             try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            except FileExistsError:
-                try:
-                    holder = read_json(self.path, {})
-                except OSFailure:
-                    holder = {}
-                if holder and not stamp_dead(holder):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                holder = self._stamp()
+                if isinstance(holder, dict) and holder:
                     raise OSFailure("already running (pid %s on %s since %s); lock %s" % (
                         holder.get("pid"), holder.get("host"), holder.get("started"), self.path))
-                try:
-                    os.unlink(self.path)
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    raise OSFailure(explain(exc, "cannot clear stale lock %s" % self.path))
-                continue
-            except OSError as exc:
-                raise OSFailure(explain(exc, "cannot create lock %s" % self.path))
-            with os.fdopen(fd, "w") as fh:
-                json.dump(stamp(), fh)
-            self.held = True
-            return self
-        raise OSFailure("cannot take lock %s" % self.path)
+                raise OSFailure("already running (the holder has not written its stamp yet); "
+                                "lock %s" % self.path)
+            holder = self._stamp()
+            if isinstance(holder, dict) and holder and not stamp_dead(holder):
+                raise OSFailure("already running (pid %s on %s since %s); lock %s" % (
+                    holder.get("pid"), holder.get("host"), holder.get("started"), self.path))
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, json.dumps(stamp()).encode(), 0)
+            os.fsync(fd)
+        except OSFailure:
+            os.close(fd)
+            raise
+        except OSError as exc:
+            os.close(fd)
+            raise OSFailure(explain(exc, "cannot take lock %s" % self.path))
+        self.fd = fd
+        self.held = True
+        return self
 
     def release(self):
         if self.held:
             try:
-                os.unlink(self.path)
+                os.ftruncate(self.fd, 0)
             except OSError:
                 pass
+            os.close(self.fd)
+            self.fd = None
             self.held = False
 
     def __enter__(self):

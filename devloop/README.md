@@ -210,7 +210,7 @@ PATH: put first the folder of every agent command the project uses (`dirname "$(
 - `journalctl --user -u <unit> -f`
 - `loginctl enable-linger "$USER"` so it runs without a login session.
 
-**Exits.** A stop by SIGTERM ends the controller with `exit 0` and neither manager starts it again. Any other exit is restarted after 300 s. A controller that stopped itself on an error (exit 2 or 3) wrote a page first, so a cause that persists writes one such page per restart until it is fixed or the service is stopped. `ExitTimeOut` / `TimeoutStopSec` 600 give the current tick time to finish before the manager forces it. A manually started controller is stopped by sending SIGTERM to the pid in `<worktrees>/controller.lock`.
+**Exits.** A stop by SIGTERM ends the controller with `exit 0` and neither manager starts it again. Any other exit is restarted after 300 s. A controller that stopped itself on an error (exit 2 or 3) wrote a page first, so a cause that persists writes one such page per restart until it is fixed or the service is stopped. `ExitTimeOut` / `TimeoutStopSec` 600 give the current tick time to finish before the manager forces it. A manually started controller is stopped by sending SIGTERM to the pid in `<worktrees>/controller.lock`. The lock is an exclusive flock on that file, held for as long as the controller runs; the file stays after the controller stops, emptied (0 bytes), so an empty file means no controller.
 
 ## Project settings (`board/config.json`, key `devloop`)
 

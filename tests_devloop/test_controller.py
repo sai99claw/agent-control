@@ -1487,6 +1487,125 @@ class T29Acceptance(LoopCase):
         self.assertIn("docs/HANDOFF.md", text)
 
 
+PIDLOCK_CHILD = (
+    "import sys\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "from core import osx\n"
+    "lock = osx.PidLock(sys.argv[2]).acquire()\n"
+    "print('held', flush=True)\n"
+    "sys.stdin.read()\n"
+    "lock.release()\n"
+)
+
+
+class PidLockFlockUnits(unittest.TestCase):
+    """#167 B4-B7: the controller lock is a flock on a file that stays."""
+
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.dir = d
+        self.path = os.path.join(d, "controller.lock")
+
+    def _child(self):
+        proc = subprocess.Popen([sys.executable, "-c", PIDLOCK_CHILD, LOOP, self.path],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+
+        def end():
+            if proc.stdin and not proc.stdin.closed:
+                proc.stdin.close()
+            proc.wait(timeout=10)
+            proc.stdout.close()
+        self.addCleanup(end)
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        return proc, end
+
+    def _flock_free(self):
+        import fcntl
+        fd = os.open(self.path, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+        finally:
+            os.close(fd)
+
+    def test_live_child_holding_pidlock_refuses_parent(self):
+        proc, end = self._child()
+        self.assertEqual(osx.read_json(self.path)["pid"], proc.pid)
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(self.path).acquire()
+        self.assertIn("already running (pid %d" % proc.pid, str(cm.exception))
+        self.assertIn(self.path, str(cm.exception))
+        end()
+        self.assertEqual(os.path.getsize(self.path), 0)
+        lock = osx.PidLock(self.path).acquire()
+        self.addCleanup(lock.release)
+        self.assertEqual(osx.read_json(self.path)["pid"], os.getpid())
+
+    def test_stamp_written_in_place_and_fd_not_inheritable(self):
+        open(self.path, "w").close()
+        ino = os.stat(self.path).st_ino
+        lock = osx.PidLock(self.path).acquire()
+        self.addCleanup(lock.release)
+        self.assertEqual(os.stat(self.path).st_ino, ino)
+        self.assertFalse(os.get_inheritable(lock.fd))
+        self.assertFalse(self._flock_free())
+        lock.release()
+        self.assertTrue(self._flock_free())
+        self.assertEqual(os.stat(self.path).st_ino, ino)
+        self.assertEqual(os.path.getsize(self.path), 0)
+        self.assertIsNone(lock.fd)
+
+    def test_live_stamp_without_flock_refuses_and_lets_flock_go(self):
+        with open(self.path, "w") as fh:
+            json.dump(osx.stamp(), fh)
+        before = open(self.path).read()
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(self.path).acquire()
+        self.assertIn("already running (pid %d on " % os.getpid(), str(cm.exception))
+        self.assertIn("; lock %s" % self.path, str(cm.exception))
+        self.assertEqual(open(self.path).read(), before)
+        self.assertTrue(self._flock_free())
+
+    def test_dead_stamp_is_taken_over(self):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait(timeout=10)
+        st = dict(osx.stamp(), pid=proc.pid)
+        with open(self.path, "w") as fh:
+            json.dump(st, fh)
+        lock = osx.PidLock(self.path).acquire()
+        self.addCleanup(lock.release)
+        self.assertEqual(osx.read_json(self.path)["pid"], os.getpid())
+
+    def test_second_pidlock_in_same_process_is_refused(self):
+        lock = osx.PidLock(self.path).acquire()
+        self.addCleanup(lock.release)
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(self.path).acquire()
+        self.assertIn("already running", str(cm.exception))
+        self.assertEqual(osx.read_json(self.path)["pid"], os.getpid())
+
+    def test_other_oserror_names_the_path(self):
+        os.mkdir(self.path)
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(self.path).acquire()
+        self.assertIn(self.path, str(cm.exception))
+
+    def test_controller_main_and_docs(self):
+        with open(os.path.join(LOOP, "ticket_controller.py")) as fh:
+            src = fh.read()
+        self.assertIn("osx.PidLock(os.path.join(cfg.worktree_root, \"controller.lock\")).acquire()", src)
+        self.assertIn("lock.release()", src)
+        self.assertIn("flock", osx.PidLock.__doc__)
+        self.assertIn("emptied", osx.PidLock.__doc__)
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        self.assertRegex(text, r"controller\.lock`\. The lock is an exclusive flock on that file"
+                               r"[^\n]*stays after the controller stops, emptied")
+
+
 class WorktreeSetup(LoopCase):
     """devloop.worktree_setup: the implementer's tests (core/worktrees.py and what it leaves)."""
 
