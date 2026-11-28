@@ -1096,6 +1096,206 @@ class T121Acceptance(LoopCase):
         self.assertIn("timeout", got["summary"])
 
 
+class T144Acceptance(LoopCase):
+    """Ticket #144: a release (here through `tickets.py release`) takes what a regression takes - one
+    machine slot, or with devloop.regression_exclusive the whole machine - before its command starts."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        os.environ["AC_ROOT"] = self.proj
+        self.slot_dir = os.path.join(self.tmp, "wt", "slots")
+        self.live_dir = os.path.join(self.tmp, "wt", "runs", "live")
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def landed_group(self):
+        """A landed group g1 whose release failed (as test_live.py T65Acceptance.landed_group writes it)."""
+        sha = git(self.proj, "rev-parse", "main")
+        self.add(1, state="landed", group="g1")
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "landed", "landed_sha": sha,
+                                                  "branch": "int/g1", "members": ["1"],
+                                                  "release": "failed"}),
+                         "test: landed group")
+        return sha
+
+    def hold_machine(self, seconds):
+        """A child process that takes the whole machine (core/slots.take_machine), holds it `seconds`,
+        then prints the time it lets go and releases. Returns (child, read_release_time)."""
+        code = ("import sys, time; sys.path.insert(0, %r)\n"
+                "from core.config import Config\nfrom core import slots\n"
+                "m = slots.take_machine(Config(%r), time.time() + 10)\n"
+                "print('held' if m and m.held else 'none', flush=True)\n"
+                "time.sleep(%r)\n"
+                "print(repr(time.time()), flush=True)\n"
+                "m.release()\n" % (LOOP, self.proj, float(seconds)))
+        child = subprocess.Popen(["python3", "-c", code], stdout=subprocess.PIPE, text=True, env=self.env)
+        self.addCleanup(child.stdout.close)
+        self.addCleanup(lambda: (child.poll() is None and child.terminate(), child.wait(30)))
+        self.assertEqual(child.stdout.readline().strip(), "held")
+        return child, lambda: float(child.stdout.readline().strip())
+
+    def popen_release(self):
+        out = open(os.path.join(self.tmp, "release-%d.out" % (time.time() * 1000)), "w+")
+        self.addCleanup(out.close)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "tickets.py"), "release", "g1"],
+                                cwd=self.proj, env=self.env, stdout=out, stderr=subprocess.STDOUT, text=True)
+
+        def reap():
+            if proc.poll() is None:
+                proc.terminate()
+            proc.wait(60)
+        self.addCleanup(reap)
+        return proc, out
+
+    def output(self, out):
+        out.flush()
+        out.seek(0)
+        return out.read()
+
+    def wait_until(self, cond, timeout, proc=None):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            got = cond()
+            if got:
+                return got
+            if proc is not None and proc.poll() is not None:
+                return cond()
+            time.sleep(0.1)
+        return cond()
+
+    def release_record(self):
+        try:
+            with open(os.path.join(self.live_dir, "release-g1.json")) as fh:
+                rec = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return rec if isinstance(rec, dict) else None
+
+    def group(self):
+        return self.snap().groups["g1"]
+
+    # ---- item 1
+    def test_item1_release_starts_only_after_the_machine_holder_lets_go(self):
+        self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=60)
+        self.landed_group()
+        start = os.path.join(self.tmp, "start.txt")
+        self.config(release="python3 -c 'import time; print(repr(time.time()))' > %s" % start)
+        child, released_at = self.hold_machine(4)
+        res = self.run_py("tickets.py", "release", "g1", timeout=120)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertTrue(os.path.exists(start), "the release command never ran")
+        with open(start) as fh:
+            began = float(fh.read().strip())
+        let_go = released_at()
+        self.assertGreaterEqual(began, let_go - 0.1,
+                                "the release command started %.2f s before the holder let go" % (let_go - began))
+        self.assertEqual(self.group().get("release"), "ok")
+
+    # ---- item 2
+    def test_item2_a_release_holds_the_whole_machine(self):
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=60)
+        self.landed_group()
+        marker = os.path.join(self.tmp, "release-running")
+        self.config(release="touch %s; sleep 4" % marker)
+        proc, out = self.popen_release()
+        self.assertTrue(self.wait_until(lambda: os.path.exists(marker), 30, proc),
+                        "the release command never started: " + self.output(out))
+        machine = slots.take_machine(self.cfg(), time.time() + 1)
+        if machine is not None:
+            self.addCleanup(machine.release)
+        self.assertIsNone(machine, "the whole machine was free while the release ran")
+        env = dict(self.env, DEVLOOP_SLOT=os.path.join(self.slot_dir, "slot-0"))
+        res = subprocess.run(["python3", os.path.join(LOOP, "run_tests.py"), "case_1"], cwd=self.proj,
+                             env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn("machine busy", res.stderr)
+        self.assertEqual(proc.wait(60), 0, self.output(out))
+
+    # ---- item 3
+    def test_item3_a_release_that_gets_no_machine_in_time_fails_without_running(self):
+        self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=2)
+        self.landed_group()
+        marker = os.path.join(self.tmp, "release-ran")
+        self.config(release="touch %s" % marker)
+        self.hold_machine(10)
+        res = self.run_py("tickets.py", "release", "g1", timeout=60)
+        self.assertFalse(os.path.exists(marker), "the release command ran while the machine was held")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(self.group().get("release"), "failed")
+        inbox = self.snap().inbox
+        about = [inbox[k] for k in sorted(inbox) if inbox[k].get("kind") == "decision" and inbox[k].get("ref") == "g1"]
+        self.assertTrue(about, "no decision page about g1")
+        self.assertTrue([l for l in str(about[-1].get("text")).split("\n") if "did not come free within" in l],
+                        about[-1].get("text"))
+        from core import release
+        with open(release.log_path(self.cfg(), "g1")) as fh:
+            log = fh.read()
+        self.assertTrue([l for l in log.split("\n") if "did not come free within" in l], log)
+
+    # ---- item 7
+    def test_item7_a_waiting_release_has_a_machine_stage_record_and_board_row(self):
+        import board
+        import test_live
+        self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=60)
+        self.landed_group()
+        self.config(release="sleep 3")
+        self.hold_machine(6)
+        proc, out = self.popen_release()
+        rec = self.wait_until(lambda: (lambda r: r if r and r.get("stage") == "machine" else None)(
+            self.release_record()), 5, proc)
+        self.assertIsNotNone(rec, "no release-g1 record with stage 'machine' while waiting; record: %r"
+                             % (self.release_record(),))
+        self.assertEqual((rec.get("stamp") or {}).get("pid"), proc.pid, rec)
+        page = board.render(self.cfg(), self.snap(), query={"tab": "live"}, now=int(time.time()))
+        rows = test_live.T66Acceptance.parse(self, page)["rows"]
+        mine = [r for r in rows if r["attrs"].get("data-pid") == str(proc.pid)]
+        self.assertEqual(len(mine), 1, [r["attrs"] for r in rows])
+        self.assertIn("等整台機器", " ".join(mine[0]["cells"].values()), mine[0]["cells"])
+        spawned = self.wait_until(lambda: (lambda r: r if r and (r.get("stamp") or {}).get("pid") not in
+                                           (None, proc.pid) else None)(self.release_record()), 20, proc)
+        self.assertIsNotNone(spawned, "no record with the command's stamp once it was spawned")
+        self.assertNotIn("stage", spawned, spawned)
+        with open("/proc/%d/cmdline" % spawned["stamp"]["pid"]) as fh:
+            self.assertEqual(fh.read().split("\0")[:2], ["sh", "-c"])
+        self.assertEqual(proc.wait(60), 0, self.output(out))
+
+    # test_live.T66Acceptance.parse reads self.VOID
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img",
+                                                       "input", "link", "meta", "param", "source",
+                                                       "track", "wbr"}
+
+    # ---- item 8
+    def test_item8_the_release_command_gets_devloop_machine(self):
+        self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=60)
+        self.landed_group()
+        seen = os.path.join(self.tmp, "machine-seen.txt")
+        self.config(release='printf %%s "$DEVLOOP_MACHINE" > %s' % seen)
+        res = self.run_py("tickets.py", "release", "g1", timeout=60)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        with open(seen) as fh:
+            self.assertEqual(fh.read(), os.path.join(self.slot_dir, "exclusive"))
+
+    def test_item8_the_release_command_gets_devloop_slot(self):
+        self.config(machine_slots=1, regression_timeout_seconds=60)
+        self.landed_group()
+        seen = os.path.join(self.tmp, "slot-seen.txt")
+        self.config(release='printf %%s "$DEVLOOP_SLOT" > %s' % seen)
+        res = self.run_py("tickets.py", "release", "g1", timeout=60)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        with open(seen) as fh:
+            self.assertEqual(fh.read(), os.path.join(self.slot_dir, "slot-0"))
+
+
 class T30Acceptance(LoopCase):
     """Ticket #30: waiting for a machine slot does not count against an agent's or an issuer's
     time limit; the clocks start when the slot is taken (D-091 item 6)."""
