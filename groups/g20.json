@@ -8,16 +8,7 @@
     "168"
   ],
   "fix_round": 1,
-  "job": {
-    "kind": "regression",
-    "stamp": {
-      "pid": 26229,
-      "host": "vm",
-      "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
-      "started": "2026-11-28T11:18:56Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g20/result-1795864736.json"
-  },
+  "job": null,
   "created": "2026-11-28T09:49:29Z",
   "history": [
     {
@@ -69,6 +60,10 @@
           "message": "AssertionError: not within 5 s: the release command's process was stopped"
         }
       ]
+    },
+    {
+      "at": "2026-11-28T11:27:16Z",
+      "event": "regression green"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
@@ -103,5 +98,6 @@
       "round": 1
     }
   ],
-  "fix_end_sha": "a759fe75023418ddcb69b46c0317deebef20f502"
+  "fix_end_sha": "a759fe75023418ddcb69b46c0317deebef20f502",
+  "last_regression": "green"
 }
