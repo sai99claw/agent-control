@@ -1021,6 +1021,67 @@ class MemberLeavesUnit(LoopCase):
         self.assertEqual(s.groups["g1"]["history"], [])
 
 
+class DispatchOrderUnits(LoopCase):
+    """Start order when ready tickets outnumber free slots: chain place, then DAG order."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def group(self, gid, members, state="open", **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": state, "members": list(members),
+             "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z", "history": []}
+        g.update(fields)
+        self.pool.update(lambda tx: tx.put_group(g), "test: group %s" % gid)
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.started, c.issued = [], []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
+        return c
+
+    def edge(self):
+        self.pool.update(lambda tx: tx.put_dag(dict(tx.data.raw["dag"], group_after={"g1": ["g2"]})), "test: edge")
+
+    def test_tickets_outside_the_chain_rank_last_and_raise_nothing(self):
+        self.config(max_parallel=2)
+        self.add(1, group=None)
+        self.add(3, group="g7")
+        self.add(2, group="g1")
+        self.group("g1", ["2"])
+        c = self.ctl()
+        c.dispatch(self.snap())
+        self.assertEqual(c.issued, [("2", "g1")])
+
+    def test_a_blocked_ticket_of_an_earlier_group_holds_no_slot(self):
+        self.config(max_parallel=2)
+        self.add(5, state="running", group="g2")
+        self.add(3, deps=["5"], group="g2")
+        self.add(1, group="g1")
+        self.group("g2", ["5", "3"])
+        self.group("g1", ["1"])
+        self.edge()
+        c = self.ctl()
+        c.dispatch(self.snap())
+        self.assertEqual(c.issued, [("1", "g1")])
+
+    def test_start_order_is_documented_in_step_3(self):
+        import ticket_controller
+        doc = ticket_controller.__doc__
+        step = doc[doc.index("3. dispatch"):doc.index("4. memory")]
+        self.assertIn("chain.order", step)
+
+
 class T135Acceptance(LoopCase):
     """#135 (verifier): a ready ticket that has a group field but no open group gets no new group
     from the controller; the idle page says it waits for the main session (D-097 3)."""
