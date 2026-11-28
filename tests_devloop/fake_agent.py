@@ -255,6 +255,9 @@ elif role == "creator":
               "note": "dropped item 2"})
         if action == "revised_hold":
             time.sleep(20)
+    elif action == "revised_kept_cases":   # #157: a revision that changes the brief and keeps the cases
+        hand({"kind": "revised", "ticket": {"acceptance": ["a possible thing"]}, "cases_wrong": False,
+              "note": "acceptance changed, cases kept"})
     elif action == "revised_dag":   # #127: a revised hand-in that also changes the DAG ($FAKE_REVISE_DAG)
         hand({"kind": "revised", "ticket": {"acceptance": ["a possible thing"]}, "cases_wrong": False,
               "note": "dag changed", "dag": json.loads(os.environ["FAKE_REVISE_DAG"])})
