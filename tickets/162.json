@@ -20,7 +20,7 @@
   "vision": "VISION step 4 (工作者與驗證者依相依性被派出去): dispatch follows the group order the main session set, so the group that must land first gets slots first. Metric 每張落地票的 token 與時間 (time): for the urgent group, time to landing drops by up to the run time of the later-group tickets that took its slots (with max_parallel 2, about one or two issuer rounds); also 等我處理的事積了多少, since an urgent fix the main session reordered no longer waits behind later groups. Inferred, not measured on a live pool.",
   "removes": "none - reason: no gate, rule or step is added; the change replaces the plain dagmod.topo iteration in dispatch with chain-then-topo ordering of the same candidates (no new check, state, config key or page).",
   "id": "162",
-  "state": "ready",
+  "state": "running",
   "round": 0,
   "created": "2026-11-28T09:05:11Z",
   "request": "Fix GitHub issue sai99claw/agent-control#17 (source: issue #17, reported from tabby_pool).\n\nProblem (confirmed in code): `TicketController.dispatch` in devloop/ticket_controller.py iterates ready tickets in\n`dagmod.topo(snap.dag)` order only. It ignores the group chain (`chain.order(snap)`). When the main session orders\ngroups with `actl dag after` / `dag dep` so that an urgent group comes first, the controller can still fill every\nslot (max_parallel) with tickets of later groups while the first group's ready tickets wait. The first group cannot\nstart its regression until its own tickets are done, so the urgent fixes land last.\n\nWanted: when choosing which ready tickets to start, order candidates by the position of their group in\n`chain.order(snap)` first (groups not in the chain after all chained groups), then by the existing topo order inside\na group. Everything else in dispatch stays the same (can_start_now, ticket locks, memory_short, max_parallel).\n\nOne ticket. Acceptance: with max_parallel smaller than the ready tickets, a ready ticket of the first chained group\nstarts before ready tickets of later groups even when those have lower ticket ids / earlier topo position; inside a\ngroup topo order still holds.\n\nvision: dispatch follows the order the main session set for groups, so the group that must land first gets slots first.\nremoves: nothing (replaces the plain topo iteration in dispatch with chain-then-topo ordering).\n",
@@ -30,6 +30,11 @@
     {
       "at": "2026-11-28T09:05:11Z",
       "event": "opened"
+    },
+    {
+      "at": "2026-11-28T10:05:49Z",
+      "event": "dispatched",
+      "target": "int/g18"
     }
   ],
   "cost": [
@@ -54,5 +59,8 @@
       ]
     }
   ],
-  "group": "g18"
+  "group": "g18",
+  "target": "int/g18",
+  "run": null,
+  "claimed_at": "2026-11-28T10:05:49Z"
 }
