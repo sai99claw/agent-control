@@ -747,7 +747,7 @@ def render_live_tab(cfg, snap, key, query, now):
     return "\n".join(out)
 
 
-ACT_LABELS = {"revise": "照我的話改", "retry": "再試一次", "cancel": "取消", "group-ready": "帶著我的話重驗",
+ACT_LABELS = {"revise": "照我的話改", "retry": "再試一次", "cancel": "取消", "approve": "核准(只在主線 CLI)", "group-ready": "帶著我的話重驗",
               "group-cancel": "取消這組", "rerun": "環境修好了,重跑", "release": "重跑發版", "ack": "知道了"}
 NOTE_ACTIONS = ("revise", "retry", "cancel", "group-ready", "group-cancel", "rerun")   # options with a note box
 
@@ -796,6 +796,10 @@ def render_options(c, may_submit):
         attrs = 'class="option" data-action="%s"%s' % (e(action), ' data-recommended="1"' if i == 1 else "")
         label = ACT_LABELS[action] + ("(建議)" if i == 1 else "")
         consequence = '<p class="consequence">%s</p>' % e(o["consequence"])
+        if action == "approve":
+            out.append('<div %s><span class="label">%s</span>%s<p class="cli">%s</p></div>'
+                       % (attrs, e(label), consequence, e(pagemod.command("approve", c["subject"], c["page"], o.get("note") or ""))))
+            continue
         if not may_submit:
             out.append('<div %s><span class="label">%s</span>%s</div>' % (attrs, e(label), consequence))
             continue

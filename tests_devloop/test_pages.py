@@ -1063,8 +1063,8 @@ class T78Acceptance(LoopCase):
 
     def test_actions_option_and_ask(self):
         pages = self.pages()
-        self.assertEqual(pages.ACTIONS, ('revise', 'retry', 'cancel', 'group-ready', 'group-cancel', 'rerun',
-                                         'release', 'ack'))
+        self.assertEqual(pages.ACTIONS, ('revise', 'retry', 'cancel', 'approve', 'group-ready', 'group-cancel',
+                                         'rerun', 'release', 'ack'))
         self.assertEqual(pages.option("retry", "runs again"),
                          {"action": "retry", "note": "", "consequence": "runs again"})
         self.assertEqual(pages.option("group-ready", "back to regression", note="follow #67"),

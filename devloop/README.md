@@ -734,7 +734,7 @@ per option in the page's order, the recommended one first and marked 建議, eac
 note in an editable box (kept as a draft like the free-text box; no box for 重跑發版 and 知道了) and its
 consequence under it, then the recommendation. An option posts `act` with its action and
 `option=<1-4>` and is redirected to `…&sent=act-<subject>-<page>-o<option>`; a box still holding its
-prepared note does not hold the 30 s reload. Read-only viewers see the same text without buttons.
+prepared note does not hold the 30 s reload. Read-only viewers see the same text without buttons. An approve option is shown with its label, consequence and command and without a form or button for every viewer (only the main session approves, D-103; like `actl dag`, D-096).
 The free-text box and its buttons stay below.
 
 A ticket or group card that is neither stuck nor paused, and a card about anything else, have only
@@ -806,7 +806,7 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
 - **Pages**: a decision or env page may carry `question` (one line, at most 200 characters),
   `options` and `recommendation` (one line, the reason for the recommendation), all three or none
   (`core/pages.py`). Each option is `{action, note, consequence}`; there are 2-4 of them, or exactly
-  one when it is `ack`, and the recommended one is first. Actions: revise, retry, cancel (a ticket),
+  one when it is `ack`, and the recommended one is first. Actions: revise, retry, cancel (a ticket), approve (a ticket; a hard_block stop only, answered in the main session),
   group-ready, group-cancel, rerun, release (a group), ack (any page); each maps to one answer
   command that inbox prints. `Pool.report` checks the set when the page is written: a bad set is
   dropped and the text gets a last line `(options dropped: <the first problem>)`.

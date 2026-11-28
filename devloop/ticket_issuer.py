@@ -889,21 +889,29 @@ class Issuer:
             if gid in snap.groups and snap.groups[gid].get("state") == "open" and chain.stuck_holds(snap, self.id, gid):
                 page_text += "\n%s waits for this decision; groups after it in the chain: %s" % (
                     gid, ", ".join(chain.behind(snap, gid)) or "none")
-            extra = self.stuck_ask(reason)
+            extra = self.stuck_ask(reason, snap.ticket(self.id))
             if detail is not None:
                 extra["hard_block"] = detail
             self.pool.report("env" if reason == "env" else "decision", self.id, page_text, **extra)
 
-    def stuck_ask(self, reason):
+    def stuck_ask(self, reason, t=None):
         i = self.id
         cancel = pages.option("cancel", "#%s is cancelled; tickets that depend on it keep waiting" % i)
         if reason == "hard_block":
+            revise = pages.option("revise", "the opener changes #%s per your words so its change avoids hard_block; it goes back to ready at round 0" % i)
+            approve = pages.option("approve", "#%s goes back to ready and merges only while its change is exactly the one listed; any other change stops again for your approval" % i)
+            retry = pages.option("retry", "#%s runs again as written and stops at the same place unless hard_block changed" % i)
+            why = ((t or {}).get("hard_block_approval") or "")
+            why = why.strip() if isinstance(why, str) else ""
+            if why:
+                return pages.ask(
+                    "#%s's change touches hard_block: approve this exact change, change the ticket, or cancel it?" % i,
+                    [approve, revise, cancel, retry],
+                    "the opener opened #%s knowing it needs your approval at merge: %s" % (i, why))
             return pages.ask(
-                "#%s's change touches hard_block: change the ticket, or cancel it?" % i,
-                [pages.option("revise", "the opener changes #%s per your words so its change avoids hard_block; it goes back to ready at round 0" % i),
-                 cancel,
-                 pages.option("retry", "#%s runs again as written and stops at the same place unless hard_block changed" % i)],
-                "the change the ticket asks for touches hard_block, so a retry stops at the same place")
+                "#%s's change touches hard_block: approve this exact change, change the ticket, or cancel it?" % i,
+                [revise, approve, cancel, retry],
+                "approve only when every listed path and line is what the ticket must do; otherwise revise it so its change avoids hard_block")
         why = {"rounds": "a retry keeps the ticket as written; change it only when the last feedback shows the ticket itself is wrong",
                "timeout": "running out of time says nothing about the ticket's text",
                "target": "a retry puts #%s into a new integration branch" % i,

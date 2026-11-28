@@ -287,7 +287,7 @@ class PageSetsOfIssuerAndWriters(LoopCase):
             self.assertIn("#5", row["question"])
         row = issuer.stuck_ask("hard_block")
         self.assertEqual(pages.problems("5", row), [])
-        self.assertEqual([o["action"] for o in row["options"]], ["revise", "cancel", "retry"])
+        self.assertEqual([o["action"] for o in row["options"]], ["revise", "approve", "cancel", "retry"])
 
     def test_rejected_page_carries_one_ack(self):
         import ticket_creator
@@ -384,7 +384,7 @@ class StuckPageGroupLine(LoopCase):
 
     def page_text(self):
         import ticket_issuer
-        me = mock.Mock(id="1", pool=mock.Mock(snapshot=self.snap), stuck_ask=lambda reason: {})
+        me = mock.Mock(id="1", pool=mock.Mock(snapshot=self.snap), stuck_ask=lambda reason, t=None: {})
         me.pool.report = mock.Mock()
         ticket_issuer.Issuer.stuck(me, "decision", "need the user")
         return me.pool.report.call_args[0][2]
