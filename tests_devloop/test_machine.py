@@ -1048,6 +1048,212 @@ class T44Acceptance(LoopCase):
             self.assertIn("devloop.host_sample_seconds", res.stderr, bad)
 
 
+class T145Acceptance(LoopCase):
+    """Ticket #145: while available memory is below devloop.min_free_memory_gib the controller starts
+    no new issuer, regression, fixer or memory keeper, and says why on its idle page and in a live
+    record. Memory is faked through AC_CGROUP_ROOT (empty), AC_MEMINFO and AC_VM_STAT (missing)."""
+
+    LOW = "MemAvailable:     524288 kB\n"        # 0.5 GiB
+    HIGH = "MemAvailable:  4194304 kB\n"         # 4 GiB
+    LINE = ("memory short: 0.5 GiB available, below devloop.min_free_memory_gib 1: "
+            "no new agent or regression is started until more is free")
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[key]
+        cg = os.path.join(self.tmp, "cgroup-empty")
+        os.makedirs(cg)
+        self.meminfo = os.path.join(self.tmp, "meminfo")
+        self.set_memory(self.LOW)
+        mem = {"AC_CGROUP_ROOT": cg, "AC_MEMINFO": self.meminfo,
+               "AC_VM_STAT": os.path.join(self.tmp, "no-vm-stat")}
+        self.env.pop("AC_SYSCTL", None)
+        self.env.update(mem)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")] + ["AC_SYSCTL"]:
+            os.environ.pop(key, None)
+        os.environ.update(mem)
+        os.environ["AC_ROOT"] = self.proj
+        self.config(min_free_memory_gib=1)
+
+    # ------------------------------------------------------------ helpers
+
+    def set_memory(self, text):
+        tmp = self.meminfo + ".new"
+        with open(tmp, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, self.meminfo)
+
+    def pr_group(self):
+        """Ticket 1 merged in g1; g1 is a PR whose branch int/g1 sits at main."""
+        git(self.proj, "branch", "int/g1", "main")
+        self.add(1, state="merged", group="g1")
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "pr", "branch": "int/g1",
+                                                  "members": ["1"], "fix_round": 0, "job": None}),
+                         "test: g1")
+
+    def group(self, gid="g1"):
+        return self.snap().groups[gid]
+
+    def events(self, gid="g1"):
+        return [row.get("event") for row in self.group(gid).get("history") or []]
+
+    def hold_path(self):
+        return os.path.join(self.tmp, "wt", "runs", "live", "hold-memory.json")
+
+    def read_hold(self):
+        try:
+            with open(self.hold_path()) as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return None
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_setting_validated_and_defaults_to_1(self):
+        for bad in (0, -1, True, "1", []):
+            self.config(min_free_memory_gib=bad)
+            res = self.run_py("tickets.py", "list")
+            self.assertEqual(res.returncode, 2, (bad, res.stdout, res.stderr))
+            self.assertIn("devloop.min_free_memory_gib", res.stderr, bad)
+        for good in (None, 1, 0.5, 2):
+            self.config(min_free_memory_gib=good)
+            res = self.run_py("tickets.py", "list")
+            self.assertEqual(res.returncode, 0, (good, res.stdout, res.stderr))
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["devloop"].pop("min_free_memory_gib", None)
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        from core.config import Config
+        self.assertEqual(Config(self.proj).values.get("min_free_memory_gib", "unset"), 1)
+
+    # ------------------------------------------------------------ items 3, 5 and 6 (no --forever)
+
+    def test_item3_item5_a_ready_ticket_waits_and_the_idle_page_says_memory_short(self):
+        self.add(1)
+        res = self.controller(timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "ready", res.stderr)
+        plan_dir = os.path.dirname(self.plan_path)
+        started = glob.glob(os.path.join(plan_dir, "count-worker*")) + \
+            glob.glob(os.path.join(plan_dir, "count-verifier*"))
+        self.assertEqual(started, [])
+        idle = [row for row in self.snap().inbox.values() if row.get("kind") == "idle"]
+        self.assertEqual(len(idle), 1, self.inbox_kinds())
+        lines = idle[0]["text"].splitlines()
+        self.assertEqual(lines[0], "nothing more can move; left undone:")
+        self.assertEqual(lines[1], self.LINE)
+        self.assertIn(self.LINE, res.stderr.splitlines())
+        self.assertFalse(os.path.exists(self.hold_path()), "the hold record outlived the controller")
+
+    def test_item3_a_pr_group_gets_no_regression(self):
+        self.pr_group()
+        res = self.controller(timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        g = self.group()
+        self.assertFalse(g.get("job"), g)
+        self.assertNotIn("regression started", self.events())
+        self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "runs", "regression", "g1", "result-*.json")), [])
+        self.assertEqual(g.get("state"), "pr")
+
+    # ------------------------------------------------------------ item 4 (in process)
+
+    def test_item4_a_fix_round_waits_and_starts_once_memory_is_free(self):
+        import ticket_controller
+        from core.config import Config
+        self.pr_group()
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+
+        def stop_children():
+            for proc in list(ctl.children.values()):
+                osx.kill_tree(proc.pid, grace=2.0)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+        self.addCleanup(stop_children)
+        report = os.path.join(self.tmp, "wt", "runs", "regression", "g1", "result-red.json")
+        os.makedirs(os.path.dirname(report), exist_ok=True)
+        with open(report, "w") as fh:
+            json.dump({"ok": False, "failed": [{"id": "tests.test_x", "message": "red"}]}, fh)
+        ctl.start_fixer("g1", report, 1)
+        self.assertNotIn("fixer:g1", ctl.children)
+        g = self.group()
+        self.assertEqual(g.get("state"), "pr", g)
+        self.assertIs(g.get("fix_retry"), True, g)
+        self.assertEqual(g.get("fix_round"), 0, g)
+        self.assertEqual(g.get("fix_report"), report, g)
+        self.assertFalse(g.get("job"), g)
+        waits = [e for e in self.events() if str(e).startswith("fix round 1 waits: memory short")]
+        self.assertEqual(waits, ["fix round 1 waits: memory short (0.5 GiB available)"], self.events())
+        self.set_memory(self.HIGH)
+        ctl.advance_groups(ctl.pool.snapshot())
+        g = self.group()
+        self.assertEqual(g.get("state"), "fixing", g)
+        self.assertEqual((g.get("job") or {}).get("kind"), "fixer", g)
+        self.assertEqual(g.get("fix_round"), 1, g)
+
+    # ------------------------------------------------------------ items 5 and 6 (--forever)
+
+    def test_item6_forever_keeps_the_hold_record_and_starts_the_ticket_once_memory_is_free(self):
+        self.add(1)
+        out = open(os.path.join(self.tmp, "controller.log"), "w")
+        self.addCleanup(out.close)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py"), "--forever"],
+                                cwd=self.proj, env=self.env, stdout=out, stderr=subprocess.STDOUT)
+
+        def stop():
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    osx.kill_tree(proc.pid, grace=1.0)
+            run = (self.snap().ticket("1") or {}).get("run") or {}
+            if run.get("pid") and run.get("host") == osx.host() and osx.alive(run["pid"]):
+                osx.kill_tree(run["pid"], grace=2.0)    # the issuer this controller recorded
+        self.addCleanup(stop)
+        deadline, rec = time.time() + 10, None
+        while time.time() < deadline:
+            rec = self.read_hold()
+            if rec is not None:
+                break
+            time.sleep(0.1)
+        self.assertIsNotNone(rec, "no %s within 10 s" % self.hold_path())
+        self.assertEqual(rec.get("kind"), "hold", rec)
+        self.assertEqual(rec.get("reason"), "memory", rec)
+        self.assertEqual(rec.get("available"), 536870912, rec)
+        self.assertEqual(rec.get("threshold"), 1073741824, rec)
+        self.assertEqual(rec.get("setting"), 1, rec)
+        self.assertIn("result", rec)
+        self.assertIsNone(rec["result"], rec)
+        self.assertTrue(rec.get("since"), rec)
+        self.assertEqual((rec.get("stamp") or {}).get("pid"), proc.pid, rec)
+        self.assertEqual(self.state(1), "ready")
+        since = rec["since"]
+        time.sleep(1.0)                              # several ticks of the same hold
+        again = self.read_hold()
+        self.assertIsNotNone(again)
+        self.assertEqual(again.get("since"), since, "since must be kept while the hold lasts")
+        self.set_memory(self.HIGH)
+        deadline, gone = time.time() + 15, False
+        while time.time() < deadline:
+            if not os.path.exists(self.hold_path()) and self.state(1) != "ready":
+                gone = True
+                break
+            time.sleep(0.1)
+        self.assertTrue(gone, "record still there (%s) or ticket 1 still %s"
+                        % (os.path.exists(self.hold_path()), self.state(1)))
+        self.assertIsNone(proc.poll(), "the --forever controller exited")
+        proc.terminate()
+        proc.wait(timeout=20)
+
+
 class T3Acceptance(LoopCase):
     """Ticket #3: devloop.machine_slots bounds the heavy runs (agents, devloop-started test runs)."""
 
