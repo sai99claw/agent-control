@@ -3,7 +3,7 @@
   "ref": "g16",
   "text": "group g16 is in main (67809e72adf7) but the release failed - not retried, not rolled back (release log: /home/user/agent-control-devloop/runs/release/g16.log):\nrc 86\nlast step: (none printed)\nlast 15 lines of the release log:\nerror: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403\nsend-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly\nrelease: tag a-20261128-g16-67809e7 made here but not pushed to origin",
   "at": "2026-11-28T05:11:45Z",
-  "acked": false,
+  "acked": true,
   "question": "g16 is in main (67809e72adf7) but its release failed: leave it for now, or run the release again?",
   "options": [
     {
@@ -17,5 +17,7 @@
       "consequence": "runs the release once more on 67809e72adf7; its outcome is a new page"
     }
   ],
-  "recommendation": "the release log says why it failed, and a re-run before that cause is fixed fails the same way"
+  "recommendation": "the release log says why it failed, and a re-run before that cause is fixed fails the same way",
+  "acked_by": "main-session",
+  "acked_at": "2026-11-28T05:20:19Z"
 }
