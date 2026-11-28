@@ -3,5 +3,7 @@
   "ref": "148,149,150,151",
   "text": "opened #148 Quota is read from the CLI's own error, not from the agent's words; #149 A quota hit with a known reset cools that command for every agent start on the machine; #150 An expired login parks its command machine-wide with one env page instead of passing for a quota hit; #151 `actl tickets login-ok <command>` clears a needs_login mark and closes its page",
   "at": "2026-11-28T00:27:38Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-28T05:20:08Z"
 }
