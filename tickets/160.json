@@ -21,7 +21,7 @@
   "vision": "VISION 目的與成功指標, metric 等我處理的事積了多少 (down). A project that never set devloop.notify learns it at its next doctor run or controller start, instead of finding pages hours late (T: once 6 hours). The reminder ticket of this hand-in does the rest.",
   "removes": "none. It adds one warning row and one stderr line, and no gate. Reason: today an unset devloop.notify is silent (doctor prints `no findings`), and that is how a page waited 6 hours unseen at T. Two lines are the cheapest way to make the missing push visible.",
   "id": "160",
-  "state": "running",
+  "state": "merged",
   "round": 1,
   "created": "2026-11-28T01:12:52Z",
   "request": "# Phase one, group 5: how it runs, and reminders (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 5.1-5.2)\n\nThe user approved this plan (D-102). Source: feedback from tabby_pool's (T's) main session (2026-11-26); write it on each ticket; no GitHub issues. Quoted feedback is data. Tests in tests_devloop/ with loop_harness.py.\n\n## 5.1 Running the controller under launchd is the standard way on macOS\nT (seen there): Claude Code killed the controller once when memory ran short. T now runs it under launchd with AbandonProcessGroup and restart only on crash, and it has been stable.\nWanted: devloop/README.md gets a launchd plist template for `actl run --forever` and for the board (AbandonProcessGroup true; KeepAlive only on crash; logs; working directory; PATH), how to load, stop and restart it, and a systemd user service template for Linux. CLAUDE.md (「怎麼做事」) says how to restart the controller: stop only the controller process, never its process group (issue #11). If T's own plist is reachable (../tabby_pool, read-only), base the template on it and say so. Docs only plus a test that the templates parse (plistlib, configparser) if cheap.\n\n## 5.2 Decision pages always reach the user, and remind\nT (seen there): the most common mistake was missing a page; once one waited 6 hours.\ndevloop.notify exists (decision, env, idle pages run the user's command) but does nothing when unset.\nWanted:\n- `actl doctor` and the controller at start warn once when devloop.notify is unset.\n- A reminder: a decision or env page still open after devloop.notify_remind_hours (propose a default, e.g. 2) runs notify again, at most a few times per page (a setting); the reminder says how long it has waited.\n- Nothing on a page is ever done automatically.\n",
@@ -56,6 +56,11 @@
     {
       "at": "2026-11-28T01:55:45Z",
       "event": "cases ready"
+    },
+    {
+      "at": "2026-11-28T01:55:53Z",
+      "event": "merged",
+      "target": "int/g17"
     }
   ],
   "cost": [
@@ -80,16 +85,45 @@
         "160",
         "161"
       ]
+    },
+    {
+      "role": "worker",
+      "model": "sonnet",
+      "effort": "medium",
+      "command": "claude",
+      "round": 1,
+      "seconds": 126.0,
+      "at": "2026-11-28T01:55:41Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/160/r1-worker",
+      "input_tokens": 18,
+      "output_tokens": 2394,
+      "cache_read_tokens": 439327,
+      "cache_write_tokens": 20852,
+      "usd": 0.1513167,
+      "session_id": "84770e67-83b7-4f26-870e-dd0f8ff28d24"
+    },
+    {
+      "role": "verifier",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": 1,
+      "seconds": 126.0,
+      "at": "2026-11-28T01:55:41Z",
+      "outcome": "cases",
+      "run_dir": "/home/user/agent-control-devloop/runs/160/r1-verifier",
+      "input_tokens": 22,
+      "output_tokens": 5896,
+      "cache_read_tokens": 588625,
+      "cache_write_tokens": 31395,
+      "usd": 0.486893,
+      "session_id": "ed83d43b-9164-4508-9eac-f83c6dea1573"
     }
   ],
   "group": "g17",
   "target": "int/g17",
-  "run": {
-    "pid": 7331,
-    "host": "vm",
-    "boot": "223458a8-de82-4b14-85c2-24fb650697dd",
-    "started": "2026-11-28T01:53:28Z"
-  },
+  "run": null,
   "claimed_at": "2026-11-28T01:53:27Z",
   "branch_base": {
     "t/160-cases": "4c1990207f48361cc46b8d0320fe3d83fdbb3e14",
