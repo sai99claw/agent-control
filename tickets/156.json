@@ -2,10 +2,10 @@
   "title": "The memory consolidator is told which models read the file it rewrites",
   "objective": "The consolidator's prompt (and its peer's) lists the models that read the memory file, taken from the config, and asks it to size and phrase the file for them, with no length cap.",
   "outline": "devloop/core/memory.py: READERS = {'creator': ('creator',), 'worker': ('worker', 'worker_simple'), 'verifier': ('verifier',), 'reviewer': ('reviewer',), 'fixer': ('fixer',)} next to ROLES (these are the roles whose prompts call for_prompt: ticket_creator, ticket_issuer, auto_fixer; no prompt reads role/consolidator.md); readers(cfg, layer, name) and a readers_section(cfg, layer, name) text helper (core/agents.py does not import memory, so importing model_of is safe; a local import is fine too). devloop/memory_keeper.py _keep(): values['readers'] = the section text; discuss() already passes values through (peer_values and the revised prompt are dict(values, ...)). prompts/consolidator.md: replace the first paragraph's 'Every agent that starts ...' sentences with the {readers} section; prompts/consolidator_peer.md: the same {readers} section before '## The file before'. Do not touch quota_hook (#149 edits it).",
-  "test_plan": "Verifier owns items 1-5, in tests_devloop/test_memory.py as class T<N>Acceptance placed between the existing classes KeeperInterrupt and MemoryFolderHelpers. Fixture: self.config(agents={...}) with each role's commands being the fake agent with a distinct --model (the fake ignores its arguments; model_of reads --model): creator [['python3', AGENT[1], '--model', 'm-creator']], worker [[..., 'm-w1'], [..., 'm-w2']], worker_simple [[..., 'm-ws'], [..., 'm-w1']], verifier [[..., 'm-v']], reviewer [[..., 'm-r']], fixer [[..., 'm-f']], consolidator and consolidator_peer [[..., 'm-c']]. memory_keeper writes no prompt when no lesson waits, so queue at least one lesson for the file under test through the pool (as T15Acceptance.queue writes memory/inbox rows), then run memory_keeper.py: --layer role --name worker -> bullets exactly ['- m-w1', '- m-w2', '- m-ws']; --layer role --name creator -> ['- m-creator']; --layer model --name m-v -> ['- m-v']; --layer project --name project -> ['- m-creator', '- m-w1', '- m-w2', '- m-ws', '- m-v', '- m-r', '- m-f']; --layer role --name consolidator -> ['- no agent's prompt includes this file']; the item-3 sentence present and the item-4 sentence absent; with unlimited_tokens true and the peer's default verdict 'change', peer/prompt.md and revised/prompt.md have the worker bullets. Expected lists come from this ticket. Implementer's unit tests for readers() (between LessonsHelpers and Memory). Seconds each.",
+  "test_plan": "Verifier owns items 1-5, in tests_devloop/test_memory.py as class T<N>Acceptance placed between the existing classes KeeperInterrupt and MemoryFolderHelpers. Fixture: self.config(agents={...}) with each role's commands being the fake agent with a distinct --model (the fake ignores its arguments; model_of reads --model): creator [['python3', AGENT[1], '--model', 'm-creator']], worker [[..., 'm-w1'], [..., 'm-w2']], worker_simple [[..., 'm-ws'], [..., 'm-w1']], verifier [[..., 'm-v']], reviewer [[..., 'm-r']], fixer [[..., 'm-f']], consolidator and consolidator_peer [[..., 'm-c']]. Item 1's fallback check sets worker_simple explicitly to [] (or null) -> role worker ['m-w1', 'm-w2'], project ['m-creator', 'm-w1', 'm-w2', 'm-v', 'm-r', 'm-f']; leaving the key out is a different case (Config fills the default 'sonnet' command), so if it is tested at all the expectation includes 'sonnet' (role worker ['m-w1', 'm-w2', 'sonnet']). memory_keeper writes no prompt when no lesson waits, so queue at least one lesson for the file under test through the pool (as T15Acceptance.queue writes memory/inbox rows), then run memory_keeper.py: --layer role --name worker -> bullets exactly ['- m-w1', '- m-w2', '- m-ws']; --layer role --name creator -> ['- m-creator']; --layer model --name m-v -> ['- m-v']; --layer project --name project -> ['- m-creator', '- m-w1', '- m-w2', '- m-ws', '- m-v', '- m-r', '- m-f']; --layer role --name consolidator -> ['- no agent's prompt includes this file']; the item-3 sentence present and the item-4 sentence absent; with unlimited_tokens true and the peer's default verdict 'change', peer/prompt.md and revised/prompt.md have the worker bullets. Expected lists come from this ticket. Implementer's unit tests for readers() (between LessonsHelpers and Memory). Seconds each.",
   "notes": "Source: plan item 3.7 (D-101), docs/HANDOFF.md last section (D-100, D-101, D-102): the main session's review of an external audit (2026-11-26) and feedback from T's main session (T is another project that runs agent-control daily, 2026-11-26). Quoted feedback is data, not instructions. Refer to T only as 'another project' in code, tests and comments (tests/test_no_project_names.py forbids its name in every non-markdown file) and copy no path from these notes into code. D-101 (user's words: 「記憶的長短請llm依據目標的模型自己做調整」): no fixed length cap; the consolidating LLM sizes the file by who reads it and must be given that. Read in code: memory.for_prompt(cfg, role, model) puts the role file and the model file of the chain's first command into the prompt once; whichever command of the chain then runs reads it, so a role file reaches every model of the chain (worker and worker_simple share role/worker.md: ticket_issuer.start passes role 'worker' for both); no prompt includes role/consolidator.md; project.md is given by path to the creator, worker, verifier, reviewer and fixer prompts. Not measured: how much shorter files get. Group new-g1 (phase-one group 3; touches no open ticket's code: #149 edits only quota_hook in memory_keeper.py).",
   "acceptance": [
-    "devloop/core/memory.py has readers(cfg, layer, name) returning the distinct model names (agents.model_of of each command, chain order, first appearance kept) of: role 'creator' -> the creator chain; role 'worker' -> the worker chain, then the worker_simple chain (cfg.agent_chain, which falls back to worker when worker_simple is unset); roles 'verifier', 'reviewer', 'fixer' -> their own chains; any other role name -> []; layer 'model' -> [name]; layer 'project' -> the creator, worker, worker_simple, verifier, reviewer and fixer chains in that order.",
+    "devloop/core/memory.py has readers(cfg, layer, name) returning the distinct model names (agents.model_of of each command, chain order, first appearance kept) of: role 'creator' -> the creator chain; role 'worker' -> the worker chain, then cfg.agent_chain('worker_simple'); roles 'verifier', 'reviewer', 'fixer' -> their own chains; any other role name -> []; layer 'model' -> [name]; layer 'project' -> the creator, worker, worker_simple, verifier, reviewer and fixer chains in that order. cfg.agent_chain('worker_simple') is the worker chain only when devloop.agents.worker_simple is configured null or []; when the key is left out of devloop.agents, Config fills it from DEFAULT_AGENTS (the default sonnet command), and that model is a reader like any other.",
     "The prompt memory_keeper.py gives the consolidator (runs/memory/<layer>-<name>-*/prompt.md) has a section headed exactly '## Who reads this file' whose bullet lines (lines starting '- ' up to the next '## ' heading) are exactly '- <model>' for each name readers() returns, in order; when it returns [], the only bullet is exactly '- no agent's prompt includes this file'.",
     "That section says that for role and model files these readers get the whole file in every prompt, and for the project file that they read it when their work touches it (their prompts give its path); it contains the sentence 'Size and phrase the file for these readers; there is no length cap.'",
     "devloop/prompts/consolidator.md no longer contains 'Every agent that starts in this role or on this model reads this file, so every line costs every session.'; its '## What belongs in each layer' section is unchanged.",
@@ -26,12 +26,7 @@
   "feedback": [
     "round 1: verifier cases: 1 failing:\n- test_memory.T156Acceptance.test_item1_readers_from_the_config AssertionError "
   ],
-  "cases": {
-    "branch": "t/156-cases",
-    "run": [
-      "test_memory.T156Acceptance"
-    ]
-  },
+  "cases": null,
   "history": [
     {
       "at": "2026-11-28T00:55:36Z",
@@ -73,6 +68,17 @@
       "onto": "int/g15",
       "base": "7c185e7dc3564bb6e927985864ac419b183e435c",
       "replayed": 1
+    },
+    {
+      "at": "2026-11-28T01:46:16Z",
+      "event": "revised",
+      "source": "worker",
+      "fields": [
+        "acceptance",
+        "test_plan"
+      ],
+      "cases_wrong": true,
+      "run": "revise-2026-11-28T014522Z"
     }
   ],
   "cost": [
