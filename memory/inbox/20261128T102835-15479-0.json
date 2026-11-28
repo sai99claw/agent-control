@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a ticket lists old test cases to change in place, grep the base branch's tests for the exact old literal (e.g. the option-action list) rather than relying on the main checkout; acceptance classes added by tickets merged earlier in the same group pin the same values.",
+  "source": "#165 revise (opener)",
+  "at": "2026-11-28T10:28:35Z"
+}
