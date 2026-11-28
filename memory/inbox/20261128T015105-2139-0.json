@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py takes ids relative to the unittest roots in board/config.json (e.g. test_controller.T159Acceptance), not dotted from the repo root (tests_devloop.test_controller...), which fails with an ImportError.",
+  "source": "#159 r1 verifier",
+  "at": "2026-11-28T01:51:05Z"
+}
