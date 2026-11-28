@@ -30,7 +30,12 @@
     "round 1: verifier cases: 2 failing:\n- test_issuer.T157Acceptance.test_c1_a_revision_keeping_the_cases_stops_the_worker_and_the_round_is_free IndexError \n- test_issuer.T157Acceptance.test_c4_a_cases_wrong_revision_stops_the_round_with_thrown_out IndexError ",
     "round 2: the ticket was revised during this round and the revision threw out the verifier's cases (cases_wrong); the verifier writes them again next round and the worker works on the revised ticket"
   ],
-  "cases": null,
+  "cases": {
+    "branch": "t/157-cases",
+    "run": [
+      "test_issuer.T157Acceptance"
+    ]
+  },
   "history": [
     {
       "at": "2026-11-28T00:55:36Z",
@@ -101,6 +106,10 @@
       "at": "2026-11-28T04:46:18Z",
       "event": "round start",
       "round": 3
+    },
+    {
+      "at": "2026-11-28T04:51:10Z",
+      "event": "cases ready"
     }
   ],
   "cost": [
