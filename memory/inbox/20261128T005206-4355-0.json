@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py ids are module-relative under the unittest roots (test_machine.T143Acceptance), not package paths (tests_devloop.test_machine...), which fail with ImportError.",
+  "source": "#143 r1 verifier",
+  "at": "2026-11-28T00:52:06Z"
+}

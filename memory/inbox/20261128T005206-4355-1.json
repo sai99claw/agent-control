@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "verifier",
+  "text": "Never assertIn/assertNotIn against an environment dict: the failure message dumps the whole environment, private values included, into the test log; assert on the key with a short message.",
+  "source": "#143 r1 verifier",
+  "at": "2026-11-28T00:52:06Z"
+}
