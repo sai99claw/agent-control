@@ -1,0 +1,16 @@
+{
+  "kind": "idle",
+  "ref": "controller",
+  "text": "nothing more can move; left undone:\n#147 stuck (hard_block): the change touches hard_block: pattern 'os\\\\.kill', pattern 'killpg'",
+  "at": "2026-11-28T11:51:06Z",
+  "acked": false,
+  "question": "the controller ended with work left: answer what waits for you, then run it again?",
+  "options": [
+    {
+      "action": "ack",
+      "note": "",
+      "consequence": "nothing runs until the next `actl run`; each line above says what it waits for"
+    }
+  ],
+  "recommendation": "items that wait for you have pages of their own"
+}
