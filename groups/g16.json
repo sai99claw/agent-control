@@ -17,7 +17,12 @@
     {
       "at": "2026-11-28T04:27:27Z",
       "event": "branch int/g16 made from main e8472cca1e83"
+    },
+    {
+      "at": "2026-11-28T04:35:09Z",
+      "event": "main moved to 2a29a8ceb4f8: fast-forwarded int/g16 to it"
     }
   ],
-  "base": "e8472cca1e837b7b996a7dd6509c5d7f438096d7"
+  "base": "e8472cca1e837b7b996a7dd6509c5d7f438096d7",
+  "main_tried": "2a29a8ceb4f8d5d975cb7e1333b2e8b5b36036ce"
 }
