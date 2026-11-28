@@ -2225,6 +2225,149 @@ class MissingProgramKeepsText(unittest.TestCase):
                     "cannot start no-such-program-132: not found ("), str(ctx.exception))
 
 
+class T151Acceptance(LoopCase):
+    """#151: `tickets.py login-ok <command>` removes the program's machine-wide needs_login record
+    and acks its env page, so a run waiting on it resumes. Expected values come from the ticket's
+    acceptance items 1-4, not from the code."""
+
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+    PARKED = "needs_login"
+    QUOTA_TEXT = "You've hit your limit · resets 3pm"
+    PAGE_TEXT = "agy.sh needs a new login\nx"
+    OK_LINE = "agy.sh: login marked ok"
+    REFUSE = "tickets: %s is not waiting for a login (waiting for a login: %s)"
+    ROW = "| `python3 devloop/tickets.py login-ok <command> [--by NAME]`"
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.cool = os.environ["AC_COOLDOWN_FILE"]
+        now = time.time()
+        self.parked = {"state": self.PARKED, "since": time.strftime(self.FMT, time.gmtime(now)), "text": "x",
+                       "project": "proj", "role": "worker"}
+        self.quota = {"state": "quota", "until": time.strftime(self.FMT, time.gmtime(now + 3600)),
+                      "since": time.strftime(self.FMT, time.gmtime(now)), "text": self.QUOTA_TEXT,
+                      "project": "p", "role": "worker"}
+
+    def write(self, commands):
+        osx.write_json(self.cool, {"version": 1, "commands": commands})
+
+    def commands(self):
+        with open(self.cool) as fh:
+            return json.load(fh).get("commands")
+
+    def raw(self):
+        with open(self.cool, "rb") as fh:
+            return fh.read()
+
+    def inbox(self):
+        return {k: dict(v) for k, v in self.snap().inbox.items()}
+
+    # ---------------------------------------------------------------- item 1
+
+    def test_item1_removes_the_record_keeps_the_rest_and_acks_the_page(self):
+        self.write({"agy.sh": self.parked, "claude opus": self.quota})
+        page = self.pool.report("env", "login-agy.sh", self.PAGE_TEXT)
+        other = self.pool.report("env", "g9", "other")
+        res = self.run_py("tickets.py", "login-ok", "agy.sh", "--by", "tester")
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        self.assertIn(self.OK_LINE, res.stdout)
+        self.assertEqual(self.commands(), {"claude opus": self.quota})
+        rows = self.snap().inbox
+        self.assertIs(rows[page].get("acked"), True, rows[page])
+        self.assertEqual(rows[page].get("acked_by"), "tester")
+        self.assertFalse(rows[other].get("acked"), rows[other])
+
+    # ---------------------------------------------------------------- item 2
+
+    def test_item2_no_record_writes_nothing_and_exits_2(self):
+        self.write({"claude opus": self.quota})
+        page = self.pool.report("env", "login-nosuch", "p")
+        before, pages_before = self.raw(), self.inbox()
+        res = self.run_py("tickets.py", "login-ok", "nosuch")
+        self.assertEqual(res.returncode, 2, (res.stdout, res.stderr[-2000:]))
+        self.assertIn(self.REFUSE % ("nosuch", "none"), res.stderr)
+        self.assertEqual(self.raw(), before)
+        self.assertEqual(self.inbox(), pages_before)
+        self.assertFalse(self.snap().inbox[page].get("acked"))
+        # a quota record under the name is not a login wait; the parked name is listed
+        self.write({"agy.sh": self.parked, "claude opus": self.quota})
+        login = self.pool.report("env", "login-agy.sh", self.PAGE_TEXT)
+        before, pages_before = self.raw(), self.inbox()
+        res = self.run_py("tickets.py", "login-ok", "claude")
+        self.assertEqual(res.returncode, 2, (res.stdout, res.stderr[-2000:]))
+        self.assertIn(self.REFUSE % ("claude", "agy.sh"), res.stderr)
+        self.assertEqual(self.raw(), before)
+        self.assertEqual(self.inbox(), pages_before)
+        self.assertFalse(self.snap().inbox[login].get("acked"))
+
+    # ---------------------------------------------------------------- item 3
+
+    def test_item3_a_parked_run_resumes_and_lands(self):
+        ok_dir = os.path.join(self.tmp, "ok")
+        os.makedirs(ok_dir)
+        ok = os.path.join(ok_dir, "agy.sh")
+        ok_ran = os.path.join(self.tmp, "ok-ran")
+        with open(ok, "w") as fh:
+            fh.write("#!/bin/sh\ncat >/dev/null\ntouch %s\necho '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"\n" % ok_ran)
+        os.chmod(ok, 0o755)
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        self.config(quota_retry_seconds=600, agents=dict(agents_cfg, worker=[[ok]], worker_simple=[[ok]]))
+        self.write({"agy.sh": self.parked})
+        self.add(1, needs_verifier=False)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py")], cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        t = {}
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            t = self.snap().ticket("1")
+            if t.get("waiting") or proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        self.assertTrue(t.get("waiting"), (t.get("state"), proc.poll()))
+        self.assertFalse(os.path.exists(ok_ran), "the parked command was started before login-ok")
+        started = time.time()
+        res = self.run_py("tickets.py", "login-ok", "agy.sh")
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        limit = 0.2 + 5
+        deadline = started + limit + 1
+        while time.time() < deadline and not os.path.exists(ok_ran) and proc.poll() is None:
+            time.sleep(0.05)
+        self.assertTrue(os.path.exists(ok_ran), "the chain did not start again after login-ok")
+        self.assertLessEqual(os.path.getmtime(ok_ran) - started, limit)
+        try:
+            out, err = proc.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            self.fail("the controller did not finish within 60 s after login-ok")
+        self.assertEqual(proc.returncode, 0, err[-2000:])
+        self.assertEqual(self.state(1), "landed")
+
+    # ---------------------------------------------------------------- item 4
+
+    def test_item4_docs_name_login_ok(self):
+        def read(*parts):
+            with open(os.path.join(HOME, *parts)) as fh:
+                return fh.read()
+        readme = read("devloop", "README.md").splitlines()
+        rows = [i for i, ln in enumerate(readme) if ln.startswith(self.ROW)]
+        self.assertEqual(len(rows), 1, "README has not exactly one login-ok row")
+        wait = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py wait")]
+        self.assertEqual(len(wait), 1)
+        self.assertEqual(rows[0], wait[0] + 1, "the login-ok row does not follow the wait row")
+        self.assertTrue(readme[rows[0] + 1].startswith("| `python3 devloop/tickets.py list`"), readme[rows[0] + 1])
+        actl = [ln for ln in read("bin", "actl").splitlines() if ln.startswith("  tickets ")]
+        self.assertEqual(len(actl), 1)
+        self.assertIn("|release", actl[0])
+        words = re.split(r"[\s|]+", actl[0])
+        self.assertIn("login-ok", words)
+        self.assertEqual(words.index("login-ok"), words.index("release") + 1, actl[0])
+        doc = read("devloop", "tickets.py").split('"""')[1]
+        self.assertIn("login-ok", doc)
+
+
 class LoginUnits(LoopCase):
     """#150 implementer's tests: agents.LOGIN_SIGNS and _says_login, cooldown.record_login and the
     replace rules, the one env page, the parked wait and the opener's login page."""
