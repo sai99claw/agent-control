@@ -133,8 +133,8 @@
       ]
     }
   ],
-  "group": "g23",
-  "target": "int/g23",
+  "group": null,
+  "target": null,
   "run": null,
   "claimed_at": "2026-11-28T11:52:08Z",
   "branch_base": {

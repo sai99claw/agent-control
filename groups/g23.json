@@ -1,10 +1,8 @@
 {
   "id": "g23",
   "branch": "int/g23",
-  "state": "open",
-  "members": [
-    "147"
-  ],
+  "state": "cancelled",
+  "members": [],
   "fix_round": 0,
   "job": null,
   "created": "2026-11-28T11:52:02Z",
@@ -18,6 +16,14 @@
     {
       "at": "2026-11-28T11:52:06Z",
       "event": "branch int/g23 made from main 1ba5de2d53cf"
+    },
+    {
+      "at": "2026-11-28T11:53:23Z",
+      "event": "member #147 left: stuck, nothing depends on it and no other member of g23 is unfinished (D-097)"
+    },
+    {
+      "at": "2026-11-28T11:53:23Z",
+      "event": "no tickets left: group closed"
     }
   ],
   "base": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501"
