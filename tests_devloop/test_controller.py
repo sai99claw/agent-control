@@ -800,6 +800,171 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+class T159Acceptance(unittest.TestCase):
+    """#159: devloop/README.md has launchd and systemd templates for the controller and the
+    board, and CLAUDE.md names the restart that stops only the controller."""
+
+    HEADING = "## Running the controller and the board as a service"
+    FENCE = "`" * 3
+    OPENERS = ["xml devloop-launchd-controller", "xml devloop-launchd-board",
+               "ini devloop-systemd-controller", "ini devloop-systemd-board"]
+
+    @staticmethod
+    def _read(path):
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def _readme_lines(self):
+        return self._read(os.path.join(LOOP, "README.md")).split("\n")
+
+    def _section(self):
+        lines = self._readme_lines()
+        self.assertIn(self.HEADING, lines, "README has no service section heading")
+        start = lines.index(self.HEADING)
+        end = len(lines)
+        for i in range(start + 1, len(lines)):
+            if lines[i].startswith("## "):
+                end = i
+                break
+        return lines[start:end]
+
+    def _blocks(self):
+        """[(opening info string, body lines)] of the fenced blocks in the section, in order."""
+        sec = self._section()
+        out, i = [], 0
+        while i < len(sec):
+            if sec[i].startswith(self.FENCE):
+                info = sec[i][len(self.FENCE):]
+                j = i + 1
+                while j < len(sec) and sec[j] != self.FENCE:
+                    j += 1
+                self.assertLess(j, len(sec), "block %r is not closed inside the section" % info)
+                out.append((info, sec[i + 1:j]))
+                i = j + 1
+            else:
+                i += 1
+        return out
+
+    def _block(self, info):
+        found = [body for opener, body in self._blocks() if opener == info]
+        self.assertEqual(len(found), 1, "block %r" % info)
+        return "\n".join(found[0])
+
+    def test_item1_heading_placed_after_run_line_and_before_project_settings(self):
+        lines = self._readme_lines()
+        self.assertEqual(lines.count(self.HEADING), 1, "the section heading line appears once")
+        run_line = "Run them from the project (or set `AC_ROOT` to it)."
+        settings = "## Project settings (`board/config.json`, key `devloop`)"
+        self.assertIn(run_line, lines)
+        self.assertIn(settings, lines)
+        at = lines.index(self.HEADING)
+        self.assertLess(lines.index(run_line), at)
+        self.assertLess(at, lines.index(settings))
+
+    def test_item2_exactly_four_blocks_in_order_each_opener_once(self):
+        self.assertEqual([info for info, _ in self._blocks()], self.OPENERS)
+        lines = self._readme_lines()
+        for info in self.OPENERS:
+            with self.subTest(info=info):
+                self.assertEqual(lines.count(self.FENCE + info), 1)
+
+    def test_item3_launchd_plists_parse_with_the_ticket_values(self):
+        import plistlib
+        argv = ["/bin/sh", "{{AC_HOME}}/bin/actl", "-C", "{{PROJECT_DIR}}"]
+        cases = [
+            ("xml devloop-launchd-controller", "com.agent-control.{{NAME}}.controller",
+             argv + ["run", "--forever"]),
+            ("xml devloop-launchd-board", "com.agent-control.{{NAME}}.board",
+             argv + ["board", "serve", "--port", "8765"]),
+        ]
+        for info, label, args in cases:
+            with self.subTest(block=info):
+                plist = plistlib.loads(self._block(info).encode("utf-8"))
+                self.assertIsInstance(plist, dict)
+                self.assertEqual(plist.get("Label"), label)
+                self.assertEqual(plist.get("ProgramArguments"), args)
+                self.assertEqual(plist.get("WorkingDirectory"), "{{PROJECT_DIR}}")
+                self.assertIs(plist.get("RunAtLoad"), True)
+                self.assertEqual(plist.get("KeepAlive"), {"SuccessfulExit": False})
+                self.assertIs(plist.get("AbandonProcessGroup"), True)
+                self.assertEqual(plist.get("ThrottleInterval"), 300)
+                self.assertEqual(plist.get("ExitTimeOut"), 600)
+                env = plist.get("EnvironmentVariables")
+                self.assertIsInstance(env, dict)
+                self.assertIsInstance(env.get("PATH"), str)
+                parts = env["PATH"].split(":")
+                for want in ("{{HOME}}/.local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"):
+                    self.assertIn(want, parts)
+                for key in ("StandardOutPath", "StandardErrorPath"):
+                    self.assertIsInstance(plist.get(key), str, key)
+                    self.assertTrue(plist[key].startswith("{{HOME}}/Library/Logs/agent-control/"), key)
+
+    def test_item4_systemd_units_parse_with_the_ticket_values(self):
+        import configparser
+        base = "/bin/sh {{AC_HOME}}/bin/actl -C {{PROJECT_DIR}} "
+        cases = [
+            ("ini devloop-systemd-controller", base + "run --forever"),
+            ("ini devloop-systemd-board", base + "board serve --port 8765"),
+        ]
+        for info, exec_start in cases:
+            with self.subTest(block=info):
+                cp = configparser.ConfigParser(interpolation=None, strict=True)
+                cp.optionxform = str
+                cp.read_string(self._block(info))
+                self.assertEqual(cp.sections(), ["Unit", "Service", "Install"])
+                svc = cp["Service"]
+                self.assertEqual(svc.get("ExecStart"), exec_start)
+                self.assertEqual(svc.get("WorkingDirectory"), "{{PROJECT_DIR}}")
+                self.assertEqual(svc.get("Restart"), "on-failure")
+                self.assertEqual(svc.get("RestartSec"), "300")
+                self.assertEqual(svc.get("KillMode"), "process")
+                self.assertEqual(svc.get("TimeoutStopSec"), "600")
+                self.assertIn("PATH=", svc.get("Environment", ""))
+                self.assertIn("/usr/bin", svc.get("Environment", ""))
+                self.assertEqual(cp["Install"].get("WantedBy"), "default.target")
+
+    def test_item5_section_names_placeholders_and_commands(self):
+        text = "\n".join(self._section())
+        for want in ("{{AC_HOME}}", "{{PROJECT_DIR}}", "{{HOME}}", "{{NAME}}", "sed ",
+                     "~/Library/LaunchAgents/", "launchctl bootstrap gui/$(id -u)",
+                     "launchctl bootout gui/$(id -u)/", "launchctl kill TERM gui/$(id -u)/",
+                     "launchctl kickstart gui/$(id -u)/", "launchctl print gui/$(id -u)/",
+                     "~/.config/systemd/user/", "systemctl --user daemon-reload",
+                     "systemctl --user enable --now", "systemctl --user restart",
+                     "systemctl --user stop", "journalctl --user -u", "loginctl enable-linger",
+                     "controller.lock", "exit 0"):
+            with self.subTest(want=want):
+                self.assertIn(want, text)
+
+    def test_item6_section_has_no_absolute_home_path(self):
+        text = "\n".join(self._section())
+        self.assertIn("launchctl", text, "the section must exist with its templates")
+        for bad in ("/Us" + "ers/", "/home/"):
+            with self.subTest(bad=bad):
+                self.assertNotIn(bad, text)
+
+    def test_item7_claude_md_has_the_restart_bullet(self):
+        lines = self._read(os.path.join(HOME, "CLAUDE.md")).split("\n")
+        heads = [i for i, l in enumerate(lines) if l.startswith("## 怎麼做事")]
+        self.assertEqual(len(heads), 1)
+        after = [i for i, l in enumerate(lines) if l.startswith("- agent-control 自己也是一個專案")]
+        self.assertEqual(len(after), 1)
+        self.assertIn("## 不可違反的", lines)
+        stop = lines.index("## 不可違反的")
+        self.assertLess(heads[0], after[0])
+        self.assertLess(after[0], stop)
+        bullets = [l for l in lines[after[0] + 1:stop] if l.startswith("- ")]
+        self.assertEqual(len(bullets), 1, "one new bullet between the project bullet and the rules")
+        line = bullets[0]
+        for want in ("launchctl kill TERM", "launchctl kickstart", "systemctl --user restart",
+                     "controller.lock", "#11"):
+            with self.subTest(want=want):
+                self.assertIn(want, line)
+        for bad in ("頁的種類", "不輪詢"):
+            with self.subTest(bad=bad):
+                self.assertNotIn(bad, line)
+
+
 class StoppedRegressionPieces(LoopCase):
     """#124: regression.py records a stop signal; the controller names the fate of a regression
     that wrote no result; a controller stop alone leaves a running regression to the next one."""
