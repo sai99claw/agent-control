@@ -1,7 +1,7 @@
 {
   "id": "g12",
   "branch": "int/g12",
-  "state": "open",
+  "state": "pr",
   "members": [
     "142",
     "143",
@@ -36,6 +36,10 @@
     {
       "at": "2026-11-28T00:31:34Z",
       "event": "main moved to 5578f25e1adb: fast-forwarded int/g12 to it"
+    },
+    {
+      "at": "2026-11-28T01:37:47Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "base": "26948b9ab503a2d09132ea6ef33fefda07d3e616",
