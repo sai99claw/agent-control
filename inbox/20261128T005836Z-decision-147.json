@@ -1,0 +1,26 @@
+{
+  "kind": "decision",
+  "ref": "147",
+  "text": "#147 is stuck (hard_block): the change touches hard_block: pattern 'os\\\\.kill', pattern 'killpg'",
+  "at": "2026-11-28T00:58:36Z",
+  "acked": false,
+  "question": "#147's change touches hard_block: change the ticket, or cancel it?",
+  "options": [
+    {
+      "action": "revise",
+      "note": "",
+      "consequence": "the opener changes #147 per your words so its change avoids hard_block; it goes back to ready at round 0"
+    },
+    {
+      "action": "cancel",
+      "note": "",
+      "consequence": "#147 is cancelled; tickets that depend on it keep waiting"
+    },
+    {
+      "action": "retry",
+      "note": "",
+      "consequence": "#147 runs again as written and stops at the same place unless hard_block changed"
+    }
+  ],
+  "recommendation": "the change the ticket asks for touches hard_block, so a retry stops at the same place"
+}
