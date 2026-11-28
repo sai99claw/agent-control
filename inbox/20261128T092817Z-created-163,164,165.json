@@ -3,5 +3,7 @@
   "ref": "163,164,165",
   "text": "opened #163 A hard_block stop lists every hit and records the fingerprint of the ticket's own change; #164 actl tickets approve lets exactly the change a hard_block page listed merge; #165 The hard_block stop page offers approve, and only that page does",
   "at": "2026-11-28T09:28:17Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-28T11:51:28Z"
 }
