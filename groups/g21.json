@@ -57,6 +57,12 @@
     {
       "at": "2026-11-28T11:40:25Z",
       "event": "release failed"
+    },
+    {
+      "at": "2026-11-28T11:51:42Z",
+      "event": "page acknowledged",
+      "page": "20261128T114027Z-decision-g21",
+      "by": "main-session"
     }
   ],
   "base": "abf49852381e3bef69ba1b5014d31bedb9ff2780",
