@@ -494,7 +494,7 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
         titles = {i: pool.snapshot().tickets[i].get("title") for i in ids}
         pool.report("created", ",".join(ids), "opened " + "; ".join(
             "#%s %s" % (i, titles[i]) for i in ids) + "".join(
-                "\n#%s stops before merge for your approval (hard_block): %s" % (i, appr[i])
+                "\n#%s stops before merge for your approval (hard_block): %s" % (i, appr)
                 for i in ids if (appr := pool.snapshot().tickets[i].get("hard_block_approval"))))
         print("opened: " + " ".join("#" + i for i in ids))
         return 0
