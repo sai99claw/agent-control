@@ -41,10 +41,14 @@
     {
       "at": "2026-11-28T11:39:58Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-28T11:40:01Z",
+      "event": "code map refreshed"
     }
   ],
   "base": "abf49852381e3bef69ba1b5014d31bedb9ff2780",
   "main_tried": "147c47b2d7457590fe747d6d72c00cf20011e99c",
   "last_regression": "green",
-  "verified_sha": "ed094b37d6b5da7c6a0d48db5ae84b8bb471cd6d"
+  "verified_sha": "f6067cdb06def20aa96ba01f8f7949058c974e56"
 }
