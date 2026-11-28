@@ -356,7 +356,7 @@ push is a decision page. The working state stays in the pool: `memory/inbox/` (w
 Agents start with their role and model memory in the prompt (project memory by path). They never
 edit memory; a hand-in may carry `"lessons": [{"layer", "text"}]`, which the scripts put in
 `memory/inbox/`. The controller starts `memory_keeper.py` for one file at a time once 5 lessons wait
-(or the oldest waited 3 days, at most once per 24 h per file); the consolidator agent rewrites the file. What
+(or the oldest waited 3 days, at most once per 24 h per file); the consolidator agent rewrites the file. The consolidator is told the file's readers (the models of the role's command chains in the config, the model itself for a model file, the reading roles' models for `project.md`) and sizes the file for them, with no length cap (D-101). What
 belongs in which layer is written once, in `prompts/consolidator.md`. `tickets.py init` seeds the
 folder with the files it lacks, never overwriting: a role or model file starts as agent-control's memory/
 file of that name when it has one, else with a heading only; `project.md` starts with its heading. So a

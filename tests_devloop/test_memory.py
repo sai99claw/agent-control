@@ -67,6 +67,25 @@ class LessonsHelpers(unittest.TestCase):
         self.assertEqual(len(tx.rows), 2)
 
 
+class ReadersHelpers(unittest.TestCase):
+    class Cfg:
+        chains = {"creator": ["c"], "worker": ["a", "b"], "worker_simple": ["s", "a"],
+                  "verifier": ["v"], "reviewer": ["r"], "fixer": ["f"]}
+
+        def agent_chain(self, role):
+            return [["x", "--model", m] for m in self.chains[role]]
+
+    def test_readers_by_layer(self):
+        from core import memory
+        cfg = self.Cfg()
+        self.assertEqual(memory.readers(cfg, "role", "worker"), ["a", "b", "s"])
+        self.assertEqual(memory.readers(cfg, "role", "consolidator"), [])
+        self.assertEqual(memory.readers(cfg, "model", "m"), ["m"])
+        self.assertEqual(memory.readers(cfg, "project", "project"), ["c", "a", "b", "s", "v", "r", "f"])
+        text = memory.readers_section(cfg, "role", "consolidator")
+        self.assertIn("- no agent's prompt includes this file", text)
+
+
 class Memory(LoopCase):
     def test_init_seeds_every_role_and_starts_model_memory_from_agent_control(self):
         res = self.run_py("tickets.py", "init")

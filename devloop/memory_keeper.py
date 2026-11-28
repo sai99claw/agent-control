@@ -114,6 +114,7 @@ def _keep(cfg, pool, layer, name, cur, costs):
         "loop_readme": os.path.join(cfg.home, "devloop", "README.md"),
         "contract_path": os.path.join(cfg.home, "devloop", "prompts", "consolidator.md"),
         "peer_notes": "",
+        "readers": memory.readers_section(cfg, layer, name),
     }
     hook = quota_hook(pool, path, costs)
     hand = _run(cfg, cur, "consolidator", agents.render("consolidator.md", values), pool.path, run_dir, hook)
