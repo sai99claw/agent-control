@@ -1,13 +1,5 @@
 {
-  "job": {
-    "path": "memory/role/creator.md",
-    "stamp": {
-      "pid": 8011,
-      "host": "vm",
-      "boot": "223458a8-de82-4b14-85c2-24fb650697dd",
-      "started": "2026-11-28T00:30:36Z"
-    }
-  },
+  "job": null,
   "last": {
     "memory/project.md": "2026-11-28T00:30:30Z",
     "memory/role/creator.md": "2026-11-28T00:31:30Z",
