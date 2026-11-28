@@ -1965,6 +1965,115 @@ class T66Acceptance(LoopCase):
         self.assertEqual([r for r in self.by_pid(rows, proc.pid) if r["attrs"].get("data-state") == "running"], [])
 
 
+class T146Acceptance(LoopCase):
+    """Acceptance of #146: while the controller holds back new work because memory is short (the
+    live record hold-memory), the 進行中 tab shows one row saying so with the numbers. Expected
+    texts are the ticket's own; times come from time.localtime of the chosen epochs."""
+
+    FMT = T66Acceptance.FMT
+    VOID = T66Acceptance.VOID
+    HOLD_TEXT = "記憶體不足:可用 0.5 GiB,低於 devloop.min_free_memory_gib 1 GiB;不派新的 agent,也不開新的 regression"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in list(os.environ):
+            if key.startswith("DEVLOOP_"):
+                del os.environ[key]
+        for key in list(self.env):
+            if key.startswith("DEVLOOP_"):
+                del self.env[key]
+        os.environ["AC_ROOT"] = self.proj
+        self.NOW = int(time.time())
+
+    cfg = T64Acceptance.cfg
+    ts = T66Acceptance.ts
+    clock = T66Acceptance.clock
+    stamp = T66Acceptance.stamp
+    put = T66Acceptance.put
+    agent = T66Acceptance.agent
+    page = T66Acceptance.page
+    parse = T66Acceptance.parse
+    cell = T66Acceptance.cell
+
+    # ------------------------------------------------------------ helpers
+
+    def hold(self, alive=True):
+        """The record new-4 writes: 512 MiB available, threshold 1 GiB, setting 1, since now - 120 s;
+        its stamp started 30 s ago (so a start taken from the stamp differs from one taken from since)."""
+        from core import inflight
+        rec = self.put("hold-memory", "hold", self.NOW - 30, alive, reason="memory", available=536870912,
+                       threshold=1073741824, setting=1, since=self.ts(self.NOW - 120))
+        self.assertEqual(inflight.status(rec), "running" if alive else "ended", "the hold fixture's stamp")
+        return rec
+
+    def rows(self, page=None):
+        out = self.parse(self.page() if page is None else page)
+        self.assertEqual(out["tabs"], 1, "exactly one id=tab-live element")
+        return out["rows"]
+
+    def whys(self, page=None):
+        """[(attrs, text)] of every p.why inside id=tab-live (T68's reader, called, not inherited)."""
+        return T68Acceptance.whys(self, page)
+
+    # ------------------------------------------------------------ item 1: the live hold row
+
+    def test_item1_live_hold_gives_one_first_row(self):
+        ag = self.agent("agent-w", os.getpid(), self.NOW - 300, ticket=None, run_dir="/r/w")
+        self.hold(alive=True)
+        rows = self.rows()
+        holds = [r for r in rows if r["attrs"].get("data-kind") == "hold"]
+        self.assertEqual(len(holds), 1, "exactly one hold row: %r" % [r["attrs"] for r in rows])
+        self.assertIs(rows[0], holds[0], "the hold row comes before every other row: %r" % [r["attrs"] for r in rows])
+        self.assertGreater(len(rows), 1, "the running agent still has its row")
+        self.assertIn(str(ag["stamp"]["pid"]), [r["attrs"].get("data-pid") for r in rows[1:]])
+        row = holds[0]
+        self.assertEqual(row["attrs"].get("data-state"), "memory", row["attrs"])
+        self.assertEqual(self.cell(row, "state"), self.HOLD_TEXT)
+        self.assertEqual(self.cell(row, "what"), "controller")
+        self.assertEqual(self.cell(row, "start"), self.clock(self.NOW - 120), "start taken from since")
+        self.assertEqual(self.cell(row, "elapsed"), "2 分", "elapsed taken from since")
+        self.assertIn(row["attrs"].get("data-pid"), (None, ""), "no pid value: %r" % row["attrs"])
+        self.assertEqual(self.cell(row, "detail"), "", "no run dir, no log")
+        self.assertEqual(row["pres"], {}, "no log tail")
+
+    # ------------------------------------------------------------ item 2: a dead hold has no row
+
+    def test_item2_dead_hold_gives_no_row(self):
+        self.agent("agent-w", os.getpid(), self.NOW - 300, ticket=None, run_dir="/r/w")
+        self.hold(alive=False)
+        rows = self.rows()
+        self.assertEqual([r["attrs"] for r in rows if r["attrs"].get("data-kind") == "hold"], [],
+                         "a dead hold record has no row")
+        self.assertEqual([r["attrs"] for r in rows if r["attrs"].get("data-state") == "ended"
+                          or r["cells"].get("state", "").strip() == "結束了,沒有交件"], [],
+                         "a dead hold record has no 結束了 row")
+        self.assertEqual(len(rows), 1, "only the running agent's row: %r" % [r["attrs"] for r in rows])
+
+    # ------------------------------------------------------------ item 3: the p.why sentence
+
+    def test_item3_live_hold_alone_shows_row_and_no_why(self):
+        self.hold(alive=True)
+        page = self.page()
+        rows = self.rows(page)
+        self.assertEqual([(r["attrs"].get("data-kind"), r["attrs"].get("data-state")) for r in rows],
+                         [("hold", "memory")], "the tab shows the hold row")
+        self.assertEqual(self.cell(rows[0], "state"), self.HOLD_TEXT)
+        self.assertEqual(self.whys(page), [], "a live hold record counts as running: no p.why")
+
+    def test_item3_dead_hold_alone_is_as_if_absent(self):
+        absent = self.page()
+        want_whys, want_rows = self.whys(absent), self.rows(absent)
+        self.assertEqual(len(want_whys), 1, "the fixture without the record has a p.why: %r" % (want_whys,))
+        self.hold(alive=False)
+        page = self.page()
+        self.assertEqual(self.whys(page), want_whys, "the same p.why sentence as without the record")
+        self.assertEqual([r["attrs"] for r in self.rows(page)], [r["attrs"] for r in want_rows],
+                         "the same rows as without the record")
+
+
 class T67Acceptance(LoopCase):
     """Acceptance of #67: on the 進行中 tab every slot wait shows its queue position (and whom it gives
     way to), and every ready ticket and every decision waiting for the user has a row. Expected texts
