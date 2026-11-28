@@ -168,6 +168,225 @@ class OpenerOtherFailureRetries(LoopCase):
             self.assertIn(want, res.stdout)
 
 
+class T149Acceptance(LoopCase):
+    """#149: a quota hit with a readable reset cools that command (program + --model) for every agent
+    start on the machine, through one file in $AC_COOLDOWN_FILE. Expected values come from the
+    ticket's acceptance items 1-7, not from the code."""
+
+    RESET_2H = "You've hit your limit · resets in 2h"
+    NO_RESET = "Error: usage limit reached"
+    EPOCH_PREFIX = "Claude AI usage limit reached|"
+    OPENER_TEXT = "Claude AI usage limit reached|1900000000"
+    OPENER_UNTIL = "2030-03-17T17:46:40Z"
+    PAGE_TEXT = ("the opener is out of quota; nothing was opened:\n"
+                 "Claude AI usage limit reached|1900000000\n"
+                 "the limit resets at 2030-03-17T17:46:40Z: send the request again after that time with "
+                 "`actl new --request`")
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.cool = os.path.join(self.tmp, "cooldown.json")
+        self.env["AC_COOLDOWN_FILE"] = os.environ["AC_COOLDOWN_FILE"] = self.cool
+
+    # ---------------------------------------------------------------- helpers
+
+    def stamp(self, epoch):
+        return time.strftime(self.FMT, time.gmtime(epoch))
+
+    def epoch(self, stamp):
+        return calendar.timegm(time.strptime(stamp, self.FMT))
+
+    def fixture(self, name, text):
+        path = os.path.join(self.tmp, name + ".txt")
+        with open(path, "w") as fh:
+            fh.write(text + "\n")
+        return path
+
+    def cmd(self, model, script):
+        return ["sh", "-c", "cat >/dev/null; " + script, "sh", "--model", model]
+
+    def ran(self, name):
+        return os.path.join(self.tmp, name + "-ran")
+
+    def hands_in(self, model, name):
+        return self.cmd(model, "touch %s; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"" % self.ran(name))
+
+    def says(self, model, name, text, code=1):
+        return self.cmd(model, "touch %s; cat %s; exit %d" % (self.ran(name), self.fixture(name, text), code))
+
+    def write_records(self, records):
+        osx.write_json(self.cool, {"version": 1, "commands": records})
+
+    def record(self, until, text, project="other", role="worker"):
+        return {"state": "quota", "until": self.stamp(until), "since": self.stamp(time.time()),
+                "text": text, "project": project, "role": role}
+
+    def read_file(self):
+        self.assertTrue(os.path.isfile(self.cool), "no cooldown file was written at $AC_COOLDOWN_FILE")
+        with open(self.cool) as fh:
+            data = json.load(fh)
+        self.assertEqual(data.get("version"), 1, data)
+        return data.get("commands")
+
+    def agents_cfg(self, proj=None):
+        with open(os.path.join(proj or self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    # ---------------------------------------------------------------- items 1-3
+
+    def test_items1_3_a_readable_reset_writes_the_record(self):
+        from core import agents
+        from core.config import Config
+        self.config(agents=dict(self.agents_cfg(), worker=[self.says("m1", "w", self.RESET_2H)]))
+        agents.start(Config(self.proj), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30).finish()
+        ended = time.time()
+        commands = self.read_file()
+        self.assertEqual(sorted(commands or {}), ["sh m1"], commands)
+        rec = commands["sh m1"]
+        self.assertEqual(rec.get("state"), "quota", rec)
+        self.assertLessEqual(abs(self.epoch(rec["until"]) - (ended + 7260)), 3, rec)
+        self.assertTrue(rec.get("text") == self.RESET_2H, "the record's text is not the printed text")
+        self.assertEqual((rec.get("project"), rec.get("role")), ("proj", "worker"), rec)
+        self.assertLessEqual(abs(self.epoch(rec["since"]) - ended), 3, rec)
+
+    # ---------------------------------------------------------------- item 4
+
+    def test_item4_a_second_project_skips_a_cooling_command(self):
+        from core import agents
+        from core.config import Config
+        until = self.stamp(time.time() + 3600)
+        self.write_records({"sh m1": dict(self.record(0, "x"), until=until)})
+        proj2 = os.path.join(self.tmp, "proj2")
+        os.makedirs(os.path.join(proj2, "board"))
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            cfg = json.load(fh)
+        cfg["devloop"]["worktrees"] = os.path.join(self.tmp, "wt2")
+        cfg["devloop"]["agents"]["reviewer"] = [self.says("m1", "a", self.NO_RESET), self.hands_in("m2", "b")]
+        with open(os.path.join(proj2, "board", "config.json"), "w") as fh:
+            json.dump(cfg, fh)
+        hand = agents.start(Config(proj2), "reviewer", "go", proj2, os.path.join(self.tmp, "run2"), 30).finish()
+        self.assertFalse(os.path.exists(self.ran("a")), "the cooling command was started")
+        self.assertEqual(hand.kind, "done")
+        self.assertEqual((hand.cost or {}).get("fell_back_from"),
+                         [{"command": "sh", "model": "m1", "outcome": "cooling", "until": until}])
+
+    # ---------------------------------------------------------------- item 5
+
+    def test_item5_whole_chain_cooling_waits_with_no_slot_and_no_row(self):
+        import fcntl
+        import threading
+        from core import agents, inflight
+        from core.config import Config
+        now = int(time.time())
+        self.write_records({"sh m1": self.record(now + 2, "first cools"),
+                            "sh m2": self.record(now + 4, "second cools")})
+        self.config(machine_slots=1,
+                    agents=dict(self.agents_cfg(), worker=[self.hands_in("m1", "m1"), self.hands_in("m2", "m2")]))
+        cfg = Config(self.proj)
+        calls, seen = [], {}
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append(phase)
+            if phase != "wait":
+                return
+            seen.update(row=row, until=until, text=text,
+                        m1=os.path.exists(self.ran("m1")), m2=os.path.exists(self.ran("m2")),
+                        live=[r for _, r in inflight.records(cfg)])
+            fd = os.open(os.path.join(self.tmp, "wt", "slots", "slot-0"), os.O_RDWR | os.O_CREAT)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                seen["slot_free"] = True
+            except OSError:
+                seen["slot_free"] = False
+            finally:
+                os.close(fd)
+
+        out = {}
+
+        def go():
+            try:
+                out["hand"] = agents.start(cfg, "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30,
+                                           on_quota=hook).finish()
+            except Exception as exc:   # surfaced by the assertions below
+                out["error"] = repr(exc)
+        th = threading.Thread(target=go, daemon=True)
+        th.start()
+        th.join(30)
+        self.assertFalse(th.is_alive(), "the run did not end")
+        self.assertIn("wait", calls, (calls, out.get("error")))
+        self.assertIsNone(seen["row"])
+        self.assertLessEqual(abs(seen["until"] - (now + 2)), 1, seen)
+        self.assertEqual(seen["text"], "first cools")
+        self.assertFalse(seen["m1"] or seen["m2"], "a command ran before the cooling wait")
+        self.assertTrue(seen["slot_free"], "slot-0 stayed held during the cooling wait")
+        self.assertTrue([r for r in seen["live"] if r.get("kind") == "agent" and r.get("state") == "quota"],
+                        seen["live"])
+        self.assertEqual(calls, ["wait", "over"])
+        self.assertEqual(out["hand"].kind, "done")
+        self.assertTrue(os.path.exists(self.ran("m1")))
+        self.assertFalse(os.path.exists(self.ran("m2")))
+
+    # ---------------------------------------------------------------- item 6
+
+    def test_item6_fall_through_into_cooling_waits_for_the_earliest(self):
+        from core import agents
+        from core.config import Config
+        now = int(time.time())
+        x_until = now + 3
+        self.write_records({"sh m1": self.record(x_until, "x cools")})
+        count = os.path.join(self.tmp, "y-count")
+        said = self.fixture("y", self.EPOCH_PREFIX + str(now + 3600))
+        y = self.cmd("m2", 'n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s; cat %s; exit 1'
+                     % (count, count, said))
+        self.config(quota_retry_seconds=600, agents=dict(self.agents_cfg(), worker=[self.hands_in("m1", "x"), y]))
+        waits = []
+
+        def hook(phase, row=None, until=None, text=None):
+            if phase == "wait":
+                waits.append((row, until))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30,
+                            on_quota=hook).finish()
+        self.assertEqual(len(waits), 1, waits)
+        row, until = waits[0]
+        self.assertEqual(((row or {}).get("outcome"), (row or {}).get("model")), ("quota", "m2"), row)
+        self.assertLessEqual(abs(until - x_until), 1, (until, x_until))
+        self.assertEqual(hand.kind, "done")
+        self.assertTrue(os.path.exists(self.ran("x")))
+        with open(count) as fh:
+            self.assertEqual(fh.read().strip(), "1")
+        rec = (self.read_file() or {}).get("sh m2")
+        self.assertIsNotNone(rec, "no record for the command that ran")
+        self.assertLessEqual(abs(self.epoch(rec["until"]) - (now + 3660)), 3, rec)
+
+    # ---------------------------------------------------------------- item 7
+
+    def test_item7_the_opener_ends_at_once_with_its_page(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.write_records({"python3": dict(self.record(0, self.OPENER_TEXT), until=self.OPENER_UNTIL)})
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=60)
+        self.assertEqual(res.returncode, 1)
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.plan_path), "count-creator--")),
+                         "the fake creator ran")
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+        rows = list(self.snap().inbox.values())
+        self.assertEqual(len(rows), 1, [r.get("kind") for r in rows])
+        page = rows[0]
+        self.assertEqual((page.get("kind"), page.get("ref")), ("decision", "request"))
+        self.assertTrue(page.get("text") == self.PAGE_TEXT, "the page text is not the one acceptance 7 gives")
+        self.assertEqual(page.get("cost"), [])
+        self.assertEqual([o.get("action") for o in page.get("options") or []], ["ack"])
+
+
 class T31Acceptance(LoopCase):
     """#31: a quota hit at the end of the command chain makes the issuer wait for the reset.
     Expected values come from the ticket's acceptance items, not from the code."""
