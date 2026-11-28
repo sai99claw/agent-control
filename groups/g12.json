@@ -1,7 +1,7 @@
 {
   "id": "g12",
   "branch": "int/g12",
-  "state": "pr",
+  "state": "verified",
   "members": [
     "142",
     "143",
@@ -96,6 +96,10 @@
     {
       "at": "2026-11-28T04:19:27Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-28T04:19:28Z",
+      "event": "regression green"
     }
   ],
   "base": "26948b9ab503a2d09132ea6ef33fefda07d3e616",
@@ -141,5 +145,6 @@
       "session_id": "2fd29ffa-2be1-4aae-acca-ead6d211cb95"
     }
   ],
-  "fix_end_sha": "c05f43cab894c5819e5a0512545c42f61eb7b104"
+  "fix_end_sha": "c05f43cab894c5819e5a0512545c42f61eb7b104",
+  "verified_sha": "c05f43cab894c5819e5a0512545c42f61eb7b104"
 }
