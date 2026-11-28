@@ -1,7 +1,7 @@
 {
   "id": "g21",
   "branch": "int/g21",
-  "state": "open",
+  "state": "pr",
   "members": [
     "169",
     "170"
@@ -17,6 +17,10 @@
     {
       "at": "2026-11-28T10:30:09Z",
       "event": "branch int/g21 made from main abf49852381e"
+    },
+    {
+      "at": "2026-11-28T10:32:52Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "base": "abf49852381e3bef69ba1b5014d31bedb9ff2780"
