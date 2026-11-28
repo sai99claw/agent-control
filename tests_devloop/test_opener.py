@@ -903,6 +903,20 @@ class T127Acceptance(LoopCase):
         self.assertCostKept(t0, t1)
 
 
+class FixGroupRule(unittest.TestCase):
+    """#155: the opener's group rule says where a controller-asked fix ticket goes."""
+    SENTENCE = ('A fix ticket the controller asked for (a request that starts with "Flaky cases in group" '
+                'or "Release red at landing") goes into the earliest open group in the chain whose tickets '
+                'it does not conflict with; open a new group for it only when none fits, since every group '
+                'costs one full regression.')
+
+    def test_rules_file_and_chain_contain_the_sentence(self):
+        import ticket_creator
+        with open(os.path.join(LOOP, "prompts", "creator", "02-rules.md")) as f:
+            self.assertIn(self.SENTENCE, f.read())
+        self.assertIn(self.SENTENCE, ticket_creator.chain())
+
+
 class LastFullSecondsUnit(unittest.TestCase):
     """limits_section / last_full_seconds helpers of ticket_creator."""
 
