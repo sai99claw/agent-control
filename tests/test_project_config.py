@@ -425,6 +425,44 @@ class T5Acceptance(ConfigSandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
 
+class T170Acceptance(ConfigSandbox):
+    """#170 B4-B6: A no longer knows flaky_threshold, flaky_auto_ticket, routing, unit_cmd,
+    regression, regression_auto_ticket; doctor calls them possibly retired, check is silent."""
+
+    GONE = ("flaky_threshold", "flaky_auto_ticket", "routing", "unit_cmd", "regression",
+            "regression_auto_ticket")
+
+    def test_b4_schema_has_no_row_for_the_six_keys(self):
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import project_config
+        keys = [key for key, _, _ in project_config.SCHEMA]
+        self.assertTrue(keys, "precondition: SCHEMA has rows")
+        hits = sorted(key for key in keys for gone in self.GONE
+                      if key == gone or key.startswith(gone + "."))
+        self.assertEqual(hits, [])
+        self.assertEqual(project_config.CURRENT_VERSION, 2)
+
+    def test_b5_doctor_calls_each_key_possibly_retired_once(self):
+        self.edit_conf(flaky_threshold=3, flaky_auto_ticket=False, routing={"implement": "opus"},
+                       unit_cmd="make test", regression={"rerun_cmd": "make test"},
+                       regression_auto_ticket=False)
+        done = self.actl("doctor")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        lines = done.stdout.splitlines()
+        counts = {key: len([line for line in lines
+                            if "key '%s'" % key in line and "possibly retired" in line])
+                  for key in self.GONE}
+        self.assertEqual(counts, {key: 1 for key in self.GONE}, done.stdout)
+
+    def test_b6_check_ignores_wrongly_typed_values_of_the_six_keys(self):
+        self.edit_conf(routing="opus", unit_cmd=5, flaky_threshold="three", flaky_auto_ticket="no",
+                       regression=[], regression_auto_ticket=1)
+        done = self.actl("check")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        for key in self.GONE:
+            self.assertNotIn("'%s'" % key, done.stderr)
+
+
 class T125RepairKeys(ConfigSandbox):
     """#125 A1: `repair: {max_rounds: 3, env_rerun: 1}` is a known, typed key with those defaults;
     a config without it is fine (doctor reports nothing about it)."""

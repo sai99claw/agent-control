@@ -217,6 +217,54 @@ class Select(unittest.TestCase):
         self.assertEqual(dead, [])
 
 
+class T170Acceptance(unittest.TestCase):
+    """#170 B2: every top-level def/class and assigned name of scripts/status.py is used by
+    scripts/testiface.py or scripts/adapter-unittest.py; status.py has no top-level `if`."""
+
+    KEPT_FUNCTIONS = ("normalized_failure_message", "suspect_row", "reports_dir",
+                      "parse_environment_suspects")
+    CALLERS = ("testiface.py", "adapter-unittest.py")
+    NAMED = re.compile(r"(?<![\w.])status\.([A-Za-z_]\w*)")
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        cls.ast = ast
+        with open(os.path.join(ROOT, "scripts", "status.py"), encoding="utf-8") as handle:
+            cls.tree = ast.parse(handle.read())
+        cls.named = set()
+        for name in cls.CALLERS:
+            with open(os.path.join(ROOT, "scripts", name), encoding="utf-8") as handle:
+                cls.named |= set(cls.NAMED.findall(handle.read()))
+        cls.defs = [node for node in cls.tree.body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+
+    def test_b2_every_function_and_class_is_named_by_a_caller(self):
+        defined = {node.name for node in self.defs}
+        missing = [name for name in self.KEPT_FUNCTIONS if name not in defined]
+        self.assertEqual(missing, [], "precondition: B1's four functions are defined")
+        unused = sorted(node.name for node in self.defs if node.name not in self.named)
+        self.assertEqual(unused, [])
+
+    def test_b2_every_assigned_name_is_named_or_read_by_a_kept_function(self):
+        ast = self.ast
+        assigned = set()
+        for node in self.tree.body:
+            targets = (node.targets if isinstance(node, ast.Assign)
+                       else [node.target] if isinstance(node, ast.AnnAssign) else [])
+            assigned |= {t.id for t in targets if isinstance(t, ast.Name)}
+        self.assertTrue(assigned, "precondition: status.py assigns names")
+        kept = [node for node in self.defs if node.name in self.named]
+        read = {inner.id for node in kept for stmt in node.body for inner in ast.walk(stmt)
+                if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)}
+        unused = sorted(name for name in assigned if name not in self.named and name not in read)
+        self.assertEqual(unused, [])
+
+    def test_b2_no_top_level_if(self):
+        ifs = [node.lineno for node in self.tree.body if isinstance(node, self.ast.If)]
+        self.assertEqual(ifs, [])
+
+
 class Fixture(unittest.TestCase):
     """A tmp code root with `tests/<name>.py`; `AC_ROOT` = the same tmp (no config → defaults)."""
 
