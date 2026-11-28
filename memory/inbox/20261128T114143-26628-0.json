@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py takes ids relative to tests_devloop (e.g. test_release.T171Acceptance), not tests_devloop.test_release...; the package-qualified form fails with ImportError.",
+  "source": "#171 r1 verifier",
+  "at": "2026-11-28T11:41:43Z"
+}
