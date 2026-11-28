@@ -854,7 +854,7 @@ class Controller:
             self.start_release(gid, sha, ids, rerun=self.release_fix(dict(g, members=ids), sha, rel_log, rel_text))
             return
         rerun = g.get("release_rerun") if job.get("rerun") else None
-        fix = self.flaky_fix(g, sha)
+        fix = self.flaky_fix(g, sha, landing=ids)   # its own tickets count as open, as at landing before #142
 
         def change(tx):
             grp = tx.data.groups[gid]
@@ -917,18 +917,20 @@ class Controller:
                 line = "no fix ticket opened: " + (problem or "the opener opened no ticket for it")
         return {"fix_tickets": fix_tickets, "fix_open": fix_open, "line": line}
 
-    def flaky_fix(self, g, sha):
+    def flaky_fix(self, g, sha, landing=()):
         """Issue #2: the group's flaky ids (as flaky_line lists them) that no open ticket (any state
         but landed or cancelled) with origin kind 'flaky' carries get one fix ticket from the opener.
         Writes one 'flaky fix' group event and returns the flaky line's fix text, or None when the
-        group has no flaky events (no event, no opener)."""
+        group has no flaky events (no event, no opener). `landing` (the ids the group just landed)
+        still count as open: the release is collected after they are written landed (#142)."""
         gid, seen = g["id"], flaky_entries(g)
         if not seen:
             return None
         snap = self.pool.snapshot()
         carriers = sorted((i for i, t in snap.tickets.items()
                            if (t.get("origin") or {}).get("kind") == "flaky"
-                           and t.get("state") not in ("landed", "cancelled")), key=dagmod._order_key)
+                           and (t.get("state") not in ("landed", "cancelled") or i in landing)),
+                          key=dagmod._order_key)
         already = {}
         for ident in seen:
             for i in carriers:
