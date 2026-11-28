@@ -9,7 +9,16 @@
     "151"
   ],
   "fix_round": 0,
-  "job": null,
+  "job": {
+    "kind": "regression",
+    "stamp": {
+      "pid": 6211,
+      "host": "vm",
+      "boot": "68359d25-5a2b-4e1b-a079-9393c7340584",
+      "started": "2026-11-28T04:19:43Z"
+    },
+    "out": "/home/user/agent-control-devloop/runs/regression/g14/result-1795839583.json"
+  },
   "created": "2026-11-28T00:27:34Z",
   "history": [
     {
@@ -27,6 +36,10 @@
     {
       "at": "2026-11-28T04:19:41Z",
       "event": "main moved to 35855fb65766: merged it into int/g14"
+    },
+    {
+      "at": "2026-11-28T04:19:43Z",
+      "event": "regression started"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
