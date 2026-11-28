@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py ids are relative to the unittest roots in board/config.json (tests, tests_devloop): use test_controller.T167Acceptance, not tests_devloop.test_controller...; the prefixed form fails with an ImportError.",
+  "source": "#167 r1 verifier",
+  "at": "2026-11-28T10:18:23Z"
+}
