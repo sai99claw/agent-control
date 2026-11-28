@@ -1,0 +1,45 @@
+{
+  "kind": "decision",
+  "ref": "147",
+  "text": "#147 is stuck (hard_block): the change touches hard_block: pattern 'os\\\\.kill', pattern 'killpg'\n  line scripts/testiface.py:         os.killpg(pgid, sig)  (pattern os\\.kill, killpg)\n  fingerprint 1a4db375a8bf80669be5ba9aa6f9cf7550d6fdaa70c90a5a4e4cd1e03d4bb951",
+  "at": "2026-11-28T11:53:25Z",
+  "acked": false,
+  "question": "#147's change touches hard_block: approve this exact change, change the ticket, or cancel it?",
+  "options": [
+    {
+      "action": "revise",
+      "note": "",
+      "consequence": "the opener changes #147 per your words so its change avoids hard_block; it goes back to ready at round 0"
+    },
+    {
+      "action": "approve",
+      "note": "",
+      "consequence": "#147 goes back to ready and merges only while its change is exactly the one listed; any other change stops again for your approval"
+    },
+    {
+      "action": "cancel",
+      "note": "",
+      "consequence": "#147 is cancelled; tickets that depend on it keep waiting"
+    },
+    {
+      "action": "retry",
+      "note": "",
+      "consequence": "#147 runs again as written and stops at the same place unless hard_block changed"
+    }
+  ],
+  "recommendation": "approve only when every listed path and line is what the ticket must do; otherwise revise it so its change avoids hard_block",
+  "hard_block": {
+    "paths": [],
+    "lines": [
+      {
+        "file": "scripts/testiface.py",
+        "text": "        os.killpg(pgid, sig)",
+        "patterns": [
+          "os\\.kill",
+          "killpg"
+        ]
+      }
+    ],
+    "fingerprint": "1a4db375a8bf80669be5ba9aa6f9cf7550d6fdaa70c90a5a4e4cd1e03d4bb951"
+  }
+}
