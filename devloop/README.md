@@ -327,7 +327,7 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   retries in the test. The verifier writes its cases into existing test modules of the layer that covers the
   change, never one new file per ticket.
 - `index_path` (default `CODE-MAP.md`): a code index generated from the code and committed onto
-  the integration branch just before main moves. Agents read it before searching.
+  the integration branch just before main moves. Agents read it before searching. Test files (`test_*.py`) are listed by path only and private (`_`) functions are not listed.
 - `required_fields`: extra ticket fields the opener must fill (agent-control requires `vision` and
   `removes`).
 - Cost rows: role, model, effort, round, seconds, tokens (input, output, cache read and write),
