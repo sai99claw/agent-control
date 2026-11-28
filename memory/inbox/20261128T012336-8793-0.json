@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py takes ids relative to the unittest roots (tests, tests_devloop): use test_machine.T145Acceptance, not tests_devloop.test_machine...; the latter fails with an ImportError.",
+  "source": "#145 r1 verifier",
+  "at": "2026-11-28T01:23:36Z"
+}
