@@ -27,7 +27,13 @@
   "created": "2026-11-28T10:19:47Z",
   "request": "Phase one, group 6 of the improvement plan: measure first, and subtraction (D-100, D-102). Source: external audit\nP2-2 and P2-5. One group, two tickets.\n\n6.1 Measure the cost of `Pool.snapshot()` on a pool the size of tabby_pool's (about 550 tickets; build a synthetic\npool of that size in the test). Record the measured time in the ticket's result. Only if it is slow (over 0.5 s on\nthis machine per call) add a cache keyed by the pool repo's local HEAD sha, invalidated by any write through Pool;\notherwise add no cache and leave a short note in devloop/README.md with the measured number.\n\n6.2 Remove dead code from scripts/status.py: keep only the functions still used by `testiface.py` and\n`adapter-unittest.py` (find the real callers with grep), and remove the config keys only that dead code read.\nNothing else changes behavior.\n\nvision: the snapshot path is measured before anyone optimizes it, and status.py holds only code something uses.\nremoves: the unused functions of scripts/status.py and the config keys only they read.\n",
   "feedback": [],
-  "cases": null,
+  "cases": {
+    "branch": "t/170-cases",
+    "run": [
+      "test_adapter_unittest.T170Acceptance",
+      "test_project_config.T170Acceptance"
+    ]
+  },
   "history": [
     {
       "at": "2026-11-28T10:19:47Z",
@@ -47,6 +53,10 @@
       "at": "2026-11-28T10:31:10Z",
       "event": "round start",
       "round": 1
+    },
+    {
+      "at": "2026-11-28T10:32:41Z",
+      "event": "cases ready"
     }
   ],
   "cost": [
