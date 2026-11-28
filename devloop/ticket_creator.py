@@ -15,7 +15,7 @@
                                             # opened ticket (not opener-editable); not an object -> 2
 
 Opening: the prompt chain in devloop/prompts/creator/ (read in file-name order), the reference
-ticket devloop/prompts/ticket.example.json and the current DAG go to the opener agent. Its hand-in is
+ticket devloop/prompts/ticket.example.json and the live part of the DAG go to the opener agent. Its hand-in is
 validated here (fields, DAG references, no cycles) and written to the pool in one push; one retry
 with the validation errors if it is wrong. Anything that touches direction, business logic or
 user experience the request does not settle comes back as a question for the main session.
@@ -374,6 +374,15 @@ def groups_section(snap):
     return "\n".join(lines)
 
 
+def live_dag(snap):
+    """The part of the DAG the opener sees: tickets not landed or cancelled and their direct dependencies."""
+    keep = {k for k in snap.dag
+            if (snap.tickets.get(k) or {}).get("state") not in ("landed", "cancelled")}
+    for k in list(keep):
+        keep.update(d for d in dagmod.deps(snap.dag, k) if d in snap.dag)
+    return {k: snap.dag[k] for k in snap.dag if k in keep}
+
+
 def _open_tickets(cfg, pool, request, via, by, origin=None):
     snap = pool.snapshot()
     summary = [{"id": k, "title": v.get("title"), "state": v.get("state")}
@@ -388,7 +397,7 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
         required_section(cfg),
         limits_section(cfg),
         "## Tickets still open\n\n```json\n%s\n```" % json.dumps(summary, indent=2, ensure_ascii=False),
-        "## Current DAG\n\n```json\n%s\n```" % json.dumps(snap.dag, indent=2, ensure_ascii=False),
+        "## Current DAG\n\n```json\n%s\n```" % json.dumps(live_dag(snap), indent=2, ensure_ascii=False),
         groups_section(snap),
         "## The request\n\n%s" % guarded(request, via),
     ])

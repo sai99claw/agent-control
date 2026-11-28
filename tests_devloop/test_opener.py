@@ -589,6 +589,51 @@ class T12Acceptance(LoopCase):
                 self.full_result("int-g2", {"schema": 1, "command": "full", "seconds": 30}, 3600)
                 self.assertIn("The project's last full run took 30 seconds.", self.opener_prompt())
 
+
+class LiveDagInPrompt(LoopCase):
+    """#153: '## Current DAG' holds the tickets not landed or cancelled and their direct dependencies."""
+
+    POOL = (("1", "landed", []), ("2", "cancelled", []), ("3", "landed", []),
+            ("4", "ready", ["3"]), ("5", "stuck", ["4", "2"]), ("6", "landed", ["1"]))
+
+    opener_prompt = T12Acceptance.opener_prompt
+
+    def dag_block(self, text):
+        part = text.split("## Current DAG", 1)[1].split("## Groups", 1)[0]
+        return json.loads(part.split("```json", 1)[1].split("```", 1)[0])
+
+    def test_prompt_dag_holds_only_the_live_part(self):
+        for ident, state, deps in self.POOL:
+            self.add(ident, deps=deps, state=state)
+        text = self.opener_prompt()
+        shown = self.dag_block(text)
+        self.assertEqual(list(shown), ["2", "3", "4", "5"])
+        full = self.pool.snapshot().dag
+        for k in shown:
+            self.assertEqual(shown[k], full[k])
+        heads = [l for l in text.splitlines() if l.startswith("## ")]
+        i = heads.index("## Current DAG")
+        self.assertEqual(heads[i - 1], "## Tickets still open")
+        self.assertEqual(heads[i + 1], "## Groups")
+
+    def test_dag_key_without_a_ticket_record_is_kept(self):
+        sys.path.insert(0, LOOP)
+        import ticket_creator
+        snap = pool_mod.Snapshot({"dag": {"tickets": {"7": {"depends_on": []}, "8": {"depends_on": []}}},
+                                  "tickets": {"8": {"state": "landed"}}})
+        self.assertEqual(list(ticket_creator.live_dag(snap)), ["7"])
+
+    def test_hand_in_depending_on_a_landed_ticket_is_accepted(self):
+        sys.path.insert(0, LOOP)
+        import ticket_creator
+        for ident, state, deps in self.POOL:
+            self.add(ident, deps=deps, state=state)
+        result = {"tickets": [{"key": "new-1", "title": "t", "objective": "o", "acceptance": ["a"],
+                               "token_estimate": 1000, "needs_verifier": False, "complexity": "simple"}],
+                  "dag": {"new-1": {"depends_on": ["1"], "group": "new-g1"}}}
+        self.assertEqual(ticket_creator.check_new(result, self.pool.snapshot()), [])
+
+
 class T127Acceptance(LoopCase):
     """#127 acceptance 4 (a)-(e) (the test_plan's ReviseDagAcceptance): a revised hand-in's 'dag' part
     changes the ticket's depends_on and group. The creator is fake_agent.py's 'revised_dag' action,
