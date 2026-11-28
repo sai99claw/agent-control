@@ -76,5 +76,13 @@
       "usd": 0.9496566000000003,
       "session_id": "10a9871e-105a-4b84-81ed-e3e731e39e33"
     }
+  ],
+  "tests_changed": [
+    {
+      "test": "tests_devloop.test_controller.FollowMainUnits.test_conflict_on_a_due_pr_group_goes_to_the_fixer",
+      "ticket": "168",
+      "acceptance": "C1 (start_fixer spawns auto_fixer first, then makes one pool commit, through _start_job's post-spawn write) together with C5 (when the implementation stops calling _start_job with four arguments, replace the 4-argument _start_job stub by a patch of ticket_controller.osx.spawn and keep the assertions)",
+      "round": 1
+    }
   ]
 }
