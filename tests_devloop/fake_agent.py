@@ -263,6 +263,9 @@ elif role == "creator":
               "tickets": [{"key": "new-1", "title": "fix", "objective": "o", "acceptance": ["a"],
                            "needs_verifier": True, "complexity": "simple", "token_estimate": 200000}],
               "dag": {"new-1": {"depends_on": [], "group": "new-g1"}}})
+    elif action == "revised_estimate":   # #157: a revision of no brief field (does not stop the round)
+        hand({"kind": "revised", "ticket": {"token_estimate": 123}, "cases_wrong": False,
+              "note": "estimate changed"})
     elif action == "bad":
         hand({"kind": "tickets", "tickets": [{"key": "new-1"}], "dag": {}})
     else:

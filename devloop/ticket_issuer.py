@@ -3,8 +3,9 @@
 
 Started only by ticket_controller. Per round (at most devloop.max_rounds rounds that were not
 free - a round that ended on a merge conflict with the group (at step 6, or replaying the
-ticket's own commits at round start in step 0), on a revision that threw out the verifier's cases, or on a blocked worker whose failing ids passed when devloop ran them is
-free - and at most 2 x max_rounds rounds in all; whole run at most
+ticket's own commits at round start in step 0), on a revision that changed the round's work (the
+ticket's brief or its cases, made while the round ran), or on a blocked worker whose failing ids
+passed when devloop ran them is free - and at most 2 x max_rounds rounds in all; whole run at most
 devloop.issuer_timeout_seconds (time waiting for a machine slot or for a usage limit to reset
 not counted)):
 
@@ -12,7 +13,10 @@ not counted)):
      commits (uncommitted tracked changes committed first; branch_base and 'rebased', D-098);
      a replay that conflicts ends the round before any agent: the branch restarts at its start
      point, its old head kept under refs/devloop/before-rebase/ ('rebase conflict')
-  1. worker (+ verifier while the ticket has no cases yet) work in their own worktrees
+  1. worker (+ verifier while the ticket has no cases yet) work in their own worktrees; while
+     the issuer waits for them (and for the reviewer in step 4) it reads the ticket every
+     devloop.poll_seconds, and a revision that changes the round's work stops the round's agents
+     and ends the round, free; the same check runs after the hand-ins and right before step 6
   2. the verifier's branch is merged into the ticket branch
   3. hard_block check on what the ticket changes
   4. reviewer, when the ticket asks for one
@@ -80,6 +84,23 @@ class Stuck(Exception):
 THROWN_OUT = ("the ticket was revised during this round and the revision threw out the "
               "verifier's cases (cases_wrong); the verifier writes them again next round and "
               "the worker works on the revised ticket")
+
+
+REVISED_MID_ROUND = ("the ticket was revised during this round; the round was stopped and does "
+                     "not count, and the next round works on the revised ticket")
+
+
+def brief_revised(t):
+    """True when a 'revised' event after the last 'round start' changed the round's work: its
+    'fields' name a brief field (what _brief gives agents, id aside) or it has cases_wrong."""
+    brief = set(BRIEF_KEYS) - {"id"}
+    changed = False
+    for h in t.get("history") or []:
+        if h.get("event") == "round start":
+            changed = False
+        elif h.get("event") == "revised" and (h.get("cases_wrong") or brief & set(h.get("fields") or [])):
+            changed = True
+    return changed
 
 
 def cases_thrown_out(t):
@@ -255,8 +276,10 @@ class Issuer:
         hands = []
         for p in [work, ver]:
             if p:
-                hands.append(p.finish())
+                hands.append(p.finish(self.revision_seen, self.cfg.poll_seconds))
                 costs.append(hands[-1].cost)
+                if hands[-1].stopped:
+                    return self.revised_mid_round([work, ver], costs), costs
         self.pending = []
         for h in hands:
             memory.collect(self.pool, h, "#%s r%d %s" % (self.id, r, h.role))
@@ -274,12 +297,11 @@ class Issuer:
             blocked = self.blocked_check(work, text, whand.result.get("failing"))
         else:
             blocked = None
-        if cases_thrown_out(self.ticket()):
-            # This round's verifier (if any) wrote against the old ticket: do not red-check or
-            # save its cases; the next round writes them again and restarts the worker.
-            self.save(lambda x: x.__setitem__("cases", None), "cases thrown out")
-            self._free = "revision"
-            return THROWN_OUT, costs
+        if brief_revised(self.ticket()):
+            # This round's agents worked on the old ticket: do not red-check or save the
+            # verifier's cases; the next round restarts the worker (and the verifier when the
+            # ticket has no cases).
+            return self.revised_mid_round([], costs), costs
 
         problems = []
         if blocked:
@@ -325,9 +347,12 @@ class Issuer:
         self.hard_block(g)
 
         if complexity(t) == "complex":
-            rh = self.start("reviewer", "reviewer.md", t, r, self.wt).finish()
+            rh = self.start("reviewer", "reviewer.md", t, r, self.wt).finish(
+                self.revision_seen, self.cfg.poll_seconds)
             costs.append(rh.cost)
             self.pending = []
+            if rh.stopped:
+                return self.revised_mid_round([], costs), costs
             memory.collect(self.pool, rh, "#%s r%d reviewer" % (self.id, r))
             if rh.problem():
                 return rh.problem(), costs
@@ -337,7 +362,44 @@ class Issuer:
         failed = self.run_cases(t)
         if failed:
             return failed, costs
-        return self.integrate(g, t), costs
+        return self.merge_unless_revised(g, t, costs), costs
+
+    def merge_unless_revised(self, g, t, costs):
+        """Right before the merge into the target: a work-changing revision ends the round
+        (its feedback), else integrate()."""
+        if brief_revised(self.ticket()):
+            return self.revised_mid_round([], costs)
+        return self.integrate(g, t)
+
+    def revision_seen(self):
+        """The watch finish() calls between slices: the ticket file in the local pool checkout
+        has a work-changing revision this round (a snapshot syncs, too heavy every poll). An
+        unreadable file counts as no revision yet."""
+        try:
+            t = osx.read_json(os.path.join(self.pool.path, "tickets", "%s.json" % self.id), None)
+        except osx.OSFailure:
+            return False
+        return isinstance(t, dict) and brief_revised(t)
+
+    def revised_mid_round(self, pendings, costs):
+        """End the round on a work-changing revision: every agent of `pendings` not collected yet
+        is collected when it already exited (its hand-in unused) and stopped when it still runs;
+        their rows go into costs. The round is free ('revision'); returns its feedback text."""
+        for p in pendings:
+            if p is None or p.hand is not None:
+                continue
+            if p.proc is not None and p.proc.poll() is not None:
+                costs.append(p.finish().cost)
+            else:
+                row = p.stop()
+                if row is not None:
+                    costs.append(row)
+        self.pending = []
+        self._free = "revision"
+        if cases_thrown_out(self.ticket()):
+            self.save(lambda x: x.__setitem__("cases", None), "cases thrown out")
+            return THROWN_OUT
+        return REVISED_MID_ROUND
 
     def rebase_round(self, t, r):
         """Before a round's agents (D-098): t/<N>-cases and t/<N> are put on the target's current
@@ -812,10 +874,12 @@ def case_mark(ident):
     return "T%sAcceptance" % ident
 
 
+BRIEF_KEYS = ("id", "title", "objective", "acceptance", "outline", "test_plan", "needs_verifier",
+              "complexity", "effort", "notes")
+
+
 def _brief(t):
-    keep = ("id", "title", "objective", "acceptance", "outline", "test_plan", "needs_verifier",
-            "complexity", "effort", "notes")
-    return {k: t[k] for k in keep if k in t}
+    return {k: t[k] for k in BRIEF_KEYS if k in t}
 
 
 def main(argv=None):

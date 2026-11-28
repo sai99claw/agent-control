@@ -1016,6 +1016,106 @@ class FreeRounds(LoopCase):
                          "conflict, 1 revision); last feedback:\nround 4: last")
 
 
+class RevisedMidRound(LoopCase):
+    """#157: a revision of the brief (or with cases_wrong) made while a round runs ends that round."""
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+
+    def test_brief_revised_needs_a_brief_field_or_cases_wrong_after_the_round_start(self):
+        import ticket_issuer
+        start = {"event": "round start"}
+        rev = lambda fields, wrong=False: {"event": "revised", "fields": fields, "cases_wrong": wrong}
+        self.assertTrue(ticket_issuer.brief_revised({"history": [start, rev(["acceptance"])]}))
+        self.assertTrue(ticket_issuer.brief_revised({"history": [start, rev(["effort", "vision"])]}))
+        self.assertTrue(ticket_issuer.brief_revised({"history": [start, rev([], True)]}))
+        for fields in (["token_estimate"], ["token_basis", "vision", "removes"], [], ["id"]):
+            self.assertFalse(ticket_issuer.brief_revised({"history": [start, rev(fields)]}), fields)
+        self.assertFalse(ticket_issuer.brief_revised({"history": [rev(["acceptance"], True), start]}))
+        self.assertFalse(ticket_issuer.brief_revised({}))
+
+    def pending(self, script):
+        from core import agents
+        run = os.path.join(self.tmp, "run")
+        os.makedirs(run)
+        p = agents.Pending("worker", [["sh", "-c", script]], "go", self.proj, dict(os.environ), run,
+                           os.path.join(run, "result.json"), 30, 1)
+        p.launch()
+        return p
+
+    def test_a_watch_that_turns_true_stops_the_run_between_slices(self):
+        p = self.pending("cat >/dev/null; sleep 30")
+        calls = []
+        began = time.time()
+        h = p.finish(lambda: calls.append(1) or len(calls) >= 3, 0.2)
+        self.assertLess(time.time() - began, 10)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(h.stopped)
+        self.assertEqual((h.cost["outcome"], h.cost["role"], h.cost["round"]), ("interrupted", "worker", 1))
+        self.assertIn("revised", h.problem())
+        self.assertIsNotNone(p.proc.poll())
+
+    def test_a_watch_that_stays_false_collects_the_hand_in_as_usual(self):
+        p = self.pending('cat >/dev/null; sleep 0.7; echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"')
+        calls = []
+        h = p.finish(lambda: calls.append(1) and False, 0.2)
+        self.assertFalse(h.stopped)
+        self.assertEqual((h.kind, h.cost["outcome"], h.problem()), ("done", "done", None))
+        self.assertGreaterEqual(len(calls), 2)
+
+    def test_the_runs_own_timeout_still_counts_with_a_watch(self):
+        p = self.pending("cat >/dev/null; sleep 30")
+        p.timeout = 1
+        h = p.finish(lambda: False, 0.2)
+        self.assertTrue(h.timed_out)
+        self.assertFalse(h.stopped)
+        self.assertEqual(h.cost["outcome"], "timeout")
+
+    def test_the_check_right_before_the_merge_ends_the_round_without_merging(self):
+        import ticket_issuer
+        issuer = ticket_issuer.Issuer.__new__(ticket_issuer.Issuer)
+        issuer.pending = []
+        revised = {"history": [{"event": "round start"}, {"event": "revised", "fields": ["objective"],
+                                                          "cases_wrong": False}]}
+        issuer.ticket = lambda: revised
+        issuer.integrate = mock.Mock(return_value=None)
+        self.assertEqual(issuer.merge_unless_revised(None, {}, []), ticket_issuer.REVISED_MID_ROUND)
+        self.assertEqual(issuer._free, "revision")
+        issuer.integrate.assert_not_called()
+        issuer.ticket = lambda: {"history": [{"event": "round start"}]}
+        self.assertIsNone(issuer.merge_unless_revised(None, {}, []))
+        issuer.integrate.assert_called_once()
+
+    def test_a_revision_of_no_brief_field_neither_stops_nor_ends_the_round(self):
+        self.add(1)
+        self.plan(worker={"1": ["slow"]}, creator={"1": ["revised_estimate"]})
+        prompt = os.path.join(self.tmp, "wt", "runs", "1", "r1-worker", "prompt.md")
+        ctl = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py")], cwd=self.proj,
+                               env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 60
+            while not os.path.exists(prompt) and time.time() < deadline:
+                time.sleep(0.1)
+            self.assertTrue(os.path.exists(prompt))
+            rev = self.run_py("ticket_creator.py", "--revise", "1", "--reason", "estimate")
+            self.assertEqual(rev.returncode, 0, rev.stdout + rev.stderr)
+            out, err = ctl.communicate(timeout=240)
+        finally:
+            if ctl.poll() is None:
+                ctl.terminate()
+                ctl.communicate()
+        self.assertEqual(ctl.returncode, 0, out + err)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["token_estimate"]), ("landed", 123))
+        events = [h["event"] for h in t["history"]]
+        start = max(i for i, h in enumerate(t["history"]) if h["event"] == "round start" and h.get("round") == 1)
+        self.assertLess(start, events.index("revised"))
+        self.assertLess(events.index("revised"), events.index("merged"))
+        self.assertNotIn("feedback", events)
+
+
 class NotOwnedWrites(LoopCase):
     """Issuer.save() and integrate() write nothing and move nothing once the ticket is no longer
     running under the issuer's claim stamp; _go() turns that into one stderr line and exit 2."""

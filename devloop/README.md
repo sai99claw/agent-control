@@ -14,7 +14,8 @@ ticket_issuer.py
   each round starts on int/<group>'s current head with only the ticket's own commits (D-098)
   failing step = feedback for the next round (max 3 rounds, 3 hours; a round that ended on a
   merge conflict with the group (also a conflict replaying the ticket's own commits at round
-  start), on a revision that threw out the cases, or on a blocked worker
+  start), on a revision that changed the round's work (the brief or the cases, made while the
+  round ran: the round's agents are stopped and the round ends), or on a blocked worker
   whose failing ids passed when devloop ran them (agent environment) does not count, at most
   2 x max_rounds rounds in all)
   worker thinks the ticket is wrong -> it runs ticket_creator.py --revise itself

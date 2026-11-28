@@ -28,6 +28,10 @@ prints no usage; its tokens are then read from the CLI's transcript (D-076 #124)
 (`exec --json` turn.completed events) is summed, and its dollars come from devloop.prices[model]
 or stay unknown; a claude row keeps the CLI's own total_cost_usd. A run its
 caller stopped before collecting it (Pending.stop) gets the same row with outcome "interrupted".
+
+finish(watch, interval) waits for the running command in slices of `interval` seconds and calls
+watch() between them; when it returns true the run is stopped (Pending.stop) and the Hand has
+`stopped` set, the "interrupted" row as its cost and a problem() saying why.
 """
 
 import calendar
@@ -37,6 +41,7 @@ import json
 import os
 import re
 import string
+import subprocess
 import sys
 import time
 
@@ -61,9 +66,10 @@ NO_SLOT_ROLES = ("creator", "consolidator", "consolidator_peer")
 class Hand:
     """What came back from one agent run."""
 
-    def __init__(self, role, result, rc, timed_out, log, cost, why=None, cooling=None):
+    def __init__(self, role, result, rc, timed_out, log, cost, why=None, cooling=None, stopped=False):
         self.role, self.result, self.rc, self.timed_out = role, result, rc, timed_out
         self.log, self.cost, self.why = log, cost, why
+        self.stopped = stopped   # finish()'s watch stopped the run
         # nothing ran, every command was parked: {"until": epoch, "text", "command": key,
         # "state": "quota" | "needs_login"}; a login park has the program as command and the
         # record's text
@@ -338,14 +344,17 @@ class Pending:
             return None
         return self._cost(None, None, False, False, outcome="interrupted")
 
-    def finish(self):
+    def finish(self, watch=None, interval=None):
+        """Collect the run. With `watch`, the wait is cut into `interval`-second slices and watch()
+        is called between them; when it returns true the run is stopped and its Hand has
+        `stopped` set (cost: stop()'s "interrupted" row)."""
         try:
-            self.hand = self._finish()
+            self.hand = self._finish(watch, interval)
         finally:
             self._unlive()
         return self.hand
 
-    def _finish(self):
+    def _finish(self, watch=None, interval=None):
         while True:
             if self.proc is None:        # nothing started: every command left is parked
                 self._release()
@@ -362,7 +371,13 @@ class Pending:
                 continue
             # only the time under a slot counts
             left = max(1.0, self.timeout - (time.time() - self.started - (self.waited - self.waited_before)))
-            rc, timed_out = osx.wait(self.proc, left)
+            if watch is None:
+                rc, timed_out = osx.wait(self.proc, left)
+            else:
+                rc, timed_out = self._wait_watched(left, watch, interval)
+                if rc is None:
+                    return Hand(self.role, None, None, False, self.log, self.stop(), stopped=True,
+                                why="%s was stopped: the ticket was revised while it ran" % self.role)
             try:
                 result = osx.read_json(self.result_path, None)
             except osx.OSFailure:
@@ -391,6 +406,22 @@ class Pending:
             self._release()
             cost = self._cost(result, rc, timed_out, out_of_quota, outcome="needs login" if login else None)
             return Hand(self.role, result, rc, timed_out, self.log, cost)
+
+    def _wait_watched(self, left, watch, interval):
+        """osx.wait in slices with watch() between them: (rc, timed_out), or (None, False) when
+        watch() returned true while the command still ran. The run's own timeout counts as in
+        osx.wait (the last slice ends it)."""
+        end = time.time() + left
+        while True:
+            rest = end - time.time()
+            if rest <= interval:
+                return osx.wait(self.proc, max(rest, 0.01))
+            try:
+                return self.proc.wait(timeout=interval), False
+            except subprocess.TimeoutExpired:
+                pass
+            if watch():
+                return None, False
 
     def _park_of(self, parked, now):
         """(the Hand's cooling dict, the argv it names) for [(argv, record)] that are all parked:
