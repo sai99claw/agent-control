@@ -83,6 +83,11 @@
       "at": "2026-11-28T03:20:08Z",
       "event": "dispatched",
       "target": "int/g14"
+    },
+    {
+      "at": "2026-11-28T03:20:10Z",
+      "event": "issuer started",
+      "target": "int/g14"
     }
   ],
   "cost": [
@@ -163,7 +168,12 @@
   ],
   "group": "g14",
   "target": "int/g14",
-  "run": null,
+  "run": {
+    "pid": 1327,
+    "host": "vm",
+    "boot": "68359d25-5a2b-4e1b-a079-9393c7340584",
+    "started": "2026-11-28T03:20:10Z"
+  },
   "claimed_at": "2026-11-28T03:20:08Z",
   "branch_base": {
     "t/150-cases": "c69cd4207661862591ba24edef33910fe1f7cdbf",
