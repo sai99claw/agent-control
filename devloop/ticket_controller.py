@@ -32,6 +32,12 @@ Each tick, in this order:
                     made from main); up to devloop.max_parallel at a time
   4. memory       - one memory_keeper at a time for a memory file whose lessons are due
 
+While available memory (core/host.memory_available) is below devloop.min_free_memory_gib (#145),
+no new issuer, regression, fixer or memory_keeper starts: a fix round that comes due waits with
+fix_retry, running jobs go on, landing and releases are not held. The live record
+runs/live/hold-memory.json says so while it lasts, and a run without --forever whose work only
+waits for memory ends with the idle page's first line saying why.
+
 Everything it knows is in the pool and in git, so a restart picks up where it was; issuers,
 regressions, fixers and release jobs run detached and are adopted by the next controller.
 
@@ -53,13 +59,15 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import agents, chain, codemap, host, memory, osx, pages, release, ticketlock  # noqa: E402
+from core import agents, chain, codemap, host, inflight, memory, osx, pages, release, ticketlock  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import close_pages, event, leave_group, new_group  # noqa: E402
 
 LOOP = os.path.dirname(os.path.abspath(__file__))
 LOST = "lost"   # merge_no_reverify: the branch moved under the compare-and-swap
+HOLD = "hold-memory"   # #145: the live record kept while memory is short
+GIB = 2 ** 30
 
 
 def under_paths(path, entries):
@@ -177,6 +185,39 @@ class Controller:
         self.release_cmd = cfg.require_release()
         self.stopping = False
         self.forever = False        # run(forever) sets it: an env result pauses the group instead of Stop(3)
+        self.hold_since = None      # #145: when the current memory hold began
+
+    def memory_short(self):
+        """#145: the available bytes when they are below devloop.min_free_memory_gib, else None.
+        An unknown reading or a null setting is never short. Reads the machine each call."""
+        gib = self.cfg.values.get("min_free_memory_gib")
+        if gib is None:
+            return None
+        avail = host.memory_available()
+        if avail is None or avail >= gib * GIB:
+            return None
+        return avail
+
+    def memory_line(self, avail):
+        return ("memory short: %.1f GiB available, below devloop.min_free_memory_gib %g: no new agent "
+                "or regression is started until more is free"
+                % (avail / GIB, self.cfg.values.get("min_free_memory_gib")))
+
+    def keep_hold_record(self):
+        """Write runs/live/hold-memory.json while memory is short (its 'since' kept for the whole
+        hold); remove it once it is not. Returns the available bytes when short, else None."""
+        avail = self.memory_short()
+        if avail is None:
+            self.hold_since = None
+            inflight.drop(self.cfg, HOLD)
+            return None
+        if self.hold_since is None:
+            self.hold_since = osx.now()
+        gib = self.cfg.values.get("min_free_memory_gib")
+        inflight.put(self.cfg, HOLD, {"kind": "hold", "reason": "memory", "stamp": osx.stamp(),
+                                      "available": avail, "threshold": int(gib * GIB), "setting": gib,
+                                      "since": self.hold_since, "result": None})
+        return avail
 
     # ------------------------------------------------------------ loop
 
@@ -199,6 +240,9 @@ class Controller:
         lines = idle_lines(self.pool.snapshot())
         if not lines:
             return None
+        avail = self.memory_short()
+        if avail is not None:
+            lines = [self.memory_line(avail)] + lines
         text = "\n".join(["nothing more can move; left undone:"] + lines)
         print(text, file=sys.stderr)
         return self.pool.report("idle", "controller", text, **pages.ask(
@@ -207,6 +251,7 @@ class Controller:
             "items that wait for you have pages of their own"))
 
     def tick(self):
+        self.keep_hold_record()
         snap = self.pool.snapshot()
         self.finish_jobs(snap)
         snap = self.pool.snapshot()
@@ -216,10 +261,11 @@ class Controller:
         snap = self.pool.snapshot()
         keeping = self.consolidate(snap)
         running = [t for t in snap.tickets.values() if t.get("state") == "running"]
+        short = self.memory_short() is not None   # work that only waits for memory is not busy
         active = [g for g in snap.groups.values()
                   if g.get("state") == "verified" or g.get("job")
-                  or (g.get("state") == "open" and self.open_has_work(snap, g))
-                  or (g.get("state") in ("pr", "fixing") and chain.waits_for(snap, g["id"]) is None)]
+                  or (not short and g.get("state") == "open" and self.open_has_work(snap, g))
+                  or (not short and g.get("state") in ("pr", "fixing") and chain.waits_for(snap, g["id"]) is None)]
         return bool(started or keeping or running or active or self.children)
 
     # ------------------------------------------------------------ 1. jobs
@@ -298,6 +344,8 @@ class Controller:
                     continue                   # an earlier group still holds the chain
                 if g.get("paused") and self.forever:
                     continue                   # waits for `tickets.py rerun gN`
+                if self.memory_short() is not None:
+                    continue                   # #145: no regression or fix round while memory is short
                 if behind:
                     self.fix_main_moved(g)     # main conflicts with the branch: the fixer merges it
                     continue
@@ -473,6 +521,11 @@ class Controller:
         return out
 
     def start_fixer(self, gid, report_path, rnd):
+        avail = self.memory_short()
+        if avail is not None:                   # #145: the fix_retry path of advance_groups starts it later
+            self.set_group(gid, "pr", "fix round %d waits: memory short (%.1f GiB available)" % (rnd, avail / GIB),
+                           fix_retry=True, fix_report=report_path, fix_round=rnd - 1)
+            return
         argv = ["python3", os.path.join(LOOP, "auto_fixer.py"), "--group", gid, "--report", report_path]
         self.set_group(gid, "fixing", "fix round %d" % rnd, drop=("fix_retry", "paused"),
                        fix_round=rnd, fix_report=report_path)
@@ -1042,7 +1095,7 @@ class Controller:
             self.children.pop("keeper", None)
             self._keeper_job(None)
         due = memory.due(snap)
-        if not due:
+        if not due or self.memory_short() is not None:
             return False
         layer, name = due[0]
         argv = ["python3", os.path.join(LOOP, "memory_keeper.py"), "--layer", layer, "--name", name]
@@ -1079,6 +1132,8 @@ class Controller:
                 continue
             if ticketlock.held(self.cfg, ident):
                 continue                       # its last issuer has not exited yet: a later tick starts it
+            if self.memory_short() is not None:
+                break                          # #145: no new issuer while memory is short
             self.make_branch(g)
             self.start_issuer(ident, g["id"])
             snap = self.pool.snapshot()
@@ -1247,6 +1302,7 @@ def main(argv=None):
             pass
         return 2
     finally:
+        inflight.drop(cfg, HOLD)
         sampler.stop()
         lock.release()
 

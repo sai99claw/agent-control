@@ -603,6 +603,128 @@ class TestHostSampler(LoopCase):
             self.assertIn(words, flat)
 
 
+class TestMemoryHold(LoopCase):
+    """#145, implementer's own: the memory_short reading, the idle line's format, the setting's
+    validation, the hold record and that a running issuer is left alone."""
+
+    GIB = 2 ** 30
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+
+    def ctl(self, **devloop):
+        import ticket_controller
+        from core.config import Config, pool_for
+        self.config(**devloop)
+        cfg = Config(self.proj)
+        return ticket_controller.Controller(cfg, pool_for(cfg))
+
+    def reading(self, value):
+        from core import host
+        return mock.patch.object(host, "memory_available", return_value=value)
+
+    def test_unknown_reading_is_never_short(self):
+        ctl = self.ctl(min_free_memory_gib=1)
+        with self.reading(None):
+            self.assertIsNone(ctl.memory_short())
+
+    def test_null_setting_is_never_short_and_does_not_read(self):
+        ctl = self.ctl(min_free_memory_gib=None)
+        with self.reading(0) as read:
+            self.assertIsNone(ctl.memory_short())
+        read.assert_not_called()
+
+    def test_float_setting_and_zero_bytes(self):
+        ctl = self.ctl(min_free_memory_gib=1.5)
+        with self.reading(self.GIB):
+            self.assertEqual(ctl.memory_short(), self.GIB)
+        with self.reading(int(1.5 * self.GIB)):
+            self.assertIsNone(ctl.memory_short(), "exactly the setting is not short")
+        with self.reading(0):
+            self.assertEqual(ctl.memory_short(), 0)
+
+    def test_idle_line_formats_available_and_setting(self):
+        self.assertEqual(self.ctl(min_free_memory_gib=1.5).memory_line(self.GIB // 2),
+                         "memory short: 0.5 GiB available, below devloop.min_free_memory_gib 1.5: "
+                         "no new agent or regression is started until more is free")
+        self.assertIn("1.0 GiB available, below devloop.min_free_memory_gib 2:",
+                      self.ctl(min_free_memory_gib=2).memory_line(self.GIB + 1))
+
+    def test_setting_validation_and_default(self):
+        from core import osx
+        from core.config import Config
+        for bad in (0, -1, True, "1", []):
+            self.config(min_free_memory_gib=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                Config(self.proj)
+            self.assertIn("devloop.min_free_memory_gib", str(ctx.exception))
+        for good in (None, 0.25, 3):
+            self.config(min_free_memory_gib=good)
+            self.assertEqual(Config(self.proj).values["min_free_memory_gib"], good)
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["devloop"].pop("min_free_memory_gib")
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        self.assertEqual(Config(self.proj).values["min_free_memory_gib"], 1)
+
+    def test_hold_record_keeps_since_and_goes_when_memory_is_free(self):
+        from core import inflight, osx
+        ctl = self.ctl(min_free_memory_gib=1)
+        path = os.path.join(self.tmp, "wt", "runs", "live", "hold-memory.json")
+        with self.reading(self.GIB // 2):
+            ctl.keep_hold_record()
+            first = osx.read_json(path)
+            ctl.keep_hold_record()
+            second = osx.read_json(path)
+        self.assertEqual(first["since"], second["since"])
+        self.assertEqual((second["kind"], second["reason"], second["available"], second["threshold"],
+                          second["setting"], second["result"]),
+                         ("hold", "memory", self.GIB // 2, self.GIB, 1, None))
+        self.assertEqual(second["stamp"]["pid"], os.getpid())
+        self.assertEqual(inflight.status(second), "running")
+        with self.reading(None):
+            ctl.keep_hold_record()
+        self.assertFalse(os.path.exists(path))
+        self.assertIsNone(ctl.hold_since)
+
+    def test_fix_round_due_while_short_waits_as_fix_retry(self):
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "fixing", "branch": "int/g1",
+                                                  "members": [], "fix_round": 2, "history": []}),
+                         "test: g1")
+        ctl = self.ctl(min_free_memory_gib=1)
+        with self.reading(self.GIB // 2):
+            ctl.start_fixer("g1", "/r.json", 3)
+        g = self.snap().groups["g1"]
+        self.assertEqual(ctl.children, {})
+        self.assertEqual((g["state"], g["fix_retry"], g["fix_round"], g["fix_report"], g.get("job")),
+                         ("pr", True, 2, "/r.json", None))
+        self.assertEqual(g["history"][-1]["event"], "fix round 3 waits: memory short (0.5 GiB available)")
+
+    def test_running_issuer_is_not_stopped_and_counts_as_busy(self):
+        from core import osx
+        self.add(1)
+        proc = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(proc.wait)
+        self.addCleanup(osx.kill_tree, proc.pid)
+
+        def change(tx):
+            t = tx.ticket("1")
+            t["state"], t["run"], t["claimed_at"] = "running", None, osx.now()
+            tx.put_ticket(t)
+        self.pool.update(change, "test: #1 running")
+        ctl = self.ctl(min_free_memory_gib=1)
+        ctl.children["issuer:1"] = proc
+        with self.reading(self.GIB // 2):
+            self.assertTrue(ctl.tick())
+        self.assertIsNone(proc.poll())
+        self.assertIs(ctl.children.get("issuer:1"), proc)
+        self.assertEqual(self.snap().ticket("1")["state"], "running")
+
+
 class T44Acceptance(LoopCase):
     """Ticket #44: while it runs, the controller samples the machine into
     <worktrees>/runs/host/<hostname>.jsonl."""

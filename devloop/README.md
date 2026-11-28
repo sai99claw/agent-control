@@ -392,6 +392,10 @@ it (`core/inflight.py`). Every record has `kind` and `stamp` (devloop's liveness
 - `issuer-<id>.json` (`ticket_issuer.py`, kind `issuer`): `ticket`, `target`, `round` (rewritten at every
   round start). Written right after the claim; removed when the issuer exits (merged, stuck or
   stopped by SIGTERM).
+- `hold-memory.json` (`ticket_controller.py`, kind `hold`, #145): `reason` (`memory`), `available` and
+  `threshold` (bytes), `setting` (`devloop.min_free_memory_gib` as configured), `since` (when this hold
+  began, kept while it lasts), `result` (null). The stamp is the controller process. Written every tick
+  while memory is short; removed on the first tick it is not, and when the controller exits.
 - `agent-<16 hex digits of sha1 of the run dir>.json` (every `agents.start`, kind `agent`): `state`
   (`slot` while waiting for a machine slot and `quota` while waiting for a quota reset, both with the
   starter's pid in the stamp; `running` with the command's pid), `parent` (the starter's pid), `role`
@@ -439,6 +443,20 @@ whose lock is refused is in use. Pruning keeps 7 days: when the file's first lin
 old (or unreadable) the file is rewritten with only the lines from the last 7 days before the new
 line goes in, so it is rewritten at most about once a day. A failed sample prints one line to the
 controller's stderr and sampling carries on; the thread stops with the controller.
+
+Memory hold (#145): `devloop.min_free_memory_gib` (default 1; null = off; anything else must be a
+number > 0, int or float, not a bool) sets how much available memory the controller wants before it
+starts anything new. The reading is `core/host.memory_available()`, the same number the samples record
+as `mem_available`; memory is short when that reading is below the setting x 2^30 bytes, and an
+unknown reading is never short. While memory is short the controller starts no issuer (a ready
+ticket stays ready), no regression, no fix round and no memory_keeper; a fix round that comes due
+waits as `fix_retry` with event `fix round <n> waits: memory short (<x.x> GiB available)` and starts at
+the first tick memory is free. Running issuers (and their agents), regressions, fixers, keepers and
+release jobs go on; landing, the release and the controller's own fix-ticket openers are not held.
+The live record `hold-memory.json` (see Live records) says so while it lasts. A run without
+`--forever` whose remaining work only waits for memory ends (exit 0) with the idle page's first line
+after the heading, also on stderr: `memory short: <x.x> GiB available, below
+devloop.min_free_memory_gib <setting>: no new agent or regression is started until more is free`.
 
 ## Dashboard
 

@@ -76,7 +76,7 @@ class LoopCase(GitIsolatedCase):
         self.released = os.path.join(self.tmp, "released.txt")
         loop = {"pool": self.pool_path, "worktrees": os.path.join(self.tmp, "wt"), "remote": None,
                 "max_parallel": 2, "poll_seconds": 0.2, "issuer_timeout_seconds": 120,
-                "agent_timeout_seconds": 60, "pool_remote": None,
+                "agent_timeout_seconds": 60, "pool_remote": None, "min_free_memory_gib": None,
                 "release": self.release or "echo $DEVLOOP_GROUP $DEVLOOP_TICKETS >> %s" % self.released,
                 "agents": {r: AGENT for r in ROLES}}
         loop.update(self.loop_extra)
