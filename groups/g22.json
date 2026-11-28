@@ -1,7 +1,7 @@
 {
   "id": "g22",
   "branch": "int/g22",
-  "state": "pr",
+  "state": "verified",
   "members": [
     "171"
   ],
@@ -28,8 +28,13 @@
     {
       "at": "2026-11-28T11:50:34Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-28T11:50:36Z",
+      "event": "regression green"
     }
   ],
   "base": "f6067cdb06def20aa96ba01f8f7949058c974e56",
-  "last_regression": "green"
+  "last_regression": "green",
+  "verified_sha": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501"
 }
