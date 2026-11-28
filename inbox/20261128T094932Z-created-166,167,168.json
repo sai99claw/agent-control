@@ -3,5 +3,7 @@
   "ref": "166,167,168",
   "text": "opened #166 Acceptance cases count only by their exact result, and a worker's change to them is sent back; #167 The controller lock is a kernel flock on a file that is never deleted; #168 A fix round's start writes the group once, after auto_fixer is spawned with --round",
   "at": "2026-11-28T09:49:33Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-28T11:51:30Z"
 }
