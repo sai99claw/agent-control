@@ -119,6 +119,23 @@ def brief_revised(t):
     return changed
 
 
+APPROVAL_ENDS = ("hard_block approved", "round start", "revised", "set ready by main")
+
+
+def approval_pending(t):
+    """True when `t` carries an approval and, among the events that start or end it ('hard_block
+    approved', 'round start', 'revised', 'set ready by main', 'user decision...'), the newest is
+    'hard_block approved': the first round after the approval has not started yet."""
+    if not isinstance(t.get("approval"), dict):
+        return False
+    last = None
+    for h in t.get("history") or []:
+        what = h.get("event") or ""
+        if what in APPROVAL_ENDS or what.startswith("user decision"):
+            last = what
+    return last == "hard_block approved"
+
+
 def cases_thrown_out(t):
     """True when a 'revised' event with cases_wrong comes after the last 'round start'."""
     thrown = False
@@ -217,6 +234,7 @@ class Issuer:
 
     def go(self):
         t = self.claim()
+        self.worker_ok = approval_pending(t)   # the approved change merges as it is: no worker this round
         self.live(t)
         if not self.repo.sha(self.target):
             raise Stuck("target", "integration branch %s does not exist" % self.target)
@@ -378,7 +396,7 @@ class Issuer:
                 return ("merging the verifier's branch %s into %s failed (%s); merge it "
                         "yourself and resolve" % (cases["branch"], self.branch, why)), costs
 
-        self.hard_block(g)
+        self.hard_block(g, t)
 
         if complexity(t) == "complex":
             rh = self.start("reviewer", "reviewer.md", t, r, self.wt).finish(
@@ -692,7 +710,7 @@ class Issuer:
                     "missing name - assert the symbol exists first): %s" % ", ".join(errors[:10]))
         return None
 
-    def hard_block(self, g):
+    def hard_block(self, g, t=None):
         main = self.cfg.main_branch
         own = g.sha(main) is not None
         files = g.changed_files(self.target)
@@ -721,8 +739,17 @@ class Issuer:
         if not paths and not lines:
             return
         detail = {"paths": paths, "lines": lines, "fingerprint": change_fingerprint(files, triples)}
+        ok = (t or {}).get("approval")
+        ok = ok if isinstance(ok, dict) else None
+        if ok and all(ok.get(k) == detail[k] for k in ("paths", "lines", "fingerprint")):
+            self.save(lambda x: event(x, "hard_block approval applied", by=ok.get("by"), approved_at=ok.get("at"),
+                                      fingerprint=detail["fingerprint"]), "hard_block approval applied")
+            return
         hit_pats = [pat for pat, _ in rxs if any(pat in x["patterns"] for x in lines)]
         out = ["the change touches hard_block: %s" % ", ".join(paths + ["pattern %r" % p for p in hit_pats])]
+        if ok:
+            out.append("  the approval by %s at %s no longer matches this change (approved fingerprint %s)"
+                       % (ok.get("by"), ok.get("at"), str(ok.get("fingerprint"))[:12]))
         out += ["  path %s" % p for p in paths]
         out += ["  line %s: %s  (pattern %s)" % (x["file"], x["text"], ", ".join(x["patterns"])) for x in lines]
         out.append("  fingerprint %s" % detail["fingerprint"])

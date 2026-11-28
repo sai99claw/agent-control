@@ -2422,6 +2422,88 @@ class IssuerLock(LoopCase):
         self.assertEqual((t["state"], t["run"]), ("running", run))
 
 
+class ApproveHardBlock(LoopCase):
+    """tickets.py approve and the issuer's first round after it (#164, implementer's own cases)."""
+
+    HB = {"paths": ["docs/DECISIONS.md"], "lines": [], "fingerprint": "ab" * 32}
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+
+    def stuck_one(self, **extra):
+        self.add(1, state="stuck", round=1, stuck={"reason": "hard_block", "text": "x",
+                                                   "at": "2026-11-28T00:00:00Z", "hard_block": self.HB}, **extra)
+        return self.pool.report("decision", "1", "#1 is stuck (hard_block): x", hard_block=self.HB)
+
+    def test_ready_transition_leaves_a_closed_group_and_says_how_to_place_it(self):
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "cancelled", "members": ["1"],
+                                                  "branch": "int/g1", "job": None}), "test: g1")
+        page = self.stuck_one(group="g1", target="int/g1")
+        res = self.run_py("tickets.py", "approve", "1", "--page", page, "--reason", "ok")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        lines = res.stdout.splitlines()
+        self.assertTrue(lines[0].startswith("#1 approved"), res.stdout)
+        self.assertIn("actl dag move 1 --to gK|new", lines[1])
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["group"], t["target"]), ("ready", None, None))
+        self.assertEqual(self.snap().groups["g1"]["members"], [])
+        self.assertEqual([h["event"] for h in t["history"]][-1:], ["hard_block approved"])
+        self.assertNotIn("set ready by main", [h["event"] for h in t["history"]])
+
+    def test_open_group_is_kept_and_no_second_line(self):
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "open", "members": ["1"],
+                                                  "branch": "int/g1", "job": None}), "test: g1")
+        page = self.stuck_one(group="g1")
+        res = self.run_py("tickets.py", "approve", "1", "--page", page, "--reason", "ok")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(res.stdout.splitlines()), 1, res.stdout)
+        self.assertEqual(self.snap().ticket("1")["group"], "g1")
+
+    def test_ready_and_cancel_still_work_after_an_approval(self):
+        page = self.stuck_one()
+        self.assertEqual(self.run_py("tickets.py", "approve", "1", "--page", page, "--reason", "ok").returncode, 0)
+        res = self.run_py("tickets.py", "cancel", "1", "--why", "no")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "cancelled")
+        self.assertIn("approval", t)
+
+    def test_approval_is_state_not_ticket_content(self):
+        import ticket_creator
+        import ticket_issuer
+        self.assertNotIn("approval", ticket_creator.EDITABLE)
+        self.assertNotIn("approval", ticket_issuer.BRIEF_KEYS)
+
+    def go_worker_ok(self, t):
+        """Issuer.go's worker_ok right after the claim (the missing target ends go there)."""
+        import ticket_issuer
+        from core.config import Config
+        issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/none")
+        issuer.claim = lambda: t
+        issuer.live = lambda t: None
+        with self.assertRaises(ticket_issuer.Stuck):
+            issuer.go()
+        return issuer.worker_ok
+
+    def test_go_skips_the_worker_only_while_the_approval_is_pending(self):
+        ap = {"fingerprint": "ab" * 32}
+        h = [{"event": "hard_block approved"}, {"event": "issuer started"}]
+        self.assertTrue(self.go_worker_ok({"id": "1", "approval": ap, "history": h}))
+        self.assertFalse(self.go_worker_ok({"id": "1", "approval": ap, "history": h + [{"event": "round start"}]}))
+        self.assertFalse(self.go_worker_ok({"id": "1", "history": h}))
+
+    def test_approval_pending_counts_user_decisions_as_an_end(self):
+        import ticket_issuer
+        ap = {"fingerprint": "ab" * 32}
+        h = [{"event": "hard_block approved"}]
+        self.assertTrue(ticket_issuer.approval_pending({"approval": ap, "history": h + [{"event": "feedback"}]}))
+        self.assertFalse(ticket_issuer.approval_pending(
+            {"approval": ap, "history": h + [{"event": "user decision: retry"}]}))
+        self.assertFalse(ticket_issuer.approval_pending({"approval": "yes", "history": h}))
+
+
 class RedCheck(LoopCase):
     def feedback_of(self, ident):
         t = self.snap().ticket(str(ident))
