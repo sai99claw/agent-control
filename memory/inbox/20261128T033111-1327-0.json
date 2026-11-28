@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "reviewer",
+  "text": "In a later round whose previous review passed, diff only the commits added since that review (compare commit times with the review's result.json time) and check the new commits' contract changes against every caller.",
+  "source": "#150 r3 reviewer",
+  "at": "2026-11-28T03:31:11Z"
+}
