@@ -58,9 +58,7 @@ The controller should not be the child of an interactive session that may be end
 
 Placeholders: `{{AC_HOME}}` is the agent-control clone, `{{PROJECT_DIR}}` the project, `{{HOME}}` the home folder, `{{NAME}}` the project's name. Fill them into a copy, from the project folder:
 
-```sh
-sed -e "s|{{AC_HOME}}|$AC_HOME|g" -e "s|{{PROJECT_DIR}}|$PWD|g" -e "s|{{HOME}}|$HOME|g" -e "s|{{NAME}}|$(basename "$PWD")|g" template > file
-```
+    sed -e "s|{{AC_HOME}}|$AC_HOME|g" -e "s|{{PROJECT_DIR}}|$PWD|g" -e "s|{{HOME}}|$HOME|g" -e "s|{{NAME}}|$(basename "$PWD")|g" template > file
 
 ```xml devloop-launchd-controller
 <?xml version="1.0" encoding="UTF-8"?>
