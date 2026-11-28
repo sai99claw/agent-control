@@ -984,7 +984,7 @@ def render_tickets_tab(cfg, snap, key, query, now):
             e(g["id"]), e(group_state_text(g)), e(CATEGORY_TEXT.get(group_category(snap, g), "")),
             '<a href="?group=%s">%s</a>' % (quote(str(g["id"])), e(g.get("branch") or g["id"])),
             e(" ".join("#" + i for i in g.get("members") or [])), e(g.get("fix_round", 0)),
-            e((g.get("last_regression") or "")[:160]), e({"ok": "成功", "failed": "失敗"}.get(g.get("release"), ""))))
+            e((g.get("last_regression") or "")[:160]), e({"ok": "成功", "failed": "失敗", "pending": "發版中"}.get(g.get("release"), ""))))
     out.append("</table></div></section>")
 
     pages = [(k, v) for k, v in sorted(snap.inbox.items(), reverse=True) if not v.get("acked")]
@@ -1174,7 +1174,7 @@ def render_group_detail(snap, gid):
              ("原因", e(CATEGORY_TEXT.get(group_category(snap, g), ""))),
              ("分支", e(g.get("branch"))), ("修補輪", e(g.get("fix_round", 0))),
              ("最後一次 regression", e(g.get("last_regression") or "")),
-             ("發版", e({"ok": "成功", "failed": "失敗"}.get(g.get("release"), g.get("release") or ""))),
+             ("發版", e({"ok": "成功", "failed": "失敗", "pending": "發版中"}.get(g.get("release"), g.get("release") or ""))),
              ("票", "<ul>%s</ul>" % "".join(members))]
     if notes:
         pairs.append(("備註", "<ul>%s</ul>" % notes))

@@ -215,18 +215,17 @@ class ReleaseRerun(LoopCase):
         self.assertEqual(self.snap().groups["g1"]["release"], "ok")
 
     def test_controller_release_is_the_shared_function(self):
-        import ticket_controller
+        import release_job
         from core import release
-        from core.config import Config
         calls = []
-        orig = release.run
-        release.run = lambda cfg, g, sha: calls.append((g["id"], sha)) or (True, "x")
-        try:
-            ctl = ticket_controller.Controller(Config(self.proj), self.pool)
-            self.assertEqual(ctl.release({"id": "g5", "members": []}, "abc"), (True, "x"))
-        finally:
-            release.run = orig
-        self.assertEqual(calls, [("g5", "abc")])
+        out = os.path.join(self.tmp, "release-job-out.json")
+        with mock.patch.dict(os.environ, {"AC_ROOT": self.proj}), \
+                mock.patch.object(release, "run", lambda cfg, g, sha: calls.append((g, sha)) or (True, "x")):
+            self.assertEqual(release_job.main(["--group", "g5", "--sha", "abc", "--tickets", "1,2", "--out", out]), 0)
+        self.assertEqual(calls, [({"id": "g5", "members": ["1", "2"]}, "abc")])
+        with open(out) as fh:
+            self.assertEqual({k: v for k, v in json.load(fh).items() if k != "at"},
+                             {"ok": True, "text": "x", "sha": "abc"})
 
     def test_help_docstring_and_readme_list_the_command(self):
         def read(*parts):

@@ -14,10 +14,13 @@ Each tick, in this order:
                     gets a regression (or a fix round) only when
                     every earlier group is landed or cancelled - a stuck group with no merged ticket holds no one; red -> auto_fixer (at most devloop.max_rounds);
                     green -> main fast-forwards to the integration branch (a main that moved
-                    meanwhile is merged in and verified again) and the project's release runs;
-                    a release that exits 1 (the product failed a check) has the opener open a
+                    meanwhile is merged in and verified again), the group and its tickets are
+                    written landed with release "pending", and the project's release runs as a
+                    background job (release_job.py) collected in step 1 of a later tick; a
+                    release that exits 1 (the product failed a check) has the opener open a
                     fix ticket (none while one opened this way is still open) and runs once
-                    more on the same sha, and that run decides the page
+                    more on the same sha, and that run decides the page; a release job gone
+                    without a result is failed with a page and not run again (D-080)
   3. dispatch     - a ticket's group is written when it is opened; the controller only follows
                     it. A ready ticket written before groups existed (no 'group' field) gets a
                     group of its own at the end of the chain once its dependencies can still
@@ -30,7 +33,7 @@ Each tick, in this order:
   4. memory       - one memory_keeper at a time for a memory file whose lessons are due
 
 Everything it knows is in the pool and in git, so a restart picks up where it was; issuers,
-regressions and fixers run detached and are adopted by the next controller.
+regressions, fixers and release jobs run detached and are adopted by the next controller.
 
     python3 devloop/ticket_controller.py            # run until nothing is left to do
     python3 devloop/ticket_controller.py --forever  # keep watching the pool for new tickets
@@ -243,6 +246,8 @@ class Controller:
         for g in snap.groups.values():
             job = g.get("job")
             if not job:
+                if g.get("state") == "landed" and g.get("release") == "pending":
+                    self.release_lost(g["id"])  # stopped between landing and the job's start
                 continue
             key = "%s:%s" % (job["kind"], g["id"])
             proc = self.children.get(key)
@@ -257,6 +262,8 @@ class Controller:
             self.children.pop(key, None)
             if job["kind"] == "regression":
                 self.after_regression(g["id"], job, rc)
+            elif job["kind"] == "release":
+                self.after_release(g["id"], job, rc)
             else:
                 self.after_fixer(g["id"], rc)
 
@@ -456,10 +463,10 @@ class Controller:
         argv = ["python3", os.path.join(LOOP, "regression.py"), "--branch", g["branch"], "--out", out]
         self._start_job(g["id"], "regression", argv, out)
 
-    def _regression_out(self, gid):
+    def _regression_out(self, gid, kind="regression"):
         """A fresh report path result-<seconds>[-<n>].json: a fix round's base report (fix_report)
         must survive the next regression even when both start within the same second (#74)."""
-        folder, stamp = self.cfg.runs_dir("regression", gid), int(time.time())
+        folder, stamp = self.cfg.runs_dir(kind, gid), int(time.time())
         out, n = os.path.join(folder, "result-%d.json" % stamp), 1
         while os.path.exists(out):
             out, n = os.path.join(folder, "result-%d-%d.json" % (stamp, n)), n + 1
@@ -726,13 +733,7 @@ class Controller:
         ids = [i for i in g.get("members") or []
                if (snap.tickets.get(i) or {}).get("state") == "merged"
                and (snap.tickets.get(i) or {}).get("group") == gid]
-        released, rel_text = self.release(dict(g, members=ids), sha)
         rel_log = release.log_path(self.cfg, gid)
-        rerun = None                            # issue #1: rc 1 -> a fix ticket and one rerun
-        if not released and release.product_failed(rel_text):
-            rerun = self.release_rerun(dict(g, members=ids), sha, rel_log, rel_text)
-            released, rel_text = rerun["ok"], rerun["text"]
-        fix = self.flaky_fix(snap.groups.get(gid) or g, sha)
 
         def change(tx):
             for i in ids:
@@ -743,39 +744,99 @@ class Controller:
                 tx.put_ticket(t)
                 close_pages(tx, i, "superseded", before)
             grp = tx.data.groups[gid]
-            grp["state"], grp["landed_sha"], grp["release"] = "landed", sha, "ok" if released else "failed"
+            grp["state"], grp["landed_sha"], grp["release"] = "landed", sha, "pending"
             grp["release_log"] = rel_log
-            event(grp, "landed" + ("" if released else " (release failed)"))
-            if rerun is not None:
-                event(grp, "release rc 1, run once more", fix_tickets=rerun["fix_tickets"],
-                      fix_open=rerun["fix_open"], rerun="ok" if released else "failed")
+            event(grp, "landed")
             tx.put_group(grp)
             close_pages(tx, gid, "superseded", before)
         self.pool.update(change, "group %s landed" % gid)
         self.repo.remove_worktree(os.path.join(self.cfg.worktree_root, "fix-" + gid))
+        self.start_release(gid, sha, ids)
+
+    def start_release(self, gid, sha, ids, rerun=None):
+        """Start release_job.py for a landed group and record it as the group's job; acks no page.
+        `rerun` (the rc-1 context: fix_tickets, fix_open, line) marks the one run more and is kept
+        on the group as release_rerun until that run is collected."""
+        out = self._regression_out(gid, "release-job")
+        argv = ["python3", os.path.join(LOOP, "release_job.py"), "--group", gid, "--sha", sha,
+                "--tickets", ",".join(ids), "--out", out]
+        log = os.path.join(self.cfg.runs_dir("release-job", gid), "release-job.log")
+        proc = osx.spawn(argv, cwd=self.cfg.root, env=self.cfg.env(), log_path=log)
+        self.children["release:" + gid] = proc
+        job = {"kind": "release", "stamp": {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(),
+                                             "started": osx.now()}, "out": out}
+        fields = {}
+        if rerun is not None:
+            job["rerun"], fields["release_rerun"] = True, rerun
+        self.set_group(gid, None, "release %sstarted" % ("rerun " if rerun is not None else ""), job=job, **fields)
+
+    def release_lost(self, gid):
+        """A landed group whose release job ended without a result, or that has release pending and
+        no job: release failed and one decision page; the release is not run again (D-080)."""
+        g = self.set_group(gid, None, "release job ended without a result", drop=("release_rerun",),
+                           job=None, release="failed")
+        main, sha12 = self.cfg.main_branch, (g.get("landed_sha") or "")[:12]
+        self.pool.report("decision", gid, "group %s is in %s (%s) but its release job ended without a result - "
+                         "the release is not run again (D-080); release log: %s" % (
+                             gid, main, sha12, g.get("release_log")), **release_ask(gid, main, sha12))
+
+    def after_release(self, gid, job, rc):
+        """Collect a release job (rc None when adopted): its --out decides the release and the page.
+        A first run that exited 1 gets the fix ticket and one run more instead."""
+        try:
+            res = osx.read_json(job.get("out"), {}) or {}
+        except osx.OSFailure:
+            res = {}
+        if not isinstance(res, dict) or not isinstance(res.get("ok"), bool):
+            self.release_lost(gid)
+            return
+        snap = self.pool.snapshot()
+        g, main = snap.groups[gid], self.cfg.main_branch
+        sha, rel_log = g["landed_sha"], g.get("release_log") or release.log_path(self.cfg, gid)
+        ids = [i for i in g.get("members") or []
+               if (snap.tickets.get(i) or {}).get("state") == "landed"
+               and (snap.tickets.get(i) or {}).get("group") == gid]
+        released, rel_text = res["ok"], str(res.get("text") or "")
+        if not job.get("rerun") and not released and release.product_failed(rel_text):
+            self.start_release(gid, sha, ids, rerun=self.release_fix(dict(g, members=ids), sha, rel_log, rel_text))
+            return
+        rerun = g.get("release_rerun") if job.get("rerun") else None
+        fix = self.flaky_fix(g, sha)
+
+        def change(tx):
+            grp = tx.data.groups[gid]
+            grp["release"], grp["job"] = "ok" if released else "failed", None
+            grp.pop("release_rerun", None)
+            event(grp, "release " + ("ok" if released else "failed"))
+            if rerun is not None:
+                event(grp, "release rc 1, run once more", fix_tickets=rerun["fix_tickets"],
+                      fix_open=rerun["fix_open"], rerun="ok" if released else "failed")
+            tx.put_group(grp)
+        self.pool.update(change, "group %s: release %s" % (gid, "ok" if released else "failed"))
+        g = self.pool.snapshot().groups.get(gid) or g
         if released:
             text = "group %s landed and released: #%s (%s); release log: %s" % (
                 gid, ", #".join(ids), sha[:12], rel_log)
             if rerun is not None:
                 text += "\nthe first release run failed with rc 1 and passed when run once more\n" + rerun["line"]
-            self.pool.report("landed", gid, with_flaky(text, snap.groups.get(gid) or g, fix))
+            self.pool.report("landed", gid, with_flaky(text, g, fix))
         elif rerun is not None:
             self.pool.report("decision", gid, with_flaky("group %s is in %s (%s) but the release failed "
                              "twice (rc 1, then %s when run once more) - not rolled back (release log: %s):\n%s\n%s" % (
                                  gid, main, sha[:12], rel_text.split("\n")[0], rel_log,
                                  release.failure_text(rel_log, rel_text), rerun["line"]),
-                             snap.groups.get(gid) or g, fix), **release_ask(gid, main, sha[:12]))
+                             g, fix), **release_ask(gid, main, sha[:12]))
         else:
             self.pool.report("decision", gid, with_flaky("group %s is in %s (%s) but the release failed - "
                              "not retried, not rolled back (release log: %s):\n%s" % (
                                  gid, main, sha[:12], rel_log, release.failure_text(rel_log, rel_text)),
-                             snap.groups.get(gid) or g, fix), **release_ask(gid, main, sha[:12]))
+                             g, fix), **release_ask(gid, main, sha[:12]))
 
-    def release_rerun(self, g, sha, rel_log, rel_text):
+    def release_fix(self, g, sha, rel_log, rel_text):
         """Issue #1: the release exited 1 (the product failed a check). Unless a fix ticket for a
-        release is still open, the opener opens one; then the release runs once more on the same
-        sha. Changes nothing on main or in the release. Returns ok/text of the rerun, the ticket
-        ids (opened, already open) and the page line naming them."""
+        release is still open, the opener opens one (the caller then runs the release once more on
+        the same sha). Changes nothing on main or in the release. Returns the ticket ids (opened,
+        already open) and the page line naming them."""
         gid = g["id"]
         snap = self.pool.snapshot()
         fix_open = sorted((i for i, t in snap.tickets.items()
@@ -801,8 +862,7 @@ class Controller:
                 line = "fix ticket: " + ", ".join("#" + i for i in fix_tickets)
             else:
                 line = "no fix ticket opened: " + (problem or "the opener opened no ticket for it")
-        ok, text = self.release(g, sha)
-        return {"ok": ok, "text": text, "fix_tickets": fix_tickets, "fix_open": fix_open, "line": line}
+        return {"fix_tickets": fix_tickets, "fix_open": fix_open, "line": line}
 
     def flaky_fix(self, g, sha):
         """Issue #2: the group's flaky ids (as flaky_line lists them) that no open ticket (any state
@@ -967,9 +1027,6 @@ class Controller:
                 self.repo.remove_worktree(tree)
             except osx.OSFailure:
                 pass
-
-    def release(self, g, sha):
-        return release.run(self.cfg, g, sha)
 
     # ------------------------------------------------------------ 4. memory
 

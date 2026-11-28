@@ -25,7 +25,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + quick, if 
   quick or full red with 1-5 failing cases -> those ids run once more (`run <ids>`); the ones that
     pass are flaky: not red, named in the report's `flaky` and on the group's pages
   red -> auto_fixer.py on the integration branch (max 3 rounds) -> regression again
-  green -> main fast-forwards to the branch, the project's release script runs
+  green -> main fast-forwards to the branch, the project's release script runs (a background job)
 ```
 
 ## What the main session runs
@@ -42,7 +42,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + quick, if 
 | `python3 devloop/tickets.py ready N [--by NAME] [--page P]` | after deciding on a stuck ticket (one without an open group must then be placed with `actl dag move`) |
 | `python3 devloop/tickets.py ready gN` `[--note "..."] [--by NAME] [--page P] [--via main|web]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling (`--via web` marks a note sent from the board: the fixer gets it cleaned and wrapped behind the injection check, like web text for the opener); `--by` names who gave the answer on the events and `--page` acks that page in the same write |
 | `python3 devloop/tickets.py cancel N --why ... [--by NAME] [--page P]` | drop a ticket |
-| `python3 devloop/tickets.py release gN [--again] [--by NAME] [--page P]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page; `--by` is stored on the 'release re-run' event and `--page` acks that page in the same write (a refused re-run writes nothing) |
+| `python3 devloop/tickets.py release gN [--again] [--by NAME] [--page P]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page; refused (exit 2, one line naming the pid) while the group's release job still runs, and its write removes the group's job; `--by` is stored on the 'release re-run' event and `--page` acks that page in the same write (a refused re-run writes nothing) |
 | `python3 devloop/tickets.py cancel gN --why ... [--by NAME] [--page P]` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them (it names `--by`); `--page` acks that page in the same write |
 | `python3 devloop/tickets.py rerun gN [--why …] [--by NAME] [--page P]` | the environment of a paused group (regression env or unmeasured, or its fixer's worktree setup failed) is fixed: the paused mark is removed, an 'environment fixed: verify again' event is written and `--page` is acked, in one write; a `--forever` controller picks the group up at its next tick; without `--forever`, run the controller again. Refused (exit 2, nothing written) unless the group is pr or fixing without a job |
 | `actl dag dep N --add M` / `--drop M` / `actl dag move N --to gK|new` (`--reason R` required, `[--by NAME]`, default main-session) | the main session reorders a ready ticket (`devloop/dag_edit.py`, checks in `devloop/core/dagedit.py`): `dep` adds or drops one entry of N's `depends_on`, `move` puts N in another open group or a new one (an old group left empty is cancelled); one pool write with `dag:` events on the ticket and the groups involved; `actl dag after gA --add gB` / `--drop gB` puts group gA after group gB (or drops that edge) in dag.json's `group_after`, also when gA's tickets are merged, with a `dag:` event on both groups; the last stdout line is `chain: ` and the group order after the change. Refused (exit 2, one stderr line, nothing written) as the paragraph after 'Groups form one chain' lists |
@@ -55,7 +55,7 @@ Run them from the project (or set `AC_ROOT` to it).
 ## Project settings (`board/config.json`, key `devloop`)
 
 `release` is required (every project ships a release script; the controller only calls it, with
-`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS`, `DEVLOOP_RELEASE_DIR` set; it runs in a throwaway checkout that is removed afterwards, so anything it produces goes to `$DEVLOOP_RELEASE_DIR` = `<worktrees>/runs/release/<group>/`, which devloop never empties; its whole output is kept in `<worktrees>/runs/release/<group>.log`, named on the group as `release_log` and in the page) and is stopped after `release_timeout_seconds` (default 3600). A release that exits 1 at landing (the product failed a check) has the opener open a fix ticket for it (`ticket_creator.py --by controller --origin '{"kind": "release", "group": ..., "sha": ...}'`; none while a ticket opened this way is still open, its number goes on the page instead) and then runs once more on the same sha; the controller waits for that opener run (minutes) and the rerun decides the group's `release` and page; it changes nothing on main or in the release. Every other outcome runs once (see **Release exit codes**). Everything else has a default:
+`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS`, `DEVLOOP_RELEASE_DIR` set; it runs in a throwaway checkout that is removed afterwards, so anything it produces goes to `$DEVLOOP_RELEASE_DIR` = `<worktrees>/runs/release/<group>/`, which devloop never empties; its whole output is kept in `<worktrees>/runs/release/<group>.log`, named on the group as `release_log` and in the page) and is stopped after `release_timeout_seconds` (default 3600). The release runs as a background job (`devloop/release_job.py`, its result and log under `<worktrees>/runs/release-job/<group>/`) started once the group and its tickets are written landed with `release` "pending"; the controller goes on dispatching and verifying meanwhile and collects the job on a later tick, which writes the group's `release` and the page; a release job that ended without a result (or a landed group with `release` "pending" and no job) becomes `release` "failed" with one decision page and is not run again (D-080). A release that exits 1 at landing (the product failed a check) has the opener open a fix ticket for it (`ticket_creator.py --by controller --origin '{"kind": "release", "group": ..., "sha": ...}'`; none while a ticket opened this way is still open, its number goes on the page instead) and then runs once more on the same sha (one more release job); the controller waits for that opener run (minutes) when it collects the first job, and the rerun decides the group's `release` and page; it changes nothing on main or in the release. Every other outcome runs once (see **Release exit codes**). Everything else has a default:
 `pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_rounds` 3,
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
@@ -175,8 +175,8 @@ the ref. A main-moved report, the same or fewer failing cases, or a group sent b
 `tickets.py ready gN` (which drops `fix_end_sha`) never resets. Neither `int/<gid>` nor
 `refs/devloop/*` is pushed.
 
-A controller stopped with SIGTERM or SIGINT leaves its issuers, regressions and fixers running, and
-the next controller adopts them (#124). An issuer holds a BSD flock on
+A controller stopped with SIGTERM or SIGINT leaves its issuers, regressions, fixers and release jobs
+running, and the next controller adopts them (#124). An issuer holds a BSD flock on
 `<worktrees>/locks/issuer-<N>.lock` (never deleted or replaced) from before its claim until it
 exits; a second `ticket_issuer.py --id N` while it is held exits 2 with one line naming the lock
 and changes nothing. The controller treats a held lock as a live issuer whatever the stamp says:
@@ -395,7 +395,7 @@ it (`core/inflight.py`). Every record has `kind` and `stamp` (devloop's liveness
   auto_fixer process; its agent has its own agent record. Removed when auto_fixer exits.
 - `release-<group>.json` (`core/release.py`, kind `release`): `group`, `sha`, `log` (the release output
   file), `result` (null). The stamp is the release command itself (the `sh -c` process). Written right
-  after the spawn, removed when `release.run` returns; the controller's landing and
+  after the spawn, removed when `release.run` returns; the controller's release job (`release_job.py`) and
   `tickets.py release` both go through it.
 
 A process stopped hard leaves its record behind. `inflight.status(record)` answers `running` (the

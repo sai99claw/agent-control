@@ -1,7 +1,7 @@
 """release : run the project's release for a group at a sha, the one way devloop does it.
 
-The controller's landing and `tickets.py release` both call run(): a throwaway detached worktree
-at the sha under the worktree root, the controller's environment plus the DEVLOOP_* variables,
+The controller's release job (devloop/release_job.py) and `tickets.py release` both call run():
+a throwaway detached worktree at the sha under the worktree root, the controller's environment plus the DEVLOOP_* variables,
 and devloop.release_timeout_seconds as the limit. The worktree is removed afterwards, so
 anything the release produces goes to DEVLOOP_RELEASE_DIR (<worktrees>/runs/release/<group>/,
 created before the command, never emptied or deleted by devloop). The whole output (stdout and
@@ -81,7 +81,11 @@ def run(cfg, group, sha):
             "kind": "release", "group": gid, "sha": sha, "log": log, "result": None,
             "stamp": {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(),
                       "started": osx.now()}})
-        rc, timed_out = osx.wait(proc, cfg.release_timeout_seconds)
+        try:
+            rc, timed_out = osx.wait(proc, cfg.release_timeout_seconds)
+        except BaseException:               # a signal (release_job.py) stops the command too
+            osx.kill_tree(proc.pid)
+            raise
         text = _read(log).strip()[-2000:]
         if rc == 0 and not timed_out:
             return True, text
