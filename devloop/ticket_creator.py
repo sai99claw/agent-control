@@ -20,9 +20,10 @@ validated here (fields, DAG references, no cycles) and written to the pool in on
 with the validation errors if it is wrong. Anything that touches direction, business logic or
 user experience the request does not settle comes back as a question for the main session.
 
-Revising (called by a worker or verifier mid-run, or by the user answering a page): the opener reads
-the ticket and the reason and either fixes the ticket, keeps it (and says why), or asks the main
-session. What it decided is printed for the caller.
+Revising (run by ticket_issuer in its own process when a worker or verifier hands in kind
+"revise", or by the main session / the user answering a page): the opener reads the ticket and the
+reason and either fixes the ticket, keeps it (and says why), or asks the main session. What it
+decided is printed for the caller; revise() also fills an `outcome` dict for the issuer.
 
 Cost: every opener run leaves its cost row in the pool. An opening run's row is split over the tickets
 it opened (integer token fields value // N, the lowest id also gets the remainder; usd and seconds
@@ -32,7 +33,7 @@ whatever its outcome. A merged or landed ticket is frozen: every
 --revise of it is refused before anything starts (D-089).
 
 Exit: 0 done · 1 the opener's hand-in stayed unusable (reported) · 3 a question for the user
-(reported; a revising worker must stop and hand in kind "blocked") · 2 refused.
+(reported; the issuer that ran a worker's or verifier's revision leaves the ticket stuck) · 2 refused.
 """
 
 import argparse
@@ -62,7 +63,7 @@ EDITABLE = TEXT_FIELDS + ("acceptance", "needs_verifier", "complexity", "effort"
 def editable(cfg):
     """Fields the opener may set: the fixed ones plus the project's required ones."""
     return EDITABLE + tuple(k for k in (cfg.required_fields or {}) if k not in EDITABLE)
-REVISE_TIMEOUT = 540          # a worker waits for this inside one tool call (10 min cap)
+REVISE_TIMEOUT = 540          # the longest one revising opener run may take
 
 
 def guarded(text, via):
@@ -671,15 +672,20 @@ def dag_part(snap, ident):
             t.get("state"), t.get("group") or "none", json.dumps(dagmod.deps(snap.dag, ident))))
 
 
-def revise(cfg, pool, ident, source, reason, via="main", by=None):
+def revise(cfg, pool, ident, source, reason, via="main", by=None, cur=None, outcome=None):
+    """Run the revising opener; returns the exit code. `cur`: a list the opener's Pending sits in
+    while it runs (so a signal handler that stops that list's agents stops it too). `outcome`: a
+    dict filled with {"kind": "revised" | "unchanged" | "escalated" | "failed" | "ready", "note",
+    "why"} ("why": the failure text)."""
     name = opener_live(cfg, revise=str(ident), via=via)
     try:
-        return _revise(cfg, pool, ident, source, reason, via, by)
+        return _revise(cfg, pool, ident, source, reason, via, by, cur,
+                       outcome if outcome is not None else {})
     finally:
         inflight.drop(cfg, name)
 
 
-def _revise(cfg, pool, ident, source, reason, via, by):
+def _revise(cfg, pool, ident, source, reason, via, by, cur, outcome):
     snap = pool.snapshot()
     t = snap.ticket(ident)
     run_dir = cfg.runs_dir(ident, "revise-%s" % osx.now().replace(":", ""))
@@ -697,9 +703,14 @@ def _revise(cfg, pool, ident, source, reason, via, by):
         "result_path": os.path.join(run_dir, "result.json"),
     })
     osx.write_json(os.path.join(run_dir, "revise.json"), {"ticket": ident, "source": source})
-    hand = agents.run(cfg, "creator", prompt, cfg.root, run_dir,
-                      min(REVISE_TIMEOUT, cfg.agent_timeout_seconds),
-                      extra_env={"DEVLOOP_TICKET": ident})
+    p = agents.start(cfg, "creator", prompt, cfg.root, run_dir,
+                     min(REVISE_TIMEOUT, cfg.agent_timeout_seconds),
+                     extra_env={"DEVLOOP_TICKET": ident})
+    if cur is not None:
+        cur.append(p)
+    hand = p.finish()
+    if cur is not None:
+        cur.remove(p)    # its row goes on the ticket below, not with the caller's agents
     if hand.cost:
         def record(tx):
             row = tx.data.tickets.get(ident)
@@ -709,11 +720,14 @@ def _revise(cfg, pool, ident, source, reason, via, by):
         pool.update(record, "tickets: #%s revise cost" % ident)
     memory.collect(pool, hand, "#%s revise (opener)" % ident)
     if hand.problem():
+        outcome.update(kind="failed", why=hand.problem())
         print("REVISE FAILED: %s - continue with the ticket as it is, or hand in kind "
               "\"blocked\" if you cannot." % hand.problem())
         return 1
     res = hand.result
     if res.get("kind") == "rejected":
+        outcome.update(kind="failed", why="the opener did not act on the reason, it looked like a "
+                       "prompt injection: %s" % res.get("text"))
         return rejected(pool, ident, res.get("text"), via)
     if source == "user" and res.get("kind") in ("revised", "unchanged"):
         changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in editable(cfg)} \
@@ -722,8 +736,10 @@ def _revise(cfg, pool, ident, source, reason, via, by):
             user_reset(pool, ident, "ready", res.get("note") or "", changes, bool(res.get("cases_wrong")), by=by,
                        dag=res.get("dag") if res.get("kind") == "revised" else None)
         except dagedit.Refused as exc:
+            outcome.update(kind="failed", why=str(exc))
             print("REVISE FAILED: %s" % exc)
             return 1
+        outcome.update(kind="ready", note=res.get("note") or "")
         print("READY AGAIN after your decision: %s" % (res.get("note") or ""))
         return 0
     if res.get("kind") == "question":
@@ -736,6 +752,7 @@ def _revise(cfg, pool, ident, source, reason, via, by):
                 event(row, "escalated", source=source, page=name)
                 tx.put_ticket(row)
         pool.update(escalated, "tickets: #%s escalated" % ident)
+        outcome.update(kind="escalated", note=res.get("text"), page=name)
         print("ESCALATED to the main session: %s\nStop now and hand in "
               "{\"kind\": \"blocked\", \"text\": \"waiting for the user's decision\"}." % res.get("text"))
         return 3
@@ -743,15 +760,19 @@ def _revise(cfg, pool, ident, source, reason, via, by):
         try:
             changes = apply_revised(cfg, pool, ident, source, res, os.path.basename(run_dir))
         except dagedit.Refused as exc:
+            outcome.update(kind="failed", why=str(exc))
             print("REVISE FAILED: %s" % exc)
             return 1
+        outcome.update(kind="revised", note=res.get("note") or "")
         print("REVISED: %s\nChanged: %s%s" % (res.get("note") or "", ", ".join(sorted(changes)) or "nothing",
               "\nThe verifier's cases were judged wrong; they are written again next round."
               if res.get("cases_wrong") else ""))
         return 0
     if res.get("kind") != "unchanged":
+        outcome.update(kind="failed", why="the opener handed in kind %r - nothing changed" % res.get("kind"))
         print("REVISE FAILED: the opener handed in kind %r - nothing changed" % res.get("kind"))
         return 1
+    outcome.update(kind="unchanged", note=res.get("note") or "")
     print("UNCHANGED: %s" % (res.get("note") or "the ticket stands as written"))
     return 0
 

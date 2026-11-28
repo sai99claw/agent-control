@@ -1092,6 +1092,207 @@ class ApplyUnapplied(LoopCase):
         self.assertEqual(ev[0]["run"], name)
 
 
+class ReviseHandIn(LoopCase):
+    """#158, implementer's own: a worker's or verifier's kind "revise" hand-in, run by the issuer."""
+
+    def setUp(self):
+        super().setUp()
+        import ticket_creator
+        import ticket_issuer
+        from core.config import Config
+        self.tc, self.ti = ticket_creator, ticket_issuer
+        self.cfg = Config(self.proj)
+        self.add(1)
+
+    def bare(self):
+        issuer = self.ti.Issuer.__new__(self.ti.Issuer)
+        issuer.cfg, issuer.pool, issuer.id = self.cfg, self.pool, "1"
+        issuer.pending, issuer.started_agents, issuer._free = [], [], None
+        issuer.deadline = time.time() + 600
+        return issuer
+
+    @staticmethod
+    def hand(role, result):
+        from core import agents
+        return agents.Hand(role, result, 0, False, None, {"role": role})
+
+    def outcome(self, out, role="worker", reason="item 2 is impossible"):
+        issuer = self.bare()
+        calls = []
+
+        def fake(cfg, pool, ident, source, why, cur=None, outcome=None):
+            calls.append((ident, source, why, cur is issuer.pending))
+            outcome.update(out)
+            return 0
+        with mock.patch.object(self.tc, "revise", fake):
+            res = issuer.revise_hand(self.hand(role, {"kind": "revise", "reason": reason}), role)
+        return issuer, res, calls
+
+    def test_unchanged_is_free_with_the_note(self):
+        issuer, res, calls = self.outcome({"kind": "unchanged", "note": "it is possible"})
+        self.assertEqual(res, ("unchanged", "the worker asked to revise the ticket; the opener kept "
+                                            "it as written: it is possible"))
+        self.assertEqual(issuer._free, "revision")
+        self.assertEqual(calls, [("1", "worker", "item 2 is impossible", True)])
+        _, res, _ = self.outcome({"kind": "unchanged", "note": ""}, role="verifier")
+        self.assertEqual(res[1], "the verifier asked to revise the ticket; the opener kept it as "
+                                 "written: (no note)")
+
+    def test_revised_and_failed(self):
+        issuer, res, _ = self.outcome({"kind": "revised", "note": "n"})
+        self.assertEqual(res, ("revised", None))
+        issuer, res, _ = self.outcome({"kind": "failed", "why": "boom"}, role="verifier")
+        self.assertEqual(res, ("failed", "the verifier asked to revise the ticket; the revision "
+                                         "failed: boom; the ticket stands as written"))
+        self.assertIsNone(issuer._free)
+
+    def test_escalated_is_stuck_decision_without_a_second_page(self):
+        with self.assertRaises(self.ti.Stuck) as ctx:
+            self.outcome({"kind": "escalated", "note": "B2B or B2C?"})
+        self.assertEqual((ctx.exception.reason, ctx.exception.page), ("decision", False))
+        self.assertIn("B2B or B2C?", ctx.exception.text)
+
+    def test_no_reason_runs_no_opener(self):
+        for reason in (None, "", "  ", 3):
+            issuer, res, calls = self.outcome({"kind": "revised"}, reason=reason)
+            self.assertEqual(res, ("failed", 'the worker\'s revise hand-in has no "reason"'))
+            self.assertEqual(calls, [])
+
+    def test_start_passes_no_revise_cmd(self):
+        import inspect
+        self.assertNotIn("revise_cmd", inspect.getsource(self.ti.Issuer.start))
+        with open(os.path.join(LOOP, "prompts", "worker.md")) as fh:
+            self.assertNotIn("{revise_cmd}", fh.read())
+
+    # ---- both agents in one round (_round with stubbed agents)
+
+    def round_with(self, whand, vhand, worker_end):
+        issuer = self.bare()
+        issuer.worker_ok, issuer.round_costs = False, []
+        issuer.target, issuer.cwt, issuer.wt, issuer.cases_branch = "int/g1", "/nowhere", "/nowhere", "t/1-cases"
+        issuer.repo = mock.Mock()
+        issuer.ticket = lambda: {"history": [{"event": "round start"}]}
+        issuer.rebase_round = lambda t, r: (t, [])
+        order = []
+
+        class P:
+            def __init__(self, h):
+                self.h, self.hand, self.proc, self.stopped = h, None, None, False
+
+            def finish(self, *a):
+                order.append("finish " + self.h.role)
+                self.hand = self.h
+                return self.h
+
+            def stop(self):
+                self.stopped = True
+                order.append("stop " + self.h.role)
+                return {"role": self.h.role, "outcome": "interrupted"}
+        ps = {"worker": P(whand), "verifier": P(vhand)}
+
+        def start(role, *a):
+            issuer.pending.append(ps[role])
+            return ps[role]
+        issuer.start = start
+
+        def revise_hand(hand, role):
+            order.append("revise " + role)
+            if role == "worker":
+                if worker_end == "revised":
+                    return "revised", None
+                if worker_end == "unchanged":
+                    issuer._free = "revision"
+                return worker_end, "W " + worker_end
+            return "unchanged", "V unchanged"
+        issuer.revise_hand = revise_hand
+        t = {"id": "1", "needs_verifier": True}
+        with mock.patch.object(self.ti.worktrees, "branch_tree"), \
+                mock.patch.object(self.ti.memory, "collect"):
+            feedback, _ = issuer._round(t, 1)
+        return issuer, feedback, order, ps
+
+    def test_both_revise_the_verifiers_runs_after_the_workers_unchanged(self):
+        rev = {"kind": "revise", "reason": "r"}
+        issuer, feedback, order, _ = self.round_with(self.hand("worker", rev), self.hand("verifier", rev),
+                                                     "unchanged")
+        self.assertEqual(order, ["finish worker", "revise worker", "finish verifier", "revise verifier"])
+        self.assertEqual(feedback, "W unchanged\nV unchanged")
+        self.assertEqual(issuer._free, "revision")
+        self.assertFalse(issuer.worker_ok)
+
+    def test_both_revise_the_verifiers_does_not_run_after_the_workers_failed(self):
+        rev = {"kind": "revise", "reason": "r"}
+        issuer, feedback, order, _ = self.round_with(self.hand("worker", rev), self.hand("verifier", rev),
+                                                     "failed")
+        self.assertEqual(order, ["finish worker", "revise worker", "finish verifier"])
+        self.assertTrue(feedback.startswith("W failed\nthe verifier's revise hand-in was not acted on"))
+        self.assertIsNone(issuer._free)
+
+    def test_a_workers_revised_stops_the_running_verifier_before_waiting_for_it(self):
+        issuer, feedback, order, ps = self.round_with(
+            self.hand("worker", {"kind": "revise", "reason": "r"}),
+            self.hand("verifier", {"kind": "cases", "run": ["x"]}), "revised")
+        self.assertEqual(order, ["finish worker", "revise worker", "stop verifier"])
+        self.assertEqual(feedback, self.ti.REVISED_MID_ROUND)
+        self.assertEqual(issuer._free, "revision")
+        self.assertEqual(issuer.pending, [])
+
+    def test_a_verifiers_revise_alone_runs_after_a_done_worker(self):
+        issuer, feedback, order, _ = self.round_with(
+            self.hand("worker", {"kind": "done"}), self.hand("verifier", {"kind": "revise", "reason": "r"}),
+            "unused")
+        self.assertEqual(order, ["finish worker", "finish verifier", "revise verifier"])
+        self.assertEqual(feedback, "V unchanged")
+        self.assertTrue(issuer.worker_ok)
+
+    # ---- item 11: the opener's Pending where stop_agents() reaches it
+
+    def test_the_openers_pending_sits_in_cur_while_it_runs_and_leaves_after(self):
+        from core import agents
+        cur = ["round agent"]
+        seen = []
+
+        class P:
+            hand = None
+
+            def __init__(self, interrupt):
+                self.interrupt = interrupt
+
+            def finish(self):
+                seen.append(list(cur))
+                if self.interrupt:
+                    raise agents.Interrupted("signal 15")
+                return agents.Hand("creator", {"kind": "unchanged", "note": "fine"}, 0, False, None, None)
+        p = P(False)
+        out = {}
+        with mock.patch.object(self.tc.agents, "start", return_value=p) as start:
+            rc = self.tc.revise(self.cfg, self.pool, "1", "worker", "why", cur=cur, outcome=out)
+        self.assertEqual(rc, 0)
+        self.assertEqual(start.call_args[0][1], "creator")
+        self.assertEqual(seen, [["round agent", p]])
+        self.assertEqual(cur, ["round agent"])
+        self.assertEqual(out, {"kind": "unchanged", "note": "fine"})
+        meta = glob.glob(os.path.join(self.tmp, "wt", "runs", "1", "revise-*", "revise.json"))
+        self.assertEqual([osx.read_json(m)["source"] for m in meta], ["worker"])
+        q = P(True)
+        with mock.patch.object(self.tc.agents, "start", return_value=q):
+            with self.assertRaises(agents.Interrupted):
+                self.tc.revise(self.cfg, self.pool, "1", "worker", "why", cur=cur, outcome={})
+        self.assertEqual(cur, ["round agent", q], "an interrupted opener is no longer stoppable")
+
+    def test_the_issuers_interrupt_stops_the_opener_and_keeps_its_row(self):
+        issuer = self.bare()
+        issuer.round_costs = []
+
+        class P:
+            hand = None
+
+            def stop(self):
+                return {"role": "creator", "outcome": "interrupted"}
+        issuer.pending.append(P())
+        self.assertEqual(issuer.interrupted_costs(), [{"role": "creator", "outcome": "interrupted"}])
+
+
 class FreeRounds(LoopCase):
     """Rounds that ended on a merge conflict with the group or a cases_wrong revision are free."""
 

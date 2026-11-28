@@ -38,13 +38,10 @@ Code index (generated from the code; read it before searching, never edit it): {
 
 ## If you think the ticket (or the verifier's cases) is wrong
 
-Do not guess. Run this yourself (give the shell call a 600000 ms timeout; the opener takes a few
-minutes):
-
-    {revise_cmd}
-
-It prints REVISED (continue with the new ticket), UNCHANGED (the ticket stands - do it as
-written), or ESCALATED (stop and hand in "blocked").
+Do not guess. Hand in {{"kind": "revise", "reason": "<why the ticket is wrong>"}} (below) and stop.
+devloop has the opener judge it; the next round starts you with its answer: the revised ticket,
+or the ticket as written with the opener's note under "Feedback from earlier rounds", or the
+question goes to the user.
 
 ## Hand-in
 
@@ -52,6 +49,7 @@ Write JSON to {result_path}, then stop:
 
     {{"kind": "done", "summary": "what you changed and what you ran"}}
     {{"kind": "blocked", "text": "why only the user can unblock this", "failing": ["<test id>", ...]}}
+    {{"kind": "revise", "reason": "<why the ticket is wrong>"}}
 
 When you are blocked because tests fail in your own environment, list their ids in "failing":
 devloop runs those ids itself, and when they pass it starts you again in a round that does not

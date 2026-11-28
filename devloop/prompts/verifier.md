@@ -10,6 +10,10 @@ branch.
 {ticket_json}
 ```
 
+## Feedback from earlier rounds
+
+{feedback}
+
 ## What earlier agents learned
 
 {memory}
@@ -36,12 +40,20 @@ Code index (generated from the code; read it before searching, never edit it): {
    Commit source and test files only - never generated files (caches such as __pycache__,
    build output, logs). If such files show up in `git status`, add them to .gitignore instead.
 
+## If you think the ticket is wrong
+
+Do not guess. Hand in {{"kind": "revise", "reason": "<why the ticket is wrong>"}} (below) and stop.
+devloop has the opener judge it; the next round starts you with its answer: the revised ticket,
+or the ticket as written with the opener's note under "Feedback from earlier rounds", or the
+question goes to the user.
+
 ## Hand-in
 
 Write JSON to {result_path}, then stop. "run" is the list of ids the test command takes:
 
     {{"kind": "cases", "run": ["tests.test_login"], "files": ["tests/test_login.py"],
       "note": "what each case asserts"}}
+    {{"kind": "revise", "reason": "<why the ticket is wrong>"}}
 
 Add "lessons" to your hand-in only for something this run taught you that a future agent should
 know - one principle per entry, no story:
