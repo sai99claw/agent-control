@@ -1,7 +1,7 @@
 {
   "id": "g19",
   "branch": "int/g19",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "163",
     "164",
@@ -42,10 +42,17 @@
     {
       "at": "2026-11-28T10:38:44Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-28T10:38:48Z",
+      "event": "landed"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
   "main_tried": "abf49852381e3bef69ba1b5014d31bedb9ff2780",
   "last_regression": "green",
-  "verified_sha": "d137c1e097edb0af3421c978b72ed15271600734"
+  "verified_sha": "d137c1e097edb0af3421c978b72ed15271600734",
+  "landed_sha": "d137c1e097edb0af3421c978b72ed15271600734",
+  "release": "pending",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g19.log"
 }
