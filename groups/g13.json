@@ -1,10 +1,8 @@
 {
   "id": "g13",
   "branch": "int/g13",
-  "state": "open",
-  "members": [
-    "147"
-  ],
+  "state": "cancelled",
+  "members": [],
   "fix_round": 0,
   "job": null,
   "created": "2026-11-27T23:57:49Z",
@@ -16,6 +14,14 @@
     {
       "at": "2026-11-28T00:54:03Z",
       "event": "branch int/g13 made from main 5578f25e1adb"
+    },
+    {
+      "at": "2026-11-28T00:58:41Z",
+      "event": "member #147 left: stuck, nothing depends on it and no other member of g13 is unfinished (D-097)"
+    },
+    {
+      "at": "2026-11-28T00:58:41Z",
+      "event": "no tickets left: group closed"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6"
