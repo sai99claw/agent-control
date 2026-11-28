@@ -31,6 +31,7 @@ Code index (generated from the code; read it before searching, never edit it): {
    (not by an import error or a missing name - assert that a symbol exists first if needed).
    A script checks this before your cases are used, so a case that passes here, or errors,
    comes back to you. Run them with: {test_cmd}
+   Run tests only with that command, never with another test runner or the project's own test scripts. When it prints machine busy it ran nothing: do not wait for it or retry it in a loop; go on, and name in your hand-in the checks that were not measured (machine busy).
 3. Commit the cases on {cases_branch}.
    Commit source and test files only - never generated files (caches such as __pycache__,
    build output, logs). If such files show up in `git status`, add them to .gitignore instead.
