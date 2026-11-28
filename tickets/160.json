@@ -36,6 +36,11 @@
       "at": "2026-11-28T01:53:27Z",
       "event": "dispatched",
       "target": "int/g17"
+    },
+    {
+      "at": "2026-11-28T01:53:29Z",
+      "event": "issuer started",
+      "target": "int/g17"
     }
   ],
   "cost": [
@@ -64,6 +69,11 @@
   ],
   "group": "g17",
   "target": "int/g17",
-  "run": null,
+  "run": {
+    "pid": 7331,
+    "host": "vm",
+    "boot": "223458a8-de82-4b14-85c2-24fb650697dd",
+    "started": "2026-11-28T01:53:28Z"
+  },
   "claimed_at": "2026-11-28T01:53:27Z"
 }
