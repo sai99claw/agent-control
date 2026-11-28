@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a request exempts a situation from a new check ('a round that went through revise is not a violation'), first choose the comparison's reference so the exemption holds by construction (compare against the current owner's branch head, not the previous round's state), then add the literal exemption as a narrow guard; a reference taken from history turns every legitimate rewrite into a false violation.",
+  "source": "request (opener)",
+  "at": "2026-11-28T09:49:26Z"
+}

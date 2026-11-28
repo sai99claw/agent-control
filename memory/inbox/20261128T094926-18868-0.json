@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "The loop fakes stand acceptance cases in as .txt markers and invent their result rows: a feature that reads the case source (its AST or file) needs a fake verifier action that writes a real .py case file and a fake worker action that edits it, and a feature about a new result status needs a marker in fake_tests.py's case_row - until the test interface knows a status, it refuses the row as unmeasured.",
+  "source": "request (opener)",
+  "at": "2026-11-28T09:49:26Z"
+}
