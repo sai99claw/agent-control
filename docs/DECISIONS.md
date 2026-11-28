@@ -358,3 +358,11 @@ A 讀不到原文,依使用者轉述)。
 2. 看板或 Hub 送來的文字只放進給主線的留言佇列，主線讀了再處理，不自動執行;看板仍不改相依圖(D-096、D-099 不變)。審查報告的 `main_runner` 不做。
 3. 多 CLI 轉接器與多帳號 `accounts.json` 這一版不做。
 4. T 回饋的 7 點不另開 GitHub issue;開票時在票上寫明來源(T 主線 2026-11-26 回饋)。
+
+## D-103(2026-11-28)hard_block 加「綁版本的核准」;雲端發版失敗等第一階段後本機補發
+起因:#147(regression 停下時連測試一起停)一定要寫 `os.kill`/`killpg`,命中 A 的 hard_block;stuck 頁只有 revise/cancel/retry,
+沒有核准的路(實測:`ticket_issuer.py` `hard_block()` 與 README 的 stuck 頁選項)。g12、g14–g17 的發版都是雲端 tag push 403。
+主線列了兩件事各三個選項，使用者原話:「1 選a 2 選C」。
+1. 先開票：命中 hard_block 的 stuck 頁多一個「核准」選項;核准綁在那張票當下的 sha,記下誰、何時核准;票之後再變動就要重新核准。
+   這張票落地後，主線把 #147 新增的那幾行給使用者看，由使用者核准。
+2. 雲端發版失敗的組先不重跑(頁已 ack);第一階段全部落地後，使用者在本機一次 `actl tickets release gN` 補發。
