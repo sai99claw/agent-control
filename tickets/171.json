@@ -41,6 +41,11 @@
       "at": "2026-11-28T11:40:11Z",
       "event": "dispatched",
       "target": "int/g22"
+    },
+    {
+      "at": "2026-11-28T11:40:13Z",
+      "event": "issuer started",
+      "target": "int/g22"
     }
   ],
   "cost": [
@@ -67,6 +72,11 @@
   ],
   "group": "g22",
   "target": "int/g22",
-  "run": null,
+  "run": {
+    "pid": 26628,
+    "host": "vm",
+    "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
+    "started": "2026-11-28T11:40:12Z"
+  },
   "claimed_at": "2026-11-28T11:40:11Z"
 }
