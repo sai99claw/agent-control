@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "A reproduction that needs two processes to overlap must hold one of them long enough on purpose and assert that the overlap happened (event order); otherwise a 'works today' result may only be the race lost.",
+  "source": "request (opener)",
+  "at": "2026-11-28T00:55:34Z"
+}

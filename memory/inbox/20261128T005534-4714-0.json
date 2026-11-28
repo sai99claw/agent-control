@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "A rule stated in terms of a project setting (test roots, paths) can mean something else in another project on the machine: check it against every project config you can read before writing it in, and when it defeats the request's own purpose there, choose the rule that keeps the purpose and say why with the numbers.",
+  "source": "request (opener)",
+  "at": "2026-11-28T00:55:34Z"
+}

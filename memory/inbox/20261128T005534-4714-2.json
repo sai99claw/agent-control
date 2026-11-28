@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "Claude agent logs (--output-format json) keep only the final message and usage, not tool calls, so what an agent read cannot be measured from runs/*/agent-*.log; codex exec --json logs do record commands.",
+  "source": "request (opener)",
+  "at": "2026-11-28T00:55:34Z"
+}
