@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a ticket removes an output string or attribute, grep every test directory for that literal before listing the old cases it rewrites in place; list every reader the grep finds, not only those in the module that renders it.",
+  "source": "#143 revise (opener)",
+  "at": "2026-11-28T00:38:58Z"
+}
