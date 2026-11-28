@@ -1,7 +1,7 @@
 {
   "id": "g20",
   "branch": "int/g20",
-  "state": "pr",
+  "state": "verified",
   "members": [
     "166",
     "167",
@@ -64,6 +64,10 @@
     {
       "at": "2026-11-28T11:27:16Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-28T11:27:18Z",
+      "event": "regression green"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
@@ -99,5 +103,6 @@
     }
   ],
   "fix_end_sha": "a759fe75023418ddcb69b46c0317deebef20f502",
-  "last_regression": "green"
+  "last_regression": "green",
+  "verified_sha": "a759fe75023418ddcb69b46c0317deebef20f502"
 }
