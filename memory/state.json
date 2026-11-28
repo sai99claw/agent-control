@@ -1,5 +1,13 @@
 {
-  "job": null,
+  "job": {
+    "path": "memory/role/reviewer.md",
+    "stamp": {
+      "pid": 5382,
+      "host": "vm",
+      "boot": "223458a8-de82-4b14-85c2-24fb650697dd",
+      "started": "2026-11-28T00:29:03Z"
+    }
+  },
   "last": {
     "memory/project.md": "2026-11-24T04:10:31Z",
     "memory/role/creator.md": "2026-11-24T14:25:49Z",
