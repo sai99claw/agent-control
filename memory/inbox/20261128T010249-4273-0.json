@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "verifier",
+  "text": "run_tests.py takes ids relative to the unittest roots (test_release.Class, not tests_devloop.test_release.Class) and reads the project from AC_ROOT: set AC_ROOT to the worktree, or it measures another checkout.",
+  "source": "#142 r1 verifier",
+  "at": "2026-11-28T01:02:49Z"
+}
