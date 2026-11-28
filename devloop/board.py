@@ -440,6 +440,10 @@ def live_release_step(path):
     return logtail.stage(path)
 
 
+LIVE_HOLD_MEMORY = ("記憶體不足:可用 %.1f GiB,低於 devloop.min_free_memory_gib %g GiB;"
+                    "不派新的 agent,也不開新的 regression")
+
+
 def live_pid(rec):
     return (rec.get("stamp") or {}).get("pid")
 
@@ -502,7 +506,7 @@ def live_rows(cfg, snap):
     """One dict per row of the tab (read only: records, their status and their logs)."""
     from core import inflight
     recs = [(name, rec, inflight.status(rec)) for name, rec in inflight.records(cfg)]
-    recs = [(n, r, s) for n, r, s in recs if s != "handed_in"]
+    recs = [(n, r, s) for n, r, s in recs if s != "handed_in" and r.get("kind") != "hold"]
     running = [(n, r) for n, r, s in recs if s == "running"]
     agents = [(n, r) for n, r in running if r.get("kind") == "agent"]
 
@@ -641,6 +645,23 @@ def live_ticket_rows(snap):
     return rows
 
 
+def live_hold_rows(cfg):
+    """One row for a live hold-memory record (the controller holds new work back, #145); a dead one gives none."""
+    from core import inflight
+    rows = []
+    for name, rec in inflight.records(cfg):
+        if rec.get("kind") != "hold" or rec.get("reason") != "memory" or inflight.status(rec) != "running":
+            continue
+        try:
+            text = LIVE_HOLD_MEMORY % (rec["available"] / 2 ** 30, rec["setting"])
+        except (KeyError, TypeError):
+            continue
+        rows.append({"name": name, "kind": "hold", "state": "memory", "text": text, "what": "controller",
+                     "model": "", "attrs": {}, "run_dir": None, "log": None, "tail": False, "rec": rec,
+                     "started": pool_seconds(rec.get("since")), "bare": True})
+    return rows
+
+
 def live_decision_rows(snap, now):
     """One row per card that waits for the user, with a link to the 要你判 tab."""
     rows = []
@@ -705,12 +726,13 @@ def render_live_tab(cfg, snap, key, query, now):
     from core import host as hostmod
     rows = live_rows(cfg, snap)
     ended = [r for r in rows if r["state"] == "ended"]
-    rows = [r for r in rows if r["state"] != "ended"] + live_ticket_rows(snap) + live_decision_rows(snap, now) + ended
+    holds = live_hold_rows(cfg)
+    rows = holds + [r for r in rows if r["state"] != "ended"] + live_ticket_rows(snap) + live_decision_rows(snap, now) + ended
     used = hostmod.slots_in_use(cfg)
     slots_text = None if used is None else "%d/%d" % (used, cfg.machine_slots)
     out = [LIVE_STYLE, '<section><a class="refresh" href="?tab=live">重新整理</a><h2>進行中</h2>']
     from core import inflight
-    if not any(inflight.status(rec) == "running" for _, rec in inflight.records(cfg)):
+    if not holds and not any(inflight.status(rec) == "running" for _, rec in inflight.records(cfg)):
         reason, sentence = live_idle_reason(cfg, snap, now)
         out.append('<p class="why" data-why="%s">%s</p>' % (e(reason), e(sentence)))
     if not rows:

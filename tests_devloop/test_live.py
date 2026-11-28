@@ -2229,6 +2229,37 @@ class T67Acceptance(LoopCase):
             self.assertEqual(self.cell(row, "slots"), "名額 " + slots_attr, a)
 
 
+class HoldRowUnit(unittest.TestCase):
+    """board.live_hold_rows: the GiB text of a live hold-memory record; a dead or odd record gives no row."""
+
+    def rows(self, rec):
+        import board
+        from core import inflight
+        with mock.patch.object(inflight, "records", return_value=[("hold-memory", rec)]):
+            return board.live_hold_rows(None)
+
+    def rec(self, **fields):
+        rec = {"kind": "hold", "reason": "memory", "available": 536870912, "threshold": 2 ** 30, "setting": 1,
+               "since": "2026-01-01T00:00:00Z",
+               "stamp": {"pid": os.getpid(), "host": osx.host(), "boot": osx.boot_id(),
+                         "started": "2026-01-01T00:00:00Z"}}
+        rec.update(fields)
+        return rec
+
+    def test_text_formats_gib_and_setting(self):
+        row = self.rows(self.rec())[0]
+        self.assertEqual(row["text"], "記憶體不足:可用 0.5 GiB,低於 devloop.min_free_memory_gib 1 GiB;"
+                                      "不派新的 agent,也不開新的 regression")
+        self.assertEqual((row["kind"], row["state"], row["what"]), ("hold", "memory", "controller"))
+        row = self.rows(self.rec(available=3 * 2 ** 30 + 2 ** 29, setting=1.5))[0]
+        self.assertIn("可用 3.5 GiB,低於 devloop.min_free_memory_gib 1.5 GiB;", row["text"])
+
+    def test_dead_stamp_gives_no_row(self):
+        stamp = self.rec()["stamp"]
+        stamp["boot"] = "other-boot"
+        self.assertEqual(self.rows(self.rec(stamp=stamp)), [])
+
+
 class T68Acceptance(LoopCase):
     """Acceptance of #68: when no live record is running, the 進行中 tab says in one sentence why
     (p.why with data-why). Expected sentences are the ticket's own."""

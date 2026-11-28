@@ -487,7 +487,7 @@ shows the text of the last such line as its step. The tab has a 重新整理 lin
 every 30 s anyway when nobody types. When no record is running the tab says in one sentence
 (`p.why`, `data-why`) why, the first that holds of: `none` (no work left, nothing waits for the user),
 `decision` (only cards for the user are left), `controller` (no live `controller.lock`), `deps` (every
-ready ticket waits for an unfinished dependency), `dispatch` (the controller picks it up next round).
+ready ticket waits for an unfinished dependency), `dispatch` (the controller picks it up next round). While the controller holds new work back because available memory is below `devloop.min_free_memory_gib`, a live `hold-memory` record gives one row first in the table (`data-kind="hold"`, `data-state="memory"`, what `controller`) that states the available GiB and the setting, with its start and elapsed taken from the record's `since` (no pid, run dir or log); a dead one gives no row, and a live one also suppresses `p.why`.
 
 DAG draws one lane per group; the lane's title is the group id, its state, what runs for it, the
 last regression and the member count (`<n> 張`, `data-members`), and for a group in the chain
