@@ -63,6 +63,14 @@
       "at": "2026-11-28T03:33:06Z",
       "event": "round start",
       "round": 2
+    },
+    {
+      "at": "2026-11-28T03:33:08Z",
+      "event": "rebased",
+      "branch": "t/151",
+      "onto": "int/g14",
+      "base": "ba59b10a1ef56b86e9b3ab3867a614ae0d87ad93",
+      "replayed": 1
     }
   ],
   "cost": [
