@@ -711,6 +711,135 @@ class CasesThrownOut(LoopCase):
         self.assertIsNone(issuer.run_cases({"needs_verifier": False, "cases": None}))
 
 
+class T157Acceptance(LoopCase):
+    """Ticket #157: a revision that changes a running round's work stops that round's agents, the
+    round ends free ('revision'), and the next round's worker and verifier work on the revised ticket."""
+
+    REVISED_MID_ROUND = ("the ticket was revised during this round; the round was stopped and does "
+                         "not count, and the next round works on the revised ticket")
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+        self.config(agent_timeout_seconds=30)
+
+    # ------------------------------------------------------------ helpers
+
+    def prompt(self, rnd, role):
+        return os.path.join(self.tmp, "wt", "runs", "1", "r%d-%s" % (rnd, role), "prompt.md")
+
+    def read_prompt(self, rnd, role):
+        with open(self.prompt(rnd, role)) as fh:
+            return fh.read()
+
+    def ticket_file(self):
+        try:
+            return osx.read_json(os.path.join(self.pool_path, "tickets", "1.json"))
+        except osx.OSFailure:
+            return None    # caught mid-write
+
+    @staticmethod
+    def feedback_event(t, rnd):
+        for h in (t or {}).get("history") or []:
+            if h.get("event") == "feedback" and h.get("round") == rnd:
+                return h
+        return None
+
+    def run_with_revision(self, rnd, role, fb_round):
+        """Run the controller in the background; once r<rnd>-<role>/prompt.md exists, revise #1 the
+        way a worker does. Returns (ticket at the end, seconds from the revise command's return to
+        the round's feedback event, ticket as first seen with that event)."""
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py")], cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        def end():
+            if proc.poll() is None:
+                proc.terminate()
+                proc.communicate(timeout=30)
+        self.addCleanup(end)
+        deadline = time.time() + 60
+        while not os.path.exists(self.prompt(rnd, role)):
+            if time.time() > deadline or proc.poll() is not None:
+                end()
+                self.fail("r%d-%s/prompt.md never appeared" % (rnd, role))
+            time.sleep(0.1)
+        res = self.run_py("ticket_creator.py", "--revise", "1", "--reason", "drop item 2")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        revised_at = time.time()
+        first_seen, delay = None, None
+        while proc.poll() is None:
+            t = self.ticket_file()
+            if self.feedback_event(t, fb_round):
+                first_seen, delay = t, time.time() - revised_at
+                break
+            time.sleep(0.2)
+        out, err = proc.communicate(timeout=240)
+        self.assertEqual(proc.returncode, 0, out + err)
+        t = self.snap().ticket("1")
+        if first_seen is None and self.feedback_event(t, fb_round):
+            first_seen, delay = t, time.time() - revised_at
+        return t, delay, first_seen
+
+    def assert_free_within(self, t, delay, rnd):
+        ev = self.feedback_event(t, rnd)
+        self.assertIsNotNone(ev, "no round-%d feedback event: %r" % (rnd, t.get("history")))
+        self.assertEqual(ev.get("free"), "revision", ev)
+        self.assertLess(delay, 20, "round %d's feedback came %.1f s after the revision" % (rnd, delay))
+
+    # ------------------------------------------------------------ cases
+
+    def test_c1_a_revision_keeping_the_cases_stops_the_worker_and_the_round_is_free(self):
+        self.add(1)
+        self.plan(worker={"1": ["sleep", "ok"]}, creator={"1": ["revised_kept_cases"]})
+        t, delay, seen = self.run_with_revision(1, "worker", 1)
+        self.assert_free_within(t, delay, 1)
+        # the merge clears 'feedback' on landing: read it from the ticket as first seen with the event
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + self.REVISED_MID_ROUND)
+        # the stopped worker's row is written with the round's feedback
+        rows = [(r.get("role"), r.get("round"), r.get("outcome")) for r in seen.get("cost") or []]
+        self.assertIn(("worker", 1, "interrupted"), rows)
+        # no cases were saved in the stopped round
+        hist = t["history"]
+        starts = [i for i, h in enumerate(hist) if h.get("event") == "round start" and h.get("round") == 1]
+        fed = [i for i, h in enumerate(hist) if h.get("event") == "feedback" and h.get("round") == 1]
+        self.assertFalse([h for h in hist[starts[0]:fed[0]] if h.get("event") == "cases ready"], hist)
+        self.assertIn("a possible thing", self.read_prompt(2, "worker"))
+        self.assertIn("a possible thing", self.read_prompt(2, "verifier"))
+        self.assertEqual(t["state"], "landed")
+
+    def test_c2_a_revision_during_a_verifier_only_round_reruns_the_worker(self):
+        self.add(1)
+        self.plan(worker={"1": ["ok"]}, verifier={"1": ["weak", "sleep", "ok"]},
+                  creator={"1": ["revised_kept_cases"]})
+        t, delay, _ = self.run_with_revision(2, "verifier", 2)
+        self.assertFalse(os.path.exists(self.prompt(2, "worker")), "round 2 was meant to run only the verifier")
+        ev = self.feedback_event(t, 2)
+        self.assertIsNotNone(ev, t.get("history"))
+        self.assertEqual(ev.get("free"), "revision", ev)
+        self.assertTrue(os.path.exists(self.prompt(3, "worker")), "round 3 did not start the worker")
+        self.assertIn("a possible thing", self.read_prompt(3, "worker"))
+        self.assertEqual(t["state"], "landed")
+
+    def test_c3_a_revision_while_the_reviewer_runs_stops_the_round(self):
+        self.add(1, complexity="complex")
+        self.plan(reviewer={"1": ["sleep", "pass"]}, creator={"1": ["revised_kept_cases"]})
+        t, delay, _ = self.run_with_revision(1, "reviewer", 1)
+        self.assert_free_within(t, delay, 1)
+        self.assertIn("a possible thing", self.read_prompt(2, "worker"))
+
+    def test_c4_a_cases_wrong_revision_stops_the_round_with_thrown_out(self):
+        import ticket_issuer
+        self.add(1)
+        self.plan(worker={"1": ["sleep", "ok"]}, creator={"1": ["revised"]})
+        t, delay, seen = self.run_with_revision(1, "worker", 1)
+        self.assert_free_within(t, delay, 1)
+        # the merge clears 'feedback' on landing: read it from the ticket as first seen with the event
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + ticket_issuer.THROWN_OUT)
+
+
 class T137Acceptance(LoopCase):
     """Ticket #137 (D-098): before the agents of an issuer round start, t/<N> and t/<N>-cases are the
     target's current head plus only the ticket's own commits; the target sha is recorded in branch_base."""
