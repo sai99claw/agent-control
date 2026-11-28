@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "devloop/README.md is read by paragraph index in tests (test_groups.DagEditUnits.test_item8_docs needs the paragraph right after 'Groups form one chain' to name `actl dag dep`): a doc change near the group paragraphs adds sentences inside an existing paragraph, never a new blank-line paragraph.",
+  "source": "request (opener)",
+  "at": "2026-11-28T09:05:08Z"
+}
