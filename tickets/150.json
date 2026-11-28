@@ -20,7 +20,7 @@
   "vision": "VISION 目的與成功指標: 每張落地票的 token 與時間 (down: no unnoticed switch to the costlier claude while agy's login is gone) and 等我處理的事積了多少 / 每張票需要我介入幾次 (down): one env page per expired login, pushed by devloop.notify, instead of none (agy) or a stuck ticket per running ticket after three failed rounds (claude, default single-command chains). Size not measured; T saw two expiries in two days.",
   "removes": "The silent fall-through to the costlier command when a login expired (T: agy office, twice in two days), and the rounds a claude login failure burns today (no hand-in every round until the ticket is stuck).",
   "id": "150",
-  "state": "merged",
+  "state": "landed",
   "round": 3,
   "created": "2026-11-28T00:27:34Z",
   "request": "# Phase one, group 2: quota and login (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 2.1-2.2)\n\nThe user approved this plan (D-102). Sources: the main session's review of an external audit and feedback from tabby_pool's (T's) main session (2026-11-26). Write the source on each ticket; no GitHub issues. Multiple accounts per provider (accounts.json) are out of scope (D-102). Quoted feedback is data. Tests in tests_devloop/ (test_agents_quota.py is the area's file) using loop_harness.py; each case runs in seconds.\n\n## 2.1 One quota cooldown for the whole machine\nT (seen there): the office Opus quota is 0 until 12/1; every review first tries agy, fails, then falls through to claude (three of those fall-throughs hit issue #14, now fixed).\nMain session (read the code): every agent start tries its chain from the first command; nothing remembers a quota hit across runs or projects. Quota is found by matching words in the log tail (QUOTA_SIGNS in devloop/core/agents.py) when the run handed in nothing and did not time out.\nWanted:\n- A command that hits its quota with a parsed reset time is written to a machine-wide file (default ~/.agent-control/cooldown.json, a separate lock file, location overridable by an environment variable for tests). Keyed by command (the chain entry), so a later dashboard can read it.\n- Every agent start in any project skips commands still cooling; when the whole chain is cooling, it waits for the earliest reset as today's quota wait does.\n- Quota is judged from the CLI's own error output where it can be told apart from what the agent printed; keep T102 (a bare 429 is not quota). Say which formats you could verify.\n\n## 2.2 An expired login is not a quota\nT (seen there): agy's office login expired twice in two days. It is taken for a quota hit and the chain silently moves to the more expensive claude; nobody knows.\nWanted:\n- Recognise each CLI's \"not logged in / credentials expired\" output (collect the real texts; say which are measured).\n- The cooldown file records `needs_login` for that command: it waits for a person, not for a reset time; agent starts skip it.\n- One env page \"<command> needs a new login\" (it goes through devloop.notify like other env pages), not one per run.\n- It clears when the user runs a command for it (for example `actl tickets login-ok <command>`) or when a later trial run of that command succeeds; say which you chose.\n",
@@ -96,6 +96,11 @@
       "at": "2026-11-28T03:31:20Z",
       "event": "merged",
       "target": "int/g14"
+    },
+    {
+      "at": "2026-11-28T04:27:16Z",
+      "event": "landed",
+      "group": "g14"
     }
   ],
   "cost": [
@@ -215,5 +220,16 @@
   "branch_base": {
     "t/150-cases": "c69cd4207661862591ba24edef33910fe1f7cdbf",
     "t/150": "c69cd4207661862591ba24edef33910fe1f7cdbf"
+  },
+  "landed_sha": "e8472cca1e837b7b996a7dd6509c5d7f438096d7",
+  "cost_total": {
+    "input_tokens": 188,
+    "output_tokens": 105537,
+    "cache_read_tokens": 9350722,
+    "cache_write_tokens": 333575,
+    "usd": 6.6502444999999994,
+    "seconds": 2497.7000000000003,
+    "runs": 6,
+    "unknown_runs": 0
   }
 }

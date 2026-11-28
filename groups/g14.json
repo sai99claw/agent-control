@@ -1,7 +1,7 @@
 {
   "id": "g14",
   "branch": "int/g14",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "148",
     "149",
@@ -43,10 +43,17 @@
     {
       "at": "2026-11-28T04:27:12Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-28T04:27:16Z",
+      "event": "landed (release failed)"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
   "main_tried": "35855fb65766fbe207d66914fa1a79c84bb3563d",
   "last_regression": "green",
-  "verified_sha": "e8472cca1e837b7b996a7dd6509c5d7f438096d7"
+  "verified_sha": "e8472cca1e837b7b996a7dd6509c5d7f438096d7",
+  "landed_sha": "e8472cca1e837b7b996a7dd6509c5d7f438096d7",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g14.log"
 }
