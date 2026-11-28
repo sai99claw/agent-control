@@ -22,7 +22,7 @@
   "vision": "VISION, 這份文件是什麼: every mechanism, field and script must map to the vision or be justified with numbers, else downgraded or deleted; and the rule 'add one gate, remove one'. status.py goes from 1211 lines (57 KB, roughly 15k tokens for any agent or code-map reader that opens it) to about 110, and six schema keys nothing reads leave A. Metric: 每張落地票的 token 與時間 (down), by roughly 12k tokens for each agent that reads status.py while working on the test interface or adapter.",
   "removes": "The 39 unused functions and 13 unused constants of scripts/status.py (its whole command line: start, phase, done, failures, suspects, rundir, regression-red, show) and the six config keys only they read (flaky_threshold, flaky_auto_ticket, routing, unit_cmd, regression, regression_auto_ticket) from A's config schema.",
   "id": "170",
-  "state": "ready",
+  "state": "running",
   "round": 0,
   "created": "2026-11-28T10:19:47Z",
   "request": "Phase one, group 6 of the improvement plan: measure first, and subtraction (D-100, D-102). Source: external audit\nP2-2 and P2-5. One group, two tickets.\n\n6.1 Measure the cost of `Pool.snapshot()` on a pool the size of tabby_pool's (about 550 tickets; build a synthetic\npool of that size in the test). Record the measured time in the ticket's result. Only if it is slow (over 0.5 s on\nthis machine per call) add a cache keyed by the pool repo's local HEAD sha, invalidated by any write through Pool;\notherwise add no cache and leave a short note in devloop/README.md with the measured number.\n\n6.2 Remove dead code from scripts/status.py: keep only the functions still used by `testiface.py` and\n`adapter-unittest.py` (find the real callers with grep), and remove the config keys only that dead code read.\nNothing else changes behavior.\n\nvision: the snapshot path is measured before anyone optimizes it, and status.py holds only code something uses.\nremoves: the unused functions of scripts/status.py and the config keys only they read.\n",
@@ -32,6 +32,11 @@
     {
       "at": "2026-11-28T10:19:47Z",
       "event": "opened"
+    },
+    {
+      "at": "2026-11-28T10:31:05Z",
+      "event": "dispatched",
+      "target": "int/g21"
     }
   ],
   "cost": [
@@ -57,5 +62,8 @@
       ]
     }
   ],
-  "group": "g21"
+  "group": "g21",
+  "target": "int/g21",
+  "run": null,
+  "claimed_at": "2026-11-28T10:31:05Z"
 }
