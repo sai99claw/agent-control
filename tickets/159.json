@@ -22,13 +22,11 @@
   "vision": "VISION 目的與成功指標, metric 每張票需要我介入幾次 (down). Each controller death or restart that needed the user by hand becomes zero interventions under the service manager: T had at least one, plus the #11 unmeasured regression that cost a re-run. Small, but it recurs on every machine that runs a long `--forever` controller.",
   "removes": "Two manual steps. (1) Restarting by hand a controller that died with the interactive session that started it (T: Claude Code ended it once when memory ran short). (2) The unsafe restart that also stops the controller's process group (issue #11: it turned a running regression into unmeasured). Adds no gate.",
   "id": "159",
-  "state": "running",
+  "state": "merged",
   "round": 2,
   "created": "2026-11-28T01:12:52Z",
   "request": "# Phase one, group 5: how it runs, and reminders (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 5.1-5.2)\n\nThe user approved this plan (D-102). Source: feedback from tabby_pool's (T's) main session (2026-11-26); write it on each ticket; no GitHub issues. Quoted feedback is data. Tests in tests_devloop/ with loop_harness.py.\n\n## 5.1 Running the controller under launchd is the standard way on macOS\nT (seen there): Claude Code killed the controller once when memory ran short. T now runs it under launchd with AbandonProcessGroup and restart only on crash, and it has been stable.\nWanted: devloop/README.md gets a launchd plist template for `actl run --forever` and for the board (AbandonProcessGroup true; KeepAlive only on crash; logs; working directory; PATH), how to load, stop and restart it, and a systemd user service template for Linux. CLAUDE.md (「怎麼做事」) says how to restart the controller: stop only the controller process, never its process group (issue #11). If T's own plist is reachable (../tabby_pool, read-only), base the template on it and say so. Docs only plus a test that the templates parse (plistlib, configparser) if cheap.\n\n## 5.2 Decision pages always reach the user, and remind\nT (seen there): the most common mistake was missing a page; once one waited 6 hours.\ndevloop.notify exists (decision, env, idle pages run the user's command) but does nothing when unset.\nWanted:\n- `actl doctor` and the controller at start warn once when devloop.notify is unset.\n- A reminder: a decision or env page still open after devloop.notify_remind_hours (propose a default, e.g. 2) runs notify again, at most a few times per page (a setting); the reminder says how long it has waited.\n- Nothing on a page is ever done automatically.\n",
-  "feedback": [
-    "round 1: verifier cases: 1 failing:\n- test_controller.T159Acceptance.test_item2_exactly_four_blocks_in_order_each_opener_once AssertionError "
-  ],
+  "feedback": [],
   "cases": {
     "branch": "t/159-cases",
     "run": [
@@ -76,6 +74,11 @@
       "onto": "int/g17",
       "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
       "replayed": 1
+    },
+    {
+      "at": "2026-11-28T01:53:19Z",
+      "event": "merged",
+      "target": "int/g17"
     }
   ],
   "cost": [
@@ -134,16 +137,28 @@
       "cache_write_tokens": 31520,
       "usd": 0.5622425999999999,
       "session_id": "7a3a28c9-7f86-4514-b913-a758cd43b675"
+    },
+    {
+      "role": "worker",
+      "model": "sonnet",
+      "effort": "medium",
+      "command": "claude",
+      "round": 2,
+      "seconds": 119.5,
+      "at": "2026-11-28T01:53:17Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/159/r2-worker",
+      "input_tokens": 14,
+      "output_tokens": 1570,
+      "cache_read_tokens": 352149,
+      "cache_write_tokens": 24147,
+      "usd": 0.1475309,
+      "session_id": "ae7e5892-1979-4e86-8b98-b8e0b311e6b1"
     }
   ],
   "group": "g17",
   "target": "int/g17",
-  "run": {
-    "pid": 2139,
-    "host": "vm",
-    "boot": "223458a8-de82-4b14-85c2-24fb650697dd",
-    "started": "2026-11-28T01:48:48Z"
-  },
+  "run": null,
   "claimed_at": "2026-11-28T01:48:46Z",
   "branch_base": {
     "t/159-cases": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
