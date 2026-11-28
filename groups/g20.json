@@ -1,7 +1,7 @@
 {
   "id": "g20",
   "branch": "int/g20",
-  "state": "open",
+  "state": "pr",
   "members": [
     "166",
     "167",
@@ -22,6 +22,10 @@
     {
       "at": "2026-11-28T10:16:08Z",
       "event": "main moved to abf49852381e: merged it into int/g20"
+    },
+    {
+      "at": "2026-11-28T10:32:09Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
