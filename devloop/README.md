@@ -239,6 +239,16 @@ of the page file) added to the environment. Nothing waits for it: its output is 
 phone push with ntfy.sh: `"notify": "curl -s -H \"Title: $DEVLOOP_PAGE_KIND $DEVLOOP_PAGE_SUBJECT\" -d \"$DEVLOOP_PAGE_TEXT\" ntfy.sh/my-topic"`.
 In the shell command itself (before JSON escaping) read the variables quoted, as in `curl -s -d "$DEVLOOP_PAGE_TEXT" ntfy.sh/my-topic`.
 
+`devloop.notify_remind_hours` (default `2`, a number of hours > 0; `null` = no reminders) and
+`devloop.notify_remind_max` (default `3`): while a controller runs, every unread `decision` or `env`
+page is pushed again through `devloop.notify` once that many hours have passed since its last push
+(or since its `at` before the first reminder), at most `devloop.notify_remind_max` times. Each reminder
+appends its time to the page key `reminded` (a list of times) and sets `DEVLOOP_PAGE_TEXT` to
+`waiting <h>h <m>m (reminder <k> of <n>): ` followed by the first line of the page's text, where the
+wait counts from `at`. Reminders come only from a running controller: `actl run --forever` sends them
+all the time, a run without `--forever` only while it runs, and with no controller running nothing
+reminds. A reminder never answers or acks a page; the page stays unread and none of its options runs.
+
 The controller follows main itself (#72): before a group's next regression, every integration
 branch whose group is not landed, cancelled or verified, has no job running and exists gets main
 merged in - moved straight to main when it has no commits of its own, otherwise a `--no-ff` merge

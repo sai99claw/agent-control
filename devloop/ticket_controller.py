@@ -181,6 +181,7 @@ class Controller:
         self.forever = bool(forever)
         while not self.stopping:
             busy = self.tick()
+            self.remind()
             if not busy and not forever:
                 self.report_idle()
                 return 0
@@ -202,6 +203,14 @@ class Controller:
             "the controller ended with work left: answer what waits for you, then run it again?",
             [pages.option("ack", "nothing runs until the next `actl run`; each line above says what it waits for")],
             "items that wait for you have pages of their own"))
+
+    def remind(self):
+        """Push unread decision and env pages again when they have waited (Pool.remind); a failed
+        pool write is reported on stderr and the loop goes on."""
+        try:
+            self.pool.remind(self.cfg.notify_remind_hours, self.cfg.notify_remind_max)
+        except osx.OSFailure as exc:
+            print("ticket_controller: reminder failed: %s" % exc, file=sys.stderr)
 
     def tick(self):
         snap = self.pool.snapshot()

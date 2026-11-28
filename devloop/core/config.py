@@ -53,6 +53,9 @@ DEFAULTS = {
     "release": None,                 # required: shell command run at the landed sha
     "release_timeout_seconds": 3600, # time limit of the release command at landing
     "notify": None,                  # shell command run (detached) for every new decision, env or idle page
+    "notify_remind_hours": 2,        # an unread decision or env page is pushed again this many hours after
+                                     # its last push (by a running controller); null = no reminders
+    "notify_remind_max": 3,          # at most this many reminders per page
     "worktree_setup": None,          # D-091 item 10: shell command run in every new worktree devloop
                                      # makes (cwd = the worktree, AC_ROOT = the project); null = nothing
     "base_tests": None,              # D-073 ①: ids of the ~1 minute base set; default tests.unittest.base
@@ -105,6 +108,15 @@ class Config:
         if notify is not None and not (isinstance(notify, str) and notify):
             raise osx.OSFailure("board/config.json devloop.notify must be null or a shell "
                                 "command (a non-empty string), not %r" % (notify,))
+        hours = self.values.get("notify_remind_hours")
+        if hours is not None and not (isinstance(hours, (int, float)) and not isinstance(hours, bool)
+                                      and hours > 0):
+            raise osx.OSFailure("board/config.json devloop.notify_remind_hours must be null or a "
+                                "number of hours > 0, not %r" % (hours,))
+        most = self.values.get("notify_remind_max")
+        if not (isinstance(most, int) and not isinstance(most, bool) and most >= 1):
+            raise osx.OSFailure("board/config.json devloop.notify_remind_max must be a whole number "
+                                ">= 1, not %r" % (most,))
         prices = self.values.get("prices")
         if prices is not None:
             if not isinstance(prices, dict):

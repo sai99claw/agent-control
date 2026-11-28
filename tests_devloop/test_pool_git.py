@@ -243,6 +243,105 @@ class NotifyUnits(LoopCase):
             Config(self.proj)
 
 
+class RemindUnits(LoopCase):
+    """Pool.remind and Controller.remind (#161): reminders for unread decision and env pages."""
+
+    def pool_with(self, rows):
+        from core.config import Config, pool_for
+        self.config(notify="true")
+        pool = pool_for(Config(self.proj)).init()
+
+        def change(tx):
+            for name, row in rows.items():
+                tx.write("inbox/%s.json" % name, row)
+        pool.update(change, "test pages")
+        return pool
+
+    @staticmethod
+    def ago(seconds):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))
+
+    def page(self, kind="decision", age=3 * 3600, **extra):
+        row = {"kind": kind, "ref": "5", "text": "one\ntwo", "at": self.ago(age), "acked": False}
+        row.update(extra)
+        return row
+
+    def test_due_rule(self):
+        pool = self.pool_with({
+            "a-due": self.page(),
+            "b-env": self.page("env"),
+            "c-idle": self.page("idle"),
+            "d-acked": self.page(acked=True),
+            "e-young": self.page(age=3600),
+            "f-bad-at": self.page(at="yesterday"),
+            "g-full": self.page(reminded=[self.ago(9 * 3600)] * 3),
+            "h-recent": self.page(reminded=[self.ago(1800)]),
+            "i-spaced": self.page(age=9 * 3600, reminded=[self.ago(5 * 3600)]),
+        })
+        with mock.patch("core.osx.spawn") as spawn:
+            names = pool.remind(2, 3)
+        self.assertEqual(names, ["a-due", "b-env", "i-spaced"])
+        texts = [c.kwargs["env"]["DEVLOOP_PAGE_TEXT"] for c in spawn.call_args_list]
+        self.assertEqual(texts[0], "waiting 3h 0m (reminder 1 of 3): one")
+        self.assertEqual(texts[2], "waiting 9h 0m (reminder 2 of 3): one")
+        inbox = pool.snapshot().inbox
+        self.assertEqual(len(inbox["i-spaced"]["reminded"]), 2)
+        self.assertNotIn("reminded", inbox["e-young"])
+        before = dict(self.page(), reminded=None)
+        after = dict(inbox["a-due"], reminded=None)
+        self.assertEqual(sorted(after), sorted(before))
+        self.assertFalse(inbox["a-due"]["acked"])
+
+    def test_no_notify_or_no_hours_writes_nothing(self):
+        pool = self.pool_with({"a": self.page()})
+        with mock.patch.object(pool, "update") as update:
+            self.assertEqual(pool.remind(None, 3), [])
+            pool.notify = None
+            self.assertEqual(pool.remind(2, 3), [])
+        update.assert_not_called()
+
+    def test_settings_are_checked(self):
+        from core.config import Config
+        cfg = Config(self.proj)
+        self.assertEqual((cfg.notify_remind_hours, cfg.notify_remind_max), (2, 3))
+        for bad in (0, -1, True, "2", [2]):
+            self.config(notify_remind_hours=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                Config(self.proj)
+            self.assertIn("devloop.notify_remind_hours", str(ctx.exception))
+        for good in (None, 2, 0.5):
+            self.config(notify_remind_hours=good)
+            self.assertEqual(Config(self.proj).values["notify_remind_hours"], good)
+        for bad in (0, -1, True, 1.5, "3", None):
+            self.config(notify_remind_max=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                Config(self.proj)
+            self.assertIn("devloop.notify_remind_max", str(ctx.exception))
+        for good in (1, 3):
+            self.config(notify_remind_max=good)
+            Config(self.proj)
+
+    def test_controller_survives_a_failed_reminder_write(self):
+        import ticket_controller
+        ctl = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        ctl.cfg = mock.Mock(notify_remind_hours=2, notify_remind_max=3, poll_seconds=0)
+        ctl.pool = mock.Mock()
+        ctl.pool.remind.side_effect = osx.OSFailure("disk full")
+        ctl.stopping = False
+        ticks = iter([True, False])
+        with mock.patch.object(ctl, "tick", side_effect=lambda: next(ticks)), \
+                mock.patch.object(ctl, "report_idle") as idle, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err, \
+                mock.patch("time.sleep"):
+            self.assertEqual(ctl.run(), 0)
+        self.assertEqual(ctl.pool.remind.call_count, 2)
+        ctl.pool.remind.assert_called_with(2, 3)
+        idle.assert_called_once_with()
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(line.startswith("ticket_controller: reminder") for line in lines))
+
+
 class AgentControlRelease(GitIsolatedCase):
     """scripts/release.sh, agent-control's own devloop.release: tags the landed commit."""
 

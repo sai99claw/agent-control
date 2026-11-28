@@ -210,6 +210,43 @@ class Pool:
         except (osx.OSFailure, OSError):
             pass
 
+    def remind(self, hours, most):
+        """Push every unread decision or env page again (through notify) when `hours` have passed
+        since its last push, at most `most` times; the push times go in the row's `reminded`.
+        Nothing else on the page changes. Returns the reminded page names."""
+        if self.notify is None or hours is None:
+            return []
+        sent = []
+
+        def change(tx):
+            del sent[:]
+            stamp = osx.now()
+            clock = osx._epoch(stamp)
+            for name in sorted(tx.data.inbox):
+                row = tx.data.inbox[name]
+                if row.get("kind") not in ("decision", "env") or row.get("acked") is True:
+                    continue
+                reminded = row.get("reminded") or []
+                if len(reminded) >= most:
+                    continue
+                try:
+                    born = osx._epoch(row.get("at"))
+                    last = osx._epoch(reminded[-1]) if reminded else born
+                except (TypeError, ValueError):
+                    continue
+                if clock - last < hours * 3600:
+                    continue
+                row = dict(row, reminded=list(reminded) + [stamp])
+                tx.write("inbox/%s.json" % name, row)
+                minutes = int((clock - born) // 60)
+                sent.append((name, row, "waiting %dh %dm (reminder %d of %d): %s" % (
+                    minutes // 60, minutes % 60, len(row["reminded"]), most,
+                    str(row.get("text", "")).split("\n", 1)[0])))
+        self.update(change, "inbox: reminders")
+        for name, row, text in sent:
+            self._notify(row.get("kind"), row.get("ref"), text, name)
+        return [name for name, _, _ in sent]
+
 
 class Tx:
     """What a change function may do: read and write pool files, nothing else."""
