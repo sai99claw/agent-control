@@ -297,6 +297,17 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   `worker_simple` (tickets with `complexity: simple`) sonnet medium, creator opus xhigh,
   consolidator fable then opus. To try `agy` for workers, put it first in the worker chain, e.g.
   `"worker": [["agy", "...", "high"], ["claude", "-p", "--model", "opus", "--effort", "medium", ...]]`.
+- Quota cooldown (machine-wide): a run out of quota whose CLI message has a readable reset writes
+  its command into `~/.agent-control/cooldown.json` (or `$AC_COOLDOWN_FILE`; devloop passes the
+  resolved path to every agent and test run; a flock on the `.lock` file beside it guards each
+  rewrite) until that reset. The key is the program and its `--model` (e.g. `claude opus`; effort
+  and other arguments are left out), so every role and every project on the machine shares it.
+  Every chain start skips a cooling command; the row of the command that runs lists it in
+  `fell_back_from` with outcome `cooling` and its `until`. When every command left is cooling, the
+  issuer, auto_fixer and memory_keeper wait for the earliest `until` (the `waiting` mark and
+  events as above, but no cost row: nothing ran) and then start the chain again; the opener ends at
+  once with its out-of-quota page, the record's text and `until` standing for the message and the
+  reset.
 - A ticket may carry `effort` (low … max); it replaces the worker command's `--effort`.
 - The verifier names every acceptance case `T<id>Acceptance`: the mark must appear in each case's id as the test interface reports it in
   result.json (Python unittest: a class of that name; other runners: the test or file name); the

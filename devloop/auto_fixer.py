@@ -330,9 +330,11 @@ def quota_hook(pool, gid):
             def change(tx):
                 group = tx.data.groups.get(gid)
                 if group is not None:
-                    group.setdefault("cost", []).append(row)
+                    if row is not None:   # None: every command was cooling, nothing ran
+                        group.setdefault("cost", []).append(row)
                     group["waiting"] = mark
-                    event(group, "waiting for quota", role=(row or {}).get("role"), until=mark["until"])
+                    event(group, "waiting for quota", until=mark["until"],
+                          **({"role": row.get("role")} if row else {}))
                     tx.put_group(group)
             pool.update(change, "group %s: fixer waiting for quota" % gid)
         else:

@@ -83,7 +83,8 @@ class AgentChains(LoopCase):
 
     def test_out_of_quota_tries_the_next_command(self):
         agents_cfg = json.load(open(os.path.join(self.proj, "board", "config.json")))["devloop"]["agents"]
-        self.config(agents=dict(agents_cfg, worker=[AGENT, AGENT], worker_simple=[AGENT, AGENT]))
+        chain = [AGENT + ["--model", "a"], AGENT + ["--model", "b"]]
+        self.config(agents=dict(agents_cfg, worker=chain, worker_simple=chain))
         self.add(1)
         self.plan(worker={"1": ["quota", "ok"]})
         res = self.controller()
@@ -329,7 +330,8 @@ class T31Acceptance(LoopCase):
 
     # 8
     def test_a_readable_reset_phrase_alone_marks_out_of_quota(self):
-        self.config(agents=dict(self.agents_cfg(), worker=[AGENT, AGENT], worker_simple=[AGENT, AGENT]))
+        chain = [AGENT + ["--model", "a"], AGENT + ["--model", "b"]]
+        self.config(agents=dict(self.agents_cfg(), worker=chain, worker_simple=chain))
         self.env["FAKE_QUOTA_TEXT"] = "You've hit your limit · resets 3pm"
         self.add(1)
         self.plan(worker={"1": ["quota", "ok"]})
@@ -1341,6 +1343,201 @@ class AgentEnv(LoopCase):
         self.assertEqual([k for k in PARENT_SESSION if k in env], [])
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
 
+
+
+class CooldownUnits(LoopCase):
+    """#149 implementer's tests: core/cooldown.py, the cooling skip and wait in agents.Pending, the
+    hooks with row None, Config.env and the harness."""
+
+    RESET_TEXT = "Error: usage limit reached, resets in 2h"
+    NO_RESET_TEXT = "Error: usage limit reached"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.file = os.environ["AC_COOLDOWN_FILE"]
+
+    def cmd(self, model, script):
+        return ["sh", "-c", "cat >/dev/null; " + script, "sh", "--model", model]
+
+    def cfg(self, worker, **devloop):
+        from core.config import Config
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        self.config(agents=dict(agents_cfg, worker=worker), **devloop)
+        return Config(self.proj)
+
+    def stamp(self, epoch):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+    def write(self, commands):
+        with open(self.file, "w") as fh:
+            json.dump({"version": 1, "commands": commands}, fh)
+
+    def data(self):
+        with open(self.file) as fh:
+            return json.load(fh)
+
+    def test_path_and_key(self):
+        from core import cooldown
+        self.assertEqual(cooldown.path(), self.file)
+        os.environ.pop("AC_COOLDOWN_FILE")
+        self.assertEqual(cooldown.path(), os.path.join(os.path.expanduser("~"), ".agent-control", "cooldown.json"))
+        for argv, want in ((["claude", "-p", "--model", "opus", "--effort", "high"], "claude opus"),
+                           (["/x/agy.sh", "high"], "agy.sh"), (["sh", "-c", "x", "sh", "--model", "m1"], "sh m1"),
+                           (AGENT, "python3"), (["claude", "--model"], "claude")):
+            self.assertEqual(cooldown.key(argv), want)
+
+    def test_missing_or_broken_file_is_no_record_and_the_next_write_replaces_it(self):
+        from core import cooldown
+        os.environ["AC_COOLDOWN_FILE"] = deep = os.path.join(self.tmp, "a", "b", "cooldown.json")
+        self.assertEqual(cooldown.records(), {})
+        os.makedirs(os.path.dirname(deep))
+        for broken in ("{not json", "[1]", '{"commands": 3}'):
+            with open(deep, "w") as fh:
+                fh.write(broken)
+            self.assertIsNone(cooldown.blocking(["sh"], time.time()))
+        cooldown.record_quota(["sh", "--model", "m1"], time.time() + 100, "t", "proj", "worker")
+        with open(deep) as fh:
+            data = json.load(fh)
+        self.assertEqual(data["version"], 1)
+        self.assertEqual(sorted(data["commands"]), ["sh m1"])
+        rec = data["commands"]["sh m1"]
+        self.assertEqual(sorted(rec), ["project", "role", "since", "state", "text", "until"])
+        self.assertEqual((rec["state"], rec["project"], rec["role"]), ("quota", "proj", "worker"))
+        self.assertIsNotNone(cooldown.blocking(["sh", "-x", "--model", "m1"], time.time()))
+
+    def test_the_lock_file_stays_and_a_record_is_replaced(self):
+        from core import cooldown
+        cooldown.record_quota(["sh"], time.time() + 100, "one", "p1", "worker")
+        ino = os.stat(self.file + ".lock").st_ino
+        cooldown.record_quota(["sh"], time.time() + 200, "two", "p2", "reviewer")
+        self.assertEqual(os.stat(self.file + ".lock").st_ino, ino)
+        rec = self.data()["commands"]["sh"]
+        self.assertEqual((rec["text"], rec["project"], rec["role"]), ("two", "p2", "reviewer"))
+
+    def test_a_failed_write_prints_one_line_and_goes_on(self):
+        from core import cooldown
+        blocker = os.path.join(self.tmp, "file")
+        open(blocker, "w").close()
+        os.environ["AC_COOLDOWN_FILE"] = os.path.join(blocker, "cooldown.json")
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            cooldown.record_quota(["sh"], time.time() + 100, "t", "p", "worker")
+        self.assertEqual(len(err.getvalue().strip().splitlines()), 1, err.getvalue())
+
+    def test_expired_records_are_ignored_and_dropped_at_the_next_write(self):
+        from core import cooldown
+        now = time.time()
+        self.write({"old": {"state": "quota", "until": self.stamp(now - 5)},
+                    "live": {"state": "quota", "until": self.stamp(now + 100)}})
+        self.assertIsNone(cooldown.blocking(["old"], now))
+        self.assertIsNotNone(cooldown.blocking(["live"], now))
+        cooldown.record_quota(["new"], now + 50, "t", "p", "worker")
+        self.assertEqual(sorted(self.data()["commands"]), ["live", "new"])
+
+    def test_a_reset_records_and_no_reset_does_not(self):
+        from core import agents
+        fixture = os.path.join(self.tmp, "text")
+        for text in (self.NO_RESET_TEXT, self.RESET_TEXT):
+            with open(fixture, "w") as fh:
+                fh.write(text + "\n")
+            hand = agents.start(self.cfg([self.cmd("m1", "cat %s; exit 1" % fixture)]), "worker", "go",
+                                self.proj, os.path.join(self.tmp, "run"), 30).finish()
+            self.assertEqual(hand.cost["outcome"], "out of quota")
+            if text == self.NO_RESET_TEXT:
+                self.assertFalse(os.path.exists(self.file))
+        rec = self.data()["commands"]["sh m1"]
+        self.assertEqual(rec["text"], self.RESET_TEXT)
+        self.assertAlmostEqual(calendar.timegm(time.strptime(rec["until"], "%Y-%m-%dT%H:%M:%SZ")),
+                               time.time() + 7260, delta=3)
+
+    def test_without_the_hook_a_cooling_chain_returns_at_once(self):
+        from core import agents
+        until = time.time() + 600
+        self.write({"sh m1": {"state": "quota", "until": self.stamp(until), "text": "cools"}})
+        ran = os.path.join(self.tmp, "ran")
+        chain = [["/no/such/agent"], self.cmd("m1", "touch %s" % ran)]
+        began = time.time()
+        hand = agents.run(self.cfg(chain), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30)
+        self.assertLess(time.time() - began, 5)
+        self.assertEqual((hand.result, hand.cost, hand.log), (None, None, None))
+        self.assertEqual(hand.cooling, {"until": int(until), "text": "cools", "command": "sh m1"})
+        self.assertIn("sh m1", hand.problem())
+        self.assertFalse(os.path.exists(ran))
+
+    def test_stop_during_a_cooling_wait_returns_none_and_the_wait_counts_in_waited(self):
+        import threading
+        from core import agents
+        self.write({"sh m1": {"state": "quota", "until": self.stamp(time.time() + 3), "text": "cools"}})
+        seen = threading.Event()
+        calls = []
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append((phase, row))
+            if phase == "wait":
+                seen.set()
+        p = agents.start(self.cfg([self.cmd("m1", 'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"')]),
+                         "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30, on_quota=hook)
+        out = {}
+        th = threading.Thread(target=lambda: out.update(hand=p.finish()))
+        th.start()
+        self.assertTrue(seen.wait(10))
+        time.sleep(0.2)
+        self.assertTrue(p.sleeping)
+        self.assertIsNone(p.stop())
+        th.join(30)
+        self.assertEqual(calls[0], ("wait", None))
+        self.assertGreaterEqual(p.waited, 1.0)     # the issuer's deadline adds p.waited
+        self.assertEqual(out["hand"].kind, "done")
+
+    def test_hooks_take_row_none(self):
+        import auto_fixer
+        import memory_keeper
+        import ticket_issuer
+        from core.config import Config
+        until = time.time() + 60
+        self.add(1, state="running", target="int/g1")
+        ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1").on_quota(
+            "wait", row=None, until=until, text="cools")
+        t = self.snap().ticket("1")
+        self.assertEqual(t.get("cost") or [], [])
+        self.assertEqual(t["waiting"]["until"], self.stamp(until))
+        self.assertEqual(t["history"][-1]["event"], "waiting for quota")
+        self.assertNotIn("role", t["history"][-1])
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "branch": "int/g1", "state": "fixing",
+                                                  "members": [], "fix_round": 1}), "test: g1")
+        auto_fixer.quota_hook(self.pool, "g1")("wait", row=None, until=until, text="cools")
+        g = self.snap().groups["g1"]
+        self.assertEqual(g.get("cost") or [], [])
+        self.assertEqual(g["waiting"]["reason"], "quota")
+        self.assertNotIn("role", g["history"][-1])
+        costs = []
+        memory_keeper.quota_hook(self.pool, "memory/role/worker.md", costs)("wait", row=None, until=until,
+                                                                          text="cools")
+        self.assertEqual(costs, [])
+        self.assertEqual(self.snap().memory_state["waiting"]["path"], "memory/role/worker.md")
+
+    def test_env_and_harness_name_the_file(self):
+        from core.config import Config
+        self.assertEqual(self.file, os.path.join(self.tmp, "cooldown.json"))
+        self.assertEqual(self.env["AC_COOLDOWN_FILE"], self.file)
+        self.assertEqual(Config(self.proj).env(DEVLOOP_ROLE="worker")["AC_COOLDOWN_FILE"], self.file)
+
+    def test_readme_bullet(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            text = fh.read()
+        section = text.split("## Agents, models and tests (D-084)")[1].split("\n## ")[0]
+        bullet = section.split("\n- ")[2]
+        for phrase in ("~/.agent-control/cooldown.json", "AC_COOLDOWN_FILE", ".lock", "`claude opus`",
+                       "`cooling`", "no cost row", "opener"):
+            self.assertIn(phrase, bullet)
 
 class T132Acceptance(LoopCase):
     """#132: a command whose working directory is gone says so, and an agent chain stops there."""

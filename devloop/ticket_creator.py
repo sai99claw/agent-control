@@ -401,16 +401,19 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
         hand = agents.run(cfg, "creator", prompt, cfg.root, run_dir, cfg.agent_timeout_seconds)
         if hand.cost:
             rows.append(hand.cost)
-        if (hand.cost or {}).get("outcome") == "out of quota":
-            seen, at = agents.cli_error(hand.log)
-            reset = agents.quota_reset(seen, at)
+        if hand.cooling or (hand.cost or {}).get("outcome") == "out of quota":
+            if hand.cooling:      # nothing ran: the opener's commands are cooling machine-wide
+                excerpt, reset = hand.cooling["text"], hand.cooling["until"]
+            else:
+                seen, at = agents.cli_error(hand.log)
+                excerpt, reset = agents._excerpt(seen), agents.quota_reset(seen, at)
             if reset is not None:
                 when = ("the limit resets at %s: send the request again after that time with "
                         "`actl new --request`" % time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(reset)))
             else:
                 when = ("the reset time could not be read from the message: send the request again "
                         "once the limit has reset, with `actl new --request`")
-            text = "the opener is out of quota; nothing was opened:\n%s\n%s" % (agents._excerpt(seen), when)
+            text = "the opener is out of quota; nothing was opened:\n%s\n%s" % (excerpt, when)
             pool.report("decision", "request", text, request=request[:2000], cost=rows, **pages.ask(
                 "the opener is out of quota: send the request again after the limit resets?",
                 [pages.option("ack", "nothing was opened; send the request again with `actl new --request` after the limit resets")],
