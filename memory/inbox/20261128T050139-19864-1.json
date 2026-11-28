@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "verifier",
+  "text": "The pool is a git repository: to read a ticket field that a later step clears (feedback is cleared on landing), walk git log of tickets/<id>.json in the pool instead of polling the live file during the run.",
+  "source": "#158 r1 verifier",
+  "at": "2026-11-28T05:01:39Z"
+}

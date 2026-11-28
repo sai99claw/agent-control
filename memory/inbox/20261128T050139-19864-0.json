@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py ids are module paths relative to the unittest roots in board/config.json (test_issuer.X), not package paths (tests_devloop.test_issuer.X fails with ImportError).",
+  "source": "#158 r1 verifier",
+  "at": "2026-11-28T05:01:39Z"
+}
