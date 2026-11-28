@@ -248,7 +248,7 @@ A **reads decisions only from exit codes, `select`'s stdout and `result.json`**,
 |---|---|---|---|---|---|
 | `preflight` | — | — | rc 86: JSON list of `environment_suspect` rows (D-019 seven keys, `source:"declared"`, `log` null); rc 0: ignored | 0 ok · 86 environment suspect · other = rc 2 for the gate ("preflight itself failed") | take longer than its timeout; run tests |
 | `select --mode branch\|base` | — | `branch`: changed files, repo-relative, one per line (A computes them exactly as `gate.sh:1006-1008`); `base`: empty | one item per line: `<id>` or `unmapped <file>`; for `base` the project's fixed set | 0 ok (≥1 line) · 3 nothing selectable (stderr says why) · 0 with empty stdout = rc 2 (§5.5) · other = rc 2 | run tests; write under `reports/`; touch tickets |
-| `run <id>…` | ids from `select` (deduped by A) | — | free (goes to log) | 0 every id pass/skip · 1 any fail/error · 86 environment suspect (rows in `result.json`) · 2 could not run (A also uses 2 when `result.json` is missing/invalid, when rc 0 but zero ids or any fail row, when rc 86 but no rows) | exit 0 with zero ids; claim ids it was not given |
+| `run <id>…` | ids from `select` (deduped by A) | — | free (goes to log) | 0 every id pass/skip/xfail · 1 any fail/error · 86 environment suspect (rows in `result.json`) · 2 could not run (A also uses 2 when `result.json` is missing/invalid, when rc 0 but zero ids or any fail row, when rc 86 but no rows) | exit 0 with zero ids; claim ids it was not given |
 | `full` | — | — | free | same as `run` | — |
 | `regression [--tag t]… [--case path]… \| --list` | tags from the ticket's `verify.tags`; case files from `verify.files`; `--list` prints what would run, one per line | — | free (`--list`: ids) | same as `run`; plus 3 = tags declared but nothing selected (today's `verify.py` rc 3, kept) | — |
 
@@ -281,7 +281,7 @@ A **reads decisions only from exit codes, `select`'s stdout and `result.json`**,
 |---|---|---|
 | `schema` | int | 1; A refuses other values (rc 2) |
 | `ids[].id` | string | opaque; must be rerunnable alone via `run <id>`; the set must equal the ids A passed (`full`/`regression`: whatever ran, ≥1) |
-| `ids[].status` | `pass` / `fail` / `error` / `skip` | `error` = did not reach an assertion (import, setup, crash) |
+| `ids[].status` | `pass` / `fail` / `error` / `skip` / `xfail` | `error` = did not reach an assertion (import, setup, crash); `xfail` = an expected failure that failed (unittest `@expectedFailure`), not red and not a pass |
 | `ids[].message` | string / null | first line; **skip reasons are mandatory** (a skip without a reason is an `error`, §5.5) |
 | `ids[].exception`, `file`, `line` | string / null | the innermost frame **inside the test file**; what verify-case classifies on (C7) |
 | `ids[].seconds` | number / null | per id |

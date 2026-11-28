@@ -512,8 +512,13 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 - The verifier names every acceptance case `T<id>Acceptance`: the mark must appear in each case's id as the test interface reports it in
   result.json (Python unittest: a class of that name; other runners: the test or file name); the
   worker writes unit tests for its own code and never uses that name. Before the cases are used,
-  the issuer runs them on the verifier's branch (old code + cases): every one must fail by its
-  assertion.
+  the issuer runs them on the verifier's branch (old code + cases): every one must have status exactly
+  `fail` (a `pass`, `error`, `skip` or `xfail` row sends them back to the verifier). After the change
+  they count only when the run is green and every row carrying the mark has status exactly `pass`
+  (none ran, or a skip / xfail, ends the round). From round 2 on (cases recorded when the round
+  started, no revision since), the classes and functions whose name holds the mark in the `.py`
+  files must be defined on the ticket branch exactly as on the cases branch (`case_definitions`,
+  compared by `ast.dump`); a worker that changes them gets the round back.
 - The worker runs the verifier's cases, its own unit tests and the base set (`devloop.base_tests`,
   default `tests.unittest.base`) before handing in; the full suite is the regression's.
 - devloop calls only `tests.preflight`, the optional `tests.quick`, `tests.run` and `tests.full` (it

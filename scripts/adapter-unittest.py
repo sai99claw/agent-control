@@ -20,7 +20,7 @@ in a copy that has no adapter next to it.
 `AC_RUN_ID`, `AC_TEST_TIMEOUT` (A enforces it from outside; the adapter only reads its config).
 
 ## Exit codes (one meaning each)
-0 every id pass/skip · 1 any fail/error · 86 `environment_suspect` non-empty (rows in the file; sources: statistical, declared, and
+0 every id pass/skip/xfail · 1 any fail/error · 86 `environment_suspect` non-empty (rows in the file; sources: statistical, declared, and
 `machine` = a fail/error row whose message or traceback names `MACHINE_MARKERS`) ·
 2 could not run (no `AC_TEST_OUT`, zero ids, no code root, nothing discovered) · 3 `select` had
 nothing to select (stderr says why).
@@ -30,7 +30,8 @@ One row per unittest id (`module.Class.method`, rerunnable via `run <id>`). **An
 always comes back**: a name that does not load, loads zero tests, or never ran (setUpClass broke,
 fail-fast stopped the run) becomes an `error` row for that id — a missing row and a green row look
 the same to a reader that only counts reds (§5.5). A skip without a reason is an `error` with message
-`skip without reason` for the same reason. `file` / `line` are the innermost traceback frame inside a
+`skip without reason` for the same reason. A `@unittest.expectedFailure` method whose body fails is
+`xfail` (message `expected failure`), not `pass`; one whose body passes is `fail` (`unexpected success`). `file` / `line` are the innermost traceback frame inside a
 test file under the roots (`tests.unittest.pattern`), relative to `AC_CODE_ROOT` — what verify-case
 classifies on (C7); a helper module's frame is never the answer.
 
@@ -72,10 +73,10 @@ event = status.event
 SCHEMA = 1
 DEFAULT_ROOTS = ["tests"]
 DEFAULT_PATTERN = "test_*.py"
-STATUSES = ("pass", "fail", "error", "skip")
+STATUSES = ("pass", "fail", "error", "skip", "xfail")
 SKIP_WITHOUT_REASON = "skip without reason"
 # Worse wins when one id reports twice (a subTest failure, then a tearDown error).
-RANK = {"pass": 0, "skip": 1, "fail": 2, "error": 3}
+RANK = {"pass": 0, "skip": 1, "xfail": 1, "fail": 2, "error": 3}
 # Peak RSS of one shard process tree, MiB — the divisor of free memory in `process_count` (D-074).
 # Measured #169 A5 (wait4 ru_maxrss per shard over one parallel `full` of this repo at N 3, 4 CPUs):
 # max 49.9 MiB (test_status; regression max 38.7, verify ticket_136; a second run: 50.1 / 38.4,
@@ -327,7 +328,7 @@ class RecordingResult(EnvironmentResult):
 
     def addExpectedFailure(self, test, err):
         super().addExpectedFailure(test, err)
-        self.record(test, "pass", message="expected failure")
+        self.record(test, "xfail", message="expected failure")
 
     def addUnexpectedSuccess(self, test):
         super().addUnexpectedSuccess(test)

@@ -1521,6 +1521,72 @@ class FreeRounds(LoopCase):
                          "conflict, 1 revision); last feedback:\nround 4: last")
 
 
+class CaseDefinitionsGate(LoopCase):
+    """When the round-2 comparison of the cases' definitions runs and when it does not (#166 A8).
+    The worker's round-1 commit adds a .py class named with the mark that the cases branch lacks,
+    so the comparison, when it runs, always differs."""
+
+    PY = {"tests/extra_t1.py": "class T1Acceptance:\n    pass\n"}
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.env["FAKE_WORKER_FILES"] = json.dumps(self.PY)
+
+    def run_one(self, extra=None, **plan):
+        self.add(1, **(extra or {}))
+        self.plan(**plan)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap().ticket("1")
+
+    def feedback(self, t):
+        return [h for h in t["history"] if h["event"] == "feedback"]
+
+    def test_round_two_with_recorded_cases_compares_them(self):
+        # control: the same set-up as the cases below, checked, sends the round back
+        self.config(max_rounds=2)
+        t = self.run_one(extra={"complexity": "complex"}, worker={"1": ["write_files", "ok"]},
+                         reviewer={"1": ["fail", "pass"]})
+        self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "rounds"))
+        self.assertIn("changes the verifier's acceptance cases", t["feedback"][-1])
+        self.assertIn("tests/extra_t1.py T1Acceptance", t["feedback"][-1])
+        self.assertNotIn("free", self.feedback(t)[-1])
+
+    def test_round_one_is_not_compared(self):
+        t = self.run_one(worker={"1": ["write_files"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+
+    def test_a_round_that_started_without_cases_is_not_compared(self):
+        # round 1's cases are refused (they already pass); round 2's verifier writes them anew
+        t = self.run_one(worker={"1": ["write_files", "ok"]}, verifier={"1": ["weak", "ok"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+
+    def test_a_round_with_a_revision_after_its_start_is_not_compared(self):
+        t = self.run_one(extra={"complexity": "complex"}, worker={"1": ["write_files", "revise"]},
+                         reviewer={"1": ["fail", "pass"]}, creator={"1": ["revised_estimate"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+        starts = [i for i, h in enumerate(t["history"]) if h["event"] == "round start"]
+        self.assertTrue(any(h["event"] == "revised" for h in t["history"][starts[-1]:]))
+
+    def test_a_ticket_without_verifier_is_not_compared(self):
+        t = self.run_one(extra={"complexity": "complex", "needs_verifier": False},
+                         worker={"1": ["write_files", "ok"]}, reviewer={"1": ["fail", "pass"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+
+
+class RevisedSinceRoundStart(unittest.TestCase):
+    def test_any_revised_event_after_the_last_round_start(self):
+        import ticket_issuer
+        f = ticket_issuer.revised_since_round_start
+        self.assertFalse(f({}))
+        self.assertFalse(f({"history": [{"event": "revised"}, {"event": "round start"}]}))
+        self.assertTrue(f({"history": [{"event": "round start"}, {"event": "revised"}]}))
+        self.assertTrue(f({"history": [{"event": "round start"}, {"event": "revised", "fields": []},
+                                       {"event": "feedback"}]}))
+
+
 class RevisedMidRound(LoopCase):
     """#157: a revision of the brief (or with cases_wrong) made while a round runs ends that round."""
 

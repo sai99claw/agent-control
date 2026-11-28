@@ -31,6 +31,7 @@ Code index (generated from the code; read it before searching, never edit it): {
    case, as the project's test interface reports that id in result.json. For a Python unittest
    that is a class named `{case_mark}`; for other runners put it in the test's name or its file
    name. This way the cases never collide with the implementer's unit tests.
+   Helpers that only this ticket's cases use go inside the {case_mark} class, not at module level: from round 2 on devloop compares the {case_mark} definitions on the implementer's branch with yours.
 2. Run your cases here, on the code before the ticket: each case must fail by its assertion
    (not by an import error or a missing name - assert that a symbol exists first if needed).
    A script checks this before your cases are used, so a case that passes here, or errors,

@@ -17,7 +17,9 @@ not counted)):
      the issuer waits for them (and for the reviewer in step 4) it reads the ticket every
      devloop.poll_seconds, and a revision that changes the round's work stops the round's agents
      and ends the round, free; the same check runs after the hand-ins and right before step 6
-  2. the verifier's branch is merged into the ticket branch
+  2. the verifier's branch is merged into the ticket branch; from round 2 on (cases recorded
+     when the round started, no revision since) the ticket branch must define the verifier's
+     acceptance cases exactly as the cases branch does (case_definitions), else the round ends
   3. hard_block check on what the ticket changes
   4. reviewer, when the ticket asks for one
   5. the verifier's cases run on the ticket branch
@@ -52,6 +54,7 @@ ticket holds its lock <worktrees>/locks/issuer-<N>.lock), or the ticket is no lo
 """
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -63,7 +66,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import agents, chain, inflight, memory, osx, pages, slots, testrun, ticketlock, worktrees  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.gitx import Git  # noqa: E402
+from core.gitx import Git, GitError  # noqa: E402
 from core.pool import event  # noqa: E402
 import ticket_creator  # noqa: E402
 
@@ -118,6 +121,17 @@ def cases_thrown_out(t):
         elif h.get("event") == "revised" and h.get("cases_wrong"):
             thrown = True
     return thrown
+
+
+def revised_since_round_start(t):
+    """True when any 'revised' event comes after the last 'round start'."""
+    revised = False
+    for h in t.get("history") or []:
+        if h.get("event") == "round start":
+            revised = False
+        elif h.get("event") == "revised":
+            revised = True
+    return revised
 
 
 def free_rounds(t):
@@ -267,6 +281,7 @@ class Issuer:
     def _round(self, t, r):
         costs = self.round_costs = []
         need_cases = t.get("needs_verifier", True) and not (t.get("cases") or {}).get("run")
+        had_cases = t.get("needs_verifier", True) and bool((t.get("cases") or {}).get("run"))
         if need_cases:
             try:
                 worktrees.branch_tree(self.cfg, self.repo, self.cwt, self.cases_branch,
@@ -367,6 +382,10 @@ class Issuer:
             if not ok:
                 return ("merging the verifier's branch %s into %s failed (%s); merge it "
                         "yourself and resolve" % (cases["branch"], self.branch, why)), costs
+        if r >= 2 and had_cases and cases.get("branch") and not revised_since_round_start(self.ticket()):
+            changed = self.cases_changed(g, cases["branch"])
+            if changed:
+                return changed, costs
 
         self.hard_block(g)
 
@@ -618,6 +637,20 @@ class Issuer:
             time.sleep(1)
         return "%s kept moving while merging; try again" % self.target
 
+    def cases_changed(self, g, cases_branch):
+        """What the ticket branch changed in the verifier's acceptance cases, or None."""
+        mark = case_mark(self.id)
+        mine = case_definitions(g, g.sha("HEAD"), mark)
+        theirs = case_definitions(self.repo, self.repo.sha(cases_branch), mark)
+        keys = sorted((k for k in set(mine) | set(theirs) if mine.get(k) != theirs.get(k)),
+                      key=lambda k: (k[0], k[1] or ""))
+        if not keys:
+            return None
+        return ("this branch changes the verifier's acceptance cases (%s): %s; put them back as "
+                "they are on %s, or hand in revise if the cases are wrong"
+                % (mark, ", ".join("%s %s" % (p, n or "(does not parse)") for p, n in keys[:10]),
+                   cases_branch))
+
     def run_cases(self, t):
         ids = (t.get("cases") or {}).get("run") or []
         if not ids:
@@ -633,6 +666,13 @@ class Issuer:
         finally:
             slot.release()
         if out.status == testrun.GREEN:
+            mark = case_mark(self.id)
+            mine = [r for r in out.rows if mark in str(r.get("id"))]
+            if not mine:
+                return "verifier cases: no acceptance case named %s ran" % mark
+            bad = ["%s (%s)" % (r.get("id"), r.get("status")) for r in mine if r.get("status") != "pass"]
+            if bad:
+                return "verifier cases: these cases did not pass: %s" % ", ".join(bad[:10])
             return None
         if out.status == testrun.ENV:
             raise Stuck("env", out.summary())
@@ -680,6 +720,10 @@ class Issuer:
         if errors:
             return ("these cases fail with an error instead of their assertion (import error or "
                     "missing name - assert the symbol exists first): %s" % ", ".join(errors[:10]))
+        other = ["%s (%s)" % (r.get("id"), r.get("status")) for r in mine if r.get("status") != "fail"]
+        if other:
+            return ("these cases did not fail on the code before the change (each must fail by its "
+                    "assertion, not skip or be an expected failure): %s" % ", ".join(other[:10]))
         return None
 
     def hard_block(self, g):
@@ -919,6 +963,32 @@ def case_mark(ident):
     """The name every acceptance case of ticket N carries, so the verifier's cases and the
     implementer's unit tests never collide (D-084 Q8) and the red check can find them."""
     return "T%sAcceptance" % ident
+
+
+def case_definitions(git, rev, mark):
+    """{(path, name): [ast.dump, ...]} of every class / function whose name contains mark, in the
+    .py files at rev (a sha) that contain mark; a file that does not parse is (path, None):
+    ["SyntaxError ..."]. Line numbers, comments and order of definitions do not count."""
+    res = git.run("grep", "-l", "-F", mark, rev, "--", "*.py", check=False)
+    if res.rc == 1:
+        return {}
+    if not res.ok:
+        raise GitError("git grep failed at %s: %s" % (rev, (res.err or res.out).strip()))
+    found = {}
+    for line in res.out.splitlines():
+        path = line[len(rev) + 1:] if line.startswith(rev + ":") else line
+        if not path:
+            continue
+        source = git.run("show", "%s:%s" % (rev, path)).out
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            found[(path, None)] = ["SyntaxError: %s" % exc]
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and mark in node.name:
+                found.setdefault((path, node.name), []).append(ast.dump(node))
+    return found
 
 
 BRIEF_KEYS = ("id", "title", "objective", "acceptance", "outline", "test_plan", "needs_verifier",
