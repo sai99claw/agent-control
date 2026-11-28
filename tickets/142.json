@@ -39,6 +39,11 @@
       "at": "2026-11-28T00:27:58Z",
       "event": "dispatched",
       "target": "int/g12"
+    },
+    {
+      "at": "2026-11-28T00:28:00Z",
+      "event": "issuer started",
+      "target": "int/g12"
     }
   ],
   "cost": [
@@ -70,6 +75,11 @@
   ],
   "group": "g12",
   "target": "int/g12",
-  "run": null,
+  "run": {
+    "pid": 4273,
+    "host": "vm",
+    "boot": "223458a8-de82-4b14-85c2-24fb650697dd",
+    "started": "2026-11-28T00:27:59Z"
+  },
   "claimed_at": "2026-11-28T00:27:58Z"
 }
