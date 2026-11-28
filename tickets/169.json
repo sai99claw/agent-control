@@ -1,0 +1,59 @@
+{
+  "title": "Pool.snapshot() cost on a 550-ticket pool is measured by a test and recorded in devloop/README.md",
+  "objective": "devloop/README.md records the measured cost of one Pool.snapshot() call on a 550-ticket pool, measured by a test that builds such a pool, as the reason the snapshot has no cache.",
+  "outline": "tests_devloop/test_pool_git.py: new class at the A1 spot; add `import statistics` to the imports (time, json, os, shutil, tempfile, subprocess are already imported; use the module's `git(cwd, *args)` helper from loop_harness for the clone commands, as PoolRules does). Use self.tmp = tempfile.mkdtemp(prefix=\"snapshot-cost-\") with addCleanup(shutil.rmtree, ..., ignore_errors=True). devloop/README.md: the A7 bullet only; no other README line changes (tickets in g19 and g20 edit the `**Pages**` bullet of the same section, the 'What the main session runs' table and the service section; this bullet sits six bullets above `**Pages**`). Suggested bullet shape (fill in your own measured numbers): \"- **Pool reads are not cached**: `Pool.snapshot()` takes the pool lock, syncs (with a remote: `git fetch` and `git reset --hard`) and reads every file on every call. Measured YYYY-MM-DD on N cores with a synthetic pool of 550 tickets, 160 groups and 300 pages (X MB of JSON): A s per call (median of 5, max B s), C s of it reading the files. A cache keyed by the pool repo's local HEAD sha, dropped by any write through `Pool`, would be added only above 0.5 s per call (D-102 group 6.1); a remote pool's network fetch is not in this number and such a cache would not save it. Rerun: `python3 -m unittest tests_devloop.test_pool_git.SnapshotCost` from the repo root (the numbers are printed on stderr).\" Premise measured by the opener on 2026-11-28 (this machine, 4 cores, load average about 1.3, HEAD 4797416, a scratch benchmark of the same shape with a local bare remote): snapshot() median 0.059-0.074 s, max 0.127-0.145 s; read part median 0.050-0.056 s; sync part median 0.013-0.021 s; 550 tickets of 15-25 KB compact JSON, 9.1-14.5 MB in all. Not measured: a fetch from a network remote. Out of scope: any cache, any change to Pool or to the board's own snapshot cache (devloop/board.py), the fetch throttling the improvement plan puts in phase two (7.3), a permanent time bound.",
+  "test_plan": "No verifier: the change touches no product code (a test and a README bullet), so no case can be red before it. The implementer writes A1-A5 and the A7 bullet, checks A6 with `git diff <base> -- devloop/core/pool.py` (empty), and runs `python3 \"$AC_HOME/devloop/run_tests.py\" test_pool_git.SnapshotCost test_issuer.T27Acceptance.test_the_readme_contracts_say_merged_and_landed_are_frozen test_project_config test_no_project_names` (the second id reads the Contracts bullets of devloop/README.md). Then run `python3 -m unittest tests_devloop.test_pool_git.SnapshotCost` once from the worktree root with DEVLOOP_ROLE, DEVLOOP_RESULT, DEVLOOP_RUN_DIR, DEVLOOP_SLOT and DEVLOOP_TICKET unset, take the printed `snapshot cost:` line, and write those numbers into the A7 bullet and into the hand-in summary. Mutation to run once by hand (unmeasured by the opener): in devloop/core/pool.py `_read_all`, change `names = sorted(os.listdir(folder))` to `names = sorted(os.listdir(folder))[:-1]` - the A5 count assertion must turn red; restore pool.py from a copy saved before the mutation (check its sha256), not with git checkout, and commit before handing in.",
+  "notes": "Group: new-g1, with the status.py ticket of this hand-in: the request asks for plan group 6 as one group; neither ticket conflicts with the open groups g19 / g20, and each plan group so far has its own devloop group. Record the measured numbers in your `done` summary too: the request asks for the measured time in this ticket's result. If your measured snapshot() median is over 0.5 s, do not add a cache in this ticket: hand in `revise` with the stderr line (the cache would be another ticket). Code and tests must not name the other project whose pool size this mimics (tests/test_no_project_names.py forbids its name in every non-.md file); say 'a pool the size of the largest project's (about 550 tickets)'. Words the merge stop matches in any added line, the README included: the Python call that sends a process a signal through the os module, the group-signal function, the pattern-match process killer, and the shell command for signals followed by a space and a dash; none is needed here. Do not edit the decisions file or the vision file under docs/.",
+  "acceptance": [
+    "A1 tests_devloop/test_pool_git.py has a class `SnapshotCost(GitIsolatedCase)` with one test method `test_snapshot_of_a_550_ticket_pool`, placed between `class PoolRules(GitIsolatedCase)` and `class ShownState(unittest.TestCase)`.",
+    "A2 The test builds the pool with a remote, the production shape, so every snapshot() call runs the remote path (pool lock, git fetch, git reset --hard to the upstream, read every file): a seed `Pool(<tmp>/seed, remote=None).init()`, the fixture files of A3 written into it with `osx.write_json` (indent 2, as the pool writes), one `git add -A` and one commit, `git clone -q --bare` of the seed as `<tmp>/remote.git`, a `git clone -q` of that as `<tmp>/a`, measured as `Pool(<tmp>/a, remote=\"origin\")` (the same steps as `PoolRules.setUp` / `_clone`). Files are written directly, never through 550 `Pool.update` calls.",
+    "A3 Fixture, built by one staticmethod of the class (the expected ticket of A5 comes from it, not from the pool): tickets/1.json .. tickets/550.json, ticket n = {\"id\": str(n), \"title\": \"ticket %d\" % n, \"state\": \"landed\", \"group\": \"g%d\" % ((n - 1) % 160 + 1), \"objective\": 200 filler characters, \"acceptance\": 8 strings of 300 filler characters, \"outline\": 4000 filler characters, \"test_plan\": 2000 filler characters, \"history\": 50 rows {\"at\": \"2026-11-28T00:00:00Z\", \"event\": 120 filler characters}} (about 17 KB on disk each; this project's own pool's ticket files are 16,590 bytes on average, 26,338 at most, 69 files, measured 2026-11-28); groups/g1.json .. groups/g160.json, group k = {\"id\": \"g%d\" % k, \"branch\": \"int/g%d\" % k, \"state\": \"landed\", \"members\": three ticket ids, \"history\": 10 rows of the same shape}; 300 pages inbox/p<i>.json (i = 1..300) = {\"kind\": \"landed\", \"ref\": \"g%d\" % ((i - 1) % 160 + 1), \"text\": 300 filler characters, \"at\": \"2026-11-28T00:00:00Z\", \"acked\": true}; dag.json = {\"tickets\": {str(n): {\"depends_on\": []} for n in 1..550}}.",
+    "A4 The test makes one warm-up snapshot() call, then times 5 snapshot() calls and then 5 `pool._read_all()` calls (the read part: what a cache keyed by the pool's HEAD sha would save) with time.perf_counter, and writes exactly one line to sys.stderr that starts with `snapshot cost: ` and names the counts (550 tickets, 160 groups, 300 pages), the total bytes of the pool's *.json files, the median and max seconds of snapshot() and the median seconds of the read part (3 decimals each), and os.cpu_count().",
+    "A5 The test asserts that the last snapshot has exactly 550 tickets, 160 groups and 300 inbox pages and that `snap.tickets[\"275\"]` equals the fixture dict for ticket 275. It asserts no time bound.",
+    "A6 devloop/core/pool.py is unchanged on the ticket branch (no cache).",
+    "A7 devloop/README.md, section `## Contracts`: a new bullet right after the bullet that begins `- **Pool**:` and right before the bullet that begins `- **Agents**`, beginning `- **Pool reads are not cached**:`. It states, as measured by the A1 test on this machine: the date, the core count, the pool (550 tickets, 160 groups, 300 pages, total MB), the median and max seconds of one snapshot() call and the median seconds of the read part; that 0.5 s per call is the line above which a cache would be added (D-102 group 6.1: keyed by the pool repo's local HEAD sha, dropped by any write through Pool); that a remote pool's network fetch is not in the number and such a cache would not save it; and the rerun command `python3 -m unittest tests_devloop.test_pool_git.SnapshotCost` (from the repo root; the line is printed on stderr). The bullet does not contain the word `frozen`."
+  ],
+  "needs_verifier": false,
+  "complexity": "simple",
+  "token_estimate": 500000,
+  "token_basis": "Read devloop/core/pool.py (410 lines), the top of tests_devloop/test_pool_git.py and PoolRules, loop_harness GitIsolatedCase, the Contracts section of devloop/README.md; write one ~80-line test class and one README bullet; three short test runs (the new class takes about 2-3 s). Calibrated on landed simple tickets without a verifier (#140, #152, #153, #155: 357k-613k tokens including cache reads).",
+  "vision": "VISION, 目的與成功指標, metric 每張落地票的 token 與時間 (down), and the rule that a mechanism needs a number to justify it: the snapshot cost (audit P2-2, judged 未量) gets a measured number before anyone optimizes it. The opener's own measurement is about 0.07 s per call, about 7x under the 0.5 s line, so no cache ticket (estimated 1-2M tokens and one more regression) is spent and nobody reopens the question without the README number.",
+  "removes": "none: the ticket adds no gate (the new test asserts structure only, no time bound) and no cache; what it retires is the open question 'is snapshot slow' (audit P2-2, 未量), answered by a recorded number.",
+  "id": "169",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-28T10:19:47Z",
+  "request": "Phase one, group 6 of the improvement plan: measure first, and subtraction (D-100, D-102). Source: external audit\nP2-2 and P2-5. One group, two tickets.\n\n6.1 Measure the cost of `Pool.snapshot()` on a pool the size of tabby_pool's (about 550 tickets; build a synthetic\npool of that size in the test). Record the measured time in the ticket's result. Only if it is slow (over 0.5 s on\nthis machine per call) add a cache keyed by the pool repo's local HEAD sha, invalidated by any write through Pool;\notherwise add no cache and leave a short note in devloop/README.md with the measured number.\n\n6.2 Remove dead code from scripts/status.py: keep only the functions still used by `testiface.py` and\n`adapter-unittest.py` (find the real callers with grep), and remove the config keys only that dead code read.\nNothing else changes behavior.\n\nvision: the snapshot path is measured before anyone optimizes it, and status.py holds only code something uses.\nremoves: the unused functions of scripts/status.py and the config keys only they read.\n",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-28T10:19:47Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 422.5,
+      "at": "2026-11-28T10:19:45Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-28T100540Z-a1",
+      "input_tokens": 61,
+      "output_tokens": 38753,
+      "cache_read_tokens": 4644085,
+      "cache_write_tokens": 101149,
+      "usd": 2.513313,
+      "session_id": "ad6d7955-b50b-449d-b0ed-337af555a6e4",
+      "split_over": [
+        "169",
+        "170"
+      ]
+    }
+  ],
+  "group": "g21"
+}
