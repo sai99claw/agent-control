@@ -1,0 +1,7 @@
+{
+  "kind": "created",
+  "ref": "159,160,161",
+  "text": "opened #159 devloop/README.md has launchd and systemd templates for `actl run --forever` and the board, with the restart that stops only the controller; #160 `actl doctor` and every controller start warn once when devloop.notify is unset; #161 An unread decision or env page is pushed again through devloop.notify every 2 hours, at most 3 times, saying how long it has waited",
+  "at": "2026-11-28T01:12:56Z",
+  "acked": false
+}
