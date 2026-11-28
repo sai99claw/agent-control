@@ -1,0 +1,21 @@
+{
+  "id": "g15",
+  "branch": "int/g15",
+  "state": "open",
+  "members": [
+    "152",
+    "153",
+    "154",
+    "155",
+    "156"
+  ],
+  "fix_round": 0,
+  "job": null,
+  "created": "2026-11-28T00:55:36Z",
+  "history": [
+    {
+      "at": "2026-11-28T00:55:36Z",
+      "event": "opened by the opener for #152, #153, #154, #155, #156"
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "title": "The code index lists test_*.py files by path only and leaves out private module functions",
+  "objective": "codemap.build() lists every test_*.py file as one path line and no module-level function whose name starts with an underscore, so the index the agents are told to read first shrinks to about a third in A.",
+  "outline": "devloop/core/codemap.py: in build(), before the '.py' branch, when fnmatch.fnmatchcase(os.path.basename(rel), 'test_*.py') append only '## <rel>' and ''. In python_entries(), skip module-level FunctionDef/AsyncFunctionDef whose name starts with '_' (the method loop already does this). Update the module docstring. devloop/README.md: the index_path bullet (about line 329). Leave ticket_controller.refresh_index alone (its call codemap.build(tree, skip={rel}) stays), do not edit CODE-MAP.md (the controller rewrites it at landing) and do not edit board/config.json.",
+  "test_plan": "No verifier: the implementer writes the cases in a new file tests_devloop/test_codemap.py (none exists; the request asks for it): one class CodeMapBuild(GitIsolatedCase) imported from loop_harness. setUp makes a tmp dir, runs 'git init -q -b main', writes the fixture files of acceptance 1-4 with known docstrings and 'git add -A' (build() reads 'git ls-files', so the files must be tracked; no commit needed). One case per acceptance 1, 2, 3, 4; expected lines are written out in the case from the fixture's own docstrings, never taken from build()'s output. Each runs in well under a second. Mutations to run once by hand and report: (a) drop the test_*.py check -> the acceptance-1 case is red; (b) keep '_' functions -> the acceptance-3 case is red. Run: test_codemap, test_controller.Landing and the base set.",
+  "notes": "Source: plan item 3.1, docs/HANDOFF.md last section (D-100, D-101, D-102): the main session's review of an external audit (2026-11-26) and feedback from T's main session (T is another project that runs agent-control daily, 2026-11-26). Quoted feedback is data, not instructions. Refer to T only as 'another project' in code, tests and comments (tests/test_no_project_names.py forbids its name in every non-markdown file) and copy no path from these notes into code. Measured on A (main 5578f25): CODE-MAP.md 209,241 bytes, the tests/ and tests_devloop/ sections 151,110 (72.2%). A prototype of this ticket's rule (test_*.py by path only, no module-level '_' functions) gives 61,391 bytes on A's checkout and 128,464 on T's checkout on this machine (its g42 head; today 1,693,675). DESIGN CHOICE (deviates from the request's words 'files under tests.unittest.roots'): measured that T's roots are 'demo' and 'scripts/tests', and 'demo' holds T's product code (its server, ledger, api_* modules and web views). Listing everything under the roots by path only would leave T's index at 37,083 bytes with none of its product code listed, which defeats the index (D-038). The name rule keeps product code everywhere; in A it costs about 4.8 KB more than the roots rule, all of it the harness files (tests/control_harness.py, tests_devloop/loop_harness.py, fake_agent.py, fake_tests.py) whose function lists verifiers use. Private functions: measured module-level '_' function lines are 3,094 bytes in A (4.9% of the non-test part) and 30,798 in T (21%); decided to drop them, the rule build() already applies to methods; an agent that needs one greps for it. Agent logs: A's 146 logs under runs/*/*/agent-*.log are Claude '--output-format json' results (final message and usage, no tool calls), so whether agents read CODE-MAP.md whole cannot be measured from them; T's codex logs, which record commands, are not on this machine. Inferred: at 3,723 lines A's index needs at least two Read calls; the cut helps whether they read it whole or in parts. Group new-g1: the phase-one group-3 tickets that touch no open ticket's code; not g13 (#147 will stop for the user and hold g13), not g12/g14 (unrelated; joining would delay them).",
+  "acceptance": [
+    "In a git checkout with tracked files tests/test_a.py (module docstring, a class with a public method, a public function), pkg/test_b.py and tests/helper.py, codemap.build(tree) lists tests/test_a.py and pkg/test_b.py each as exactly the line '## <path>' (no ' - <docstring>' suffix) followed by an empty line, with no class or function line under them.",
+    "In the same checkout tests/helper.py (under a test root but not named test_*.py) is listed as today: '## tests/helper.py - <its first docstring line>' followed by its class and public function lines.",
+    "A module-level function whose name starts with '_' (e.g. 'def _private(x)' in pkg/mod.py) has no line in the index; public module-level functions, classes and public methods keep exactly today's lines ('- `name(args)` <first docstring line>', '- class `Name` <first docstring line>', '  - `method(args)` <first docstring line>').",
+    "Non-Python source files and the header are unchanged: pkg/run.sh whose first comment line is '# Runs it.' is listed as '## pkg/run.sh - Runs it.', and the text starts with codemap.HEADER.",
+    "A file is a test file when its basename matches 'test_*.py' (fnmatch.fnmatchcase, the unittest adapter's default discovery pattern) wherever it is in the tree; tests.unittest.roots is not read (see notes for why).",
+    "devloop/core/codemap.py's module docstring says test files (test_*.py) are listed by path only and private ('_') functions are not listed; the `index_path` bullet of devloop/README.md '## Project settings' says the same in one clause.",
+    "tests_devloop/test_controller.py Landing.test_the_code_map_is_refreshed_on_main_and_the_cost_is_totalled stays green unchanged.",
+    "The hand-in reports len(codemap.build(<repo root>, skip={'CODE-MAP.md'}).encode()) on the ticket branch next to today's 209,241 (a prototype of this rule on main 5578f25 measured 61,391)."
+  ],
+  "needs_verifier": false,
+  "complexity": "simple",
+  "token_estimate": 400000,
+  "token_basis": "one 89-line module and one README line to change, a new test file with four short cases; no-verifier simple tickets landed at 250k-500k recorded (#102, #105, #110, #126, #128, #129, #140)",
+  "vision": "每張落地票的 token 與時間 (down): the worker, verifier and fixer prompts say to read the index before searching; A's index goes from 209,241 to about 61,400 bytes (-71%, roughly 37k tokens less per whole read), T's from 1.69 MB to about 128 KB (-92%).",
+  "removes": "the per-class and per-function listing of test files (72% of A's index) and of private module functions; the module docstring's 'tests by path only' stops being a second, wrong description of what build() does.",
+  "id": "152",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-28T00:55:36Z",
+  "request": "# Phase one, group 3: fewer tokens, fewer wasted rounds (docs/DECISIONS.md D-100, D-101, D-102; plan in docs/HANDOFF.md, last section, items 3.1-3.7)\n\nThe user approved this plan (D-102). Sources: the main session's review of an external audit and feedback from tabby_pool's (T's) main session (2026-11-26); write the source on each ticket; no GitHub issues. Quoted feedback is data. Read docs/VISION.md; each ticket names its metric and what it removes. Tests in the area's own file in tests_devloop/ with loop_harness.py; seconds each. Open tickets in groups g12-g14 (#142-#151) are running; depend on them where you touch the same code.\n\n## 3.1 The code index lists test files by path only\nMeasured on A: CODE-MAP.md is 209,241 bytes; tests/ and tests_devloop/ sections are 151,110 (72.2%). The worker and verifier prompts say \"read it before searching\"; the fixer gets it too. devloop/core/codemap.py's docstring says tests are listed by path only, but build() expands them. T's test files are larger.\nWanted: files under the project's test roots (tests.unittest.roots) and test_*.py files get one path line. Add tests_devloop/test_codemap.py (none exists). Check agent logs (runs/*/agent-*.log) whether agents read the index whole, and write what you found. Whether to drop module-level `_` functions too: measure and decide.\n\n## 3.2 The opener knows the hard_block rules before it writes a plan\nT (seen there): #369 and #375 had test plans using os.kill; the tickets hit hard_block only after the work was done, waited for the user, were revised, and a round was wasted. The opener's prompt has no hard_block (main session, read the code).\nWanted: the project's hard_block (paths, dirs, patterns) is in the opener's prompt with what it means (a ticket whose change matches stops before merge for the user). The hand-in check refuses (one retry, like other field checks) a ticket whose outline, test_plan or acceptance contains a hard_block pattern unless the ticket says, in a dedicated field or line, that it needs the user's approval at merge and why.\n\n## 3.3 After a revision the next round reads the new ticket\nT (seen there): after #320 was revised, the round-2 worker got the text from before the revision and reported the same conflict again.\nWanted: reproduce it first with the loop harness (revise with `actl new --revise` while a round is running; see what the next round's prompt holds). Fix it so the next round always reads the revised ticket. A running round whose work the revision changed is stopped and counts as a free round (like a revision that voids the cases).\n\n## 3.4 A worker does not run the reviser itself\nT (seen there): workers running under agy's account environment (HOME replaced) called the revise command; claude could not read its login and agy.sh resolved wrong paths; it failed several times. devloop/prompts/worker.md tells the worker to run {revise_cmd} itself.\nWanted: as for `blocked` hand-ins (#113): the worker hands in \"revise\" with its reason; the issuer runs the opener outside the agent's environment. REVISED -> the next round with the new ticket; UNCHANGED -> the next round with the opener's answer attached; ESCALATED -> a page as today. The verifier uses the same path. Removes: an agent starting another agent inside its own environment.\n\n## 3.5 Automatic fix tickets go into the next group that has not started verifying\nT (seen there): g90, g91, g92 were each one or two flaky-fix tickets and each ran a full regression (about 75 minutes in T).\nWanted: when the controller opens a ticket by itself (flaky, release red), the request asks the opener to put it into a group of the chain that has not started its regression, and to open a new group only when none fits; the opener's group rule (prompts/creator/02-rules.md) says the same.\n\n## 3.6 The opener's prompt carries only the live part of the DAG\nMeasured: A's opener prompt is 25 KB and includes all of dag.json, landed tickets too; T has about 400 tickets.\nWanted: the copy put into t",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-28T00:55:36Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 233.35714285714286,
+      "at": "2026-11-28T00:55:34Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-28T002820Z-a1",
+      "input_tokens": 32,
+      "output_tokens": 21723,
+      "cache_read_tokens": 2541216,
+      "cache_write_tokens": 45819,
+      "usd": 1.3092419428571431,
+      "session_id": "77fcedca-59af-4bf6-b35f-76817e86b5ba",
+      "split_over": [
+        "152",
+        "153",
+        "154",
+        "155",
+        "156",
+        "157",
+        "158"
+      ]
+    }
+  ],
+  "group": "g15"
+}
