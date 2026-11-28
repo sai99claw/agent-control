@@ -1921,5 +1921,318 @@ class T101Acceptance(LoopCase):
         self.assertRegex(text, r'"\$DEVLOOP_PAGE(_\w+)?"|"\$\{DEVLOOP_PAGE')
 
 
+class T161Acceptance(LoopCase):
+    """#161: an unread decision or env page is pushed again through devloop.notify every
+    notify_remind_hours (default 2), at most notify_remind_max (default 3) times. Expected values
+    come from the ticket text (format, defaults 2 and 3), not from the code."""
+
+    STAMP = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$"
+    TEXT = "first line\nsecond line"
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+        self.out = os.path.join(self.tmp, "notified.txt")
+
+    # ------------------------------------------------------------ helpers
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def notify_pool(self):
+        from core.config import pool_for
+        return pool_for(self.cfg())
+
+    def wait_for(self, cond, seconds=10.0):
+        end = time.time() + seconds
+        while time.time() < end:
+            if cond():
+                return True
+            time.sleep(0.05)
+        return cond()
+
+    def recording(self, **extra):
+        self.config(notify='printf "%%s\\n" "$DEVLOOP_PAGE_KIND|$DEVLOOP_PAGE_SUBJECT|'
+                           '$DEVLOOP_PAGE_TEXT" >> \'%s\'' % self.out, **extra)
+
+    def lines(self):
+        try:
+            with open(self.out) as fh:
+                return fh.read().splitlines()
+        except OSError:
+            return []
+
+    @staticmethod
+    def ago(seconds):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))
+
+    def page(self, kind, ref, **extra):
+        """A page through Pool.report (its first push goes to the file when notify is set)."""
+        return self.notify_pool().report(kind, ref, self.TEXT, **extra)
+
+    def age(self, ages):
+        """ages: {name: (at_seconds_ago or None to delete `at`, [reminded seconds ago] or None, extra)}"""
+        def change(tx):
+            for name, spec in ages.items():
+                at, reminded = spec[0], spec[1]
+                extra = spec[2] if len(spec) > 2 else {}
+                row = dict(tx.data.inbox[name])
+                if at is None:
+                    row.pop("at", None)
+                else:
+                    row["at"] = self.ago(at)
+                if reminded is not None:
+                    row["reminded"] = [self.ago(s) for s in reminded]
+                row.update(extra)
+                tx.write("inbox/%s.json" % name, row)
+        self.pool.update(change, "test: age pages")
+
+    def row(self, name):
+        return self.snap().inbox[name]
+
+    def run_ok(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return res
+
+    def pool_writes(self):
+        return int(git(self.pool_path, "rev-list", "--count", "HEAD"))
+
+    def quiet_lines(self, before, prefix=""):
+        """For a case that expects no new line: wait 2 s, then return the new lines."""
+        time.sleep(2)
+        return [l for l in self.lines()[before:] if l.startswith(prefix)]
+
+    # ------------------------------------------------------------ item 1: config
+
+    def test_item1_defaults_and_type_checks(self):
+        from core import config as config_mod
+        self.assertIn("notify_remind_hours", config_mod.DEFAULTS)
+        self.assertIn("notify_remind_max", config_mod.DEFAULTS)
+        self.assertEqual(config_mod.DEFAULTS["notify_remind_hours"], 2)
+        self.assertEqual(config_mod.DEFAULTS["notify_remind_max"], 3)
+        for bad in (0, -1, True, "2", [2]):
+            self.config(notify_remind_hours=bad)
+            with self.assertRaises(osx.OSFailure, msg="notify_remind_hours=%r accepted" % (bad,)) as ctx:
+                config_mod.Config(self.proj)
+            self.assertIn("devloop.notify_remind_hours", str(ctx.exception))
+        for good in (None, 2, 0.5):
+            self.config(notify_remind_hours=good)
+            value = config_mod.Config(self.proj).values["notify_remind_hours"]
+            self.assertEqual(value, good)
+            self.assertIs(type(value), type(good))
+        self.config(notify_remind_hours=2)
+        for bad in (0, -1, True, 1.5, "3", None):
+            self.config(notify_remind_max=bad)
+            with self.assertRaises(osx.OSFailure, msg="notify_remind_max=%r accepted" % (bad,)) as ctx:
+                config_mod.Config(self.proj)
+            self.assertIn("devloop.notify_remind_max", str(ctx.exception))
+        for good in (1, 3):
+            self.config(notify_remind_max=good)
+            self.assertEqual(config_mod.Config(self.proj).values["notify_remind_max"], good)
+
+    # ------------------------------------------------------------ items 2, 3: one reminder each
+
+    def test_item2_3_decision_and_env_get_one_reminder_each(self):
+        self.recording()
+        d = self.page("decision", "5")
+        e = self.page("env", "g1")
+        self.assertTrue(self.wait_for(lambda: len(self.lines()) >= 2), self.lines())
+        before = len(self.lines())
+        self.age({d: (2.5 * 3600, None), e: (2.5 * 3600, None)})
+        self.run_ok()
+        want_d = r"^decision\|5\|waiting 2h 3[0-2]m \(reminder 1 of 3\): first line$"
+        want_e = r"^env\|g1\|waiting 2h 3[0-2]m \(reminder 1 of 3\): first line$"
+
+        def both():
+            new = self.lines()[before:]
+            return any(re.match(want_d, l) for l in new) and any(re.match(want_e, l) for l in new)
+        if not self.wait_for(both):
+            self.fail("new notify lines: %r" % self.lines()[before:])
+        time.sleep(1)
+        new = self.lines()[before:]
+        self.assertEqual(len([l for l in new if l.startswith("decision|5|")]), 1, new)
+        self.assertEqual(len([l for l in new if l.startswith("env|g1|")]), 1, new)
+        for name in (d, e):
+            reminded = self.row(name).get("reminded")
+            self.assertIsInstance(reminded, list, name)
+            self.assertEqual(len(reminded), 1, reminded)
+            self.assertRegex(reminded[0], self.STAMP)
+
+    def test_item2_half_hour_interval(self):
+        self.recording(notify_remind_hours=0.5)
+        d = self.page("decision", "5")
+        self.assertTrue(self.wait_for(lambda: len(self.lines()) >= 1), self.lines())
+        before = len(self.lines())
+        self.age({d: (40 * 60, None)})
+        self.run_ok()
+        want = r"^decision\|5\|waiting 0h 4[0-2]m \(reminder 1 of 3\): first line$"
+        if not self.wait_for(lambda: any(re.match(want, l) for l in self.lines()[before:])):
+            self.fail("new notify lines: %r" % self.lines()[before:])
+
+    def test_item2_forever_controller_reminds_while_it_runs(self):
+        self.recording()
+        d = self.page("decision", "5")
+        self.assertTrue(self.wait_for(lambda: len(self.lines()) >= 1), self.lines())
+        before = len(self.lines())
+        self.age({d: (2.5 * 3600, None)})
+        log = open(os.path.join(self.tmp, "forever.log"), "w")
+        self.addCleanup(log.close)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py"), "--forever"],
+                                cwd=self.proj, env=self.env, stdout=log, stderr=subprocess.STDOUT)
+        self.addCleanup(proc.wait, 30)
+        self.addCleanup(proc.terminate)
+        want = r"^decision\|5\|waiting 2h 3[0-2]m \(reminder 1 of 3\): first line$"
+        got = self.wait_for(lambda: any(re.match(want, l) for l in self.lines()[before:]))
+        running = proc.poll() is None
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(30)
+        if not got:
+            with open(os.path.join(self.tmp, "forever.log")) as fh:
+                tail = fh.read()[-2000:]
+            self.fail("no reminder line from --forever (still running: %s): %r\n%s"
+                      % (running, self.lines()[before:], tail))
+        self.assertTrue(running, "the --forever controller had exited")
+
+    # ------------------------------------------------------------ item 4: pages that get none
+
+    def test_item4_pages_that_get_no_reminder(self):
+        self.recording()
+        h = 3600
+        names = {}
+        for kind, ref in (("idle", "i1"), ("created", "c1"), ("landed", "l1"), ("cancelled", "x1")):
+            names[ref] = (self.page(kind, ref), (3 * h, None))
+        names["acked"] = (self.page("decision", "a1"), (3 * h, None, {"acked": True}))
+        names["noat"] = (self.page("decision", "n1"), (None, None))
+        names["full"] = (self.page("decision", "f1"), (9 * h, [7 * h, 5 * h, 3 * h]))
+        names["young"] = (self.page("decision", "y1"), (3 * h, [1 * h]))
+        # positive control in the same run: a due decision page is reminded
+        due = self.page("decision", "d1")
+        self.assertTrue(self.wait_for(lambda: len(self.lines()) >= 6), self.lines())
+        spec = {n: s for n, s in names.values()}
+        spec[due] = (3 * h, None)
+        self.age(spec)
+        rows = {n: self.row(n) for n in spec}
+        before = len(self.lines())
+        self.run_ok()
+        if not self.wait_for(lambda: any(l.startswith("decision|d1|waiting 3h")
+                                         for l in self.lines()[before:])):
+            self.fail("the due page got no reminder: %r" % self.lines()[before:])
+        time.sleep(2)
+        new = self.lines()[before:]
+        for ref in ("i1", "c1", "l1", "x1", "a1", "n1", "f1", "y1"):
+            self.assertEqual([l for l in new if l.split("|")[1:2] == [ref]], [], "%s: %r" % (ref, new))
+        for key, (name, _) in names.items():
+            self.assertEqual(self.row(name).get("reminded"), rows[name].get("reminded"), key)
+
+    def _no_step(self, **cfg):
+        """With this config, a due decision page gets nothing and the run makes no pool commit;
+        then with the defaults and notify set, the same page is reminded (positive control)."""
+        self.recording()
+        d = self.page("decision", "5")
+        self.assertTrue(self.wait_for(lambda: len(self.lines()) >= 1), self.lines())
+        self.age({d: (3 * 3600, None)})
+        self.config(**cfg)
+        self.run_ok()  # a first run settles whatever else a run writes
+        self.age({d: (3 * 3600, None)})
+        before_lines = len(self.lines())
+        commits = self.pool_writes()
+        self.run_ok()
+        self.assertEqual(self.pool_writes(), commits, "the run made a pool commit")
+        self.assertNotIn("reminded", self.row(d))
+        self.assertEqual(self.quiet_lines(before_lines, "decision|5|"), [])
+        self.recording(notify_remind_hours=2)
+        self.run_ok()
+        if not self.wait_for(lambda: any(l.startswith("decision|5|waiting 3h")
+                                         for l in self.lines()[before_lines:])):
+            self.fail("positive control: no reminder with notify set: %r" % self.lines()[before_lines:])
+        self.assertEqual(len(self.row(d).get("reminded") or []), 1)
+
+    def test_item4_notify_null_does_nothing(self):
+        self._no_step(notify=None)
+
+    def test_item4_remind_hours_null_does_nothing(self):
+        self._no_step(notify_remind_hours=None)
+
+    # ------------------------------------------------------------ item 5: once per pass, spaced, capped
+
+    def test_item5_one_per_run_spaced_from_the_last_and_capped(self):
+        self.recording()
+        d = self.page("decision", "5")
+        self.assertTrue(self.wait_for(lambda: len(self.lines()) >= 1), self.lines())
+        self.age({d: (10 * 3600, None)})
+        before = len(self.lines())
+        self.run_ok()
+        want = r"^decision\|5\|waiting 10h [0-2]m \(reminder 1 of 3\): first line$"
+        if not self.wait_for(lambda: any(re.match(want, l) for l in self.lines()[before:])):
+            self.fail("new notify lines: %r" % self.lines()[before:])
+        self.run_ok()
+        new = self.quiet_lines(before, "decision|5|")
+        self.assertEqual(len(new), 1, new)
+        self.assertEqual(len(self.row(d)["reminded"]), 1)
+        # two earlier reminders, the last 4 h ago: the third one
+        self.age({d: (10 * 3600, [6 * 3600, 4 * 3600])})
+        before = len(self.lines())
+        self.run_ok()
+        if not self.wait_for(lambda: any("(reminder 3 of 3)" in l and l.startswith("decision|5|")
+                                         for l in self.lines()[before:])):
+            self.fail("no third reminder: %r" % self.lines()[before:])
+        self.assertEqual(len(self.row(d)["reminded"]), 3)
+        # three entries, the last 5 h ago: no more
+        def last_older(tx):
+            row = dict(tx.data.inbox[d])
+            row["reminded"] = row["reminded"][:2] + [self.ago(5 * 3600)]
+            tx.write("inbox/%s.json" % d, row)
+        self.pool.update(last_older, "test: last reminder 5 h ago")
+        before = len(self.lines())
+        self.run_ok()
+        self.assertEqual(self.quiet_lines(before, "decision|5|"), [])
+        self.assertEqual(len(self.row(d)["reminded"]), 3)
+
+    # ------------------------------------------------------------ item 6: nothing on the page is done
+
+    def test_item6_reminder_changes_only_reminded(self):
+        self.recording()
+        self.add(1, state="stuck", stuck={"reason": "rounds", "text": "x", "at": osx.now()})
+        d = self.page("decision", "1", **pages.ask("q?", [pages.option("retry", "runs it again"),
+                                                          pages.option("cancel", "drops it")], "why"))
+        self.assertTrue(self.wait_for(lambda: len(self.lines()) >= 1), self.lines())
+        self.age({d: (2.5 * 3600, None)})
+        page_before = dict(self.row(d))
+        self.assertIn("options", page_before, "the page's options were dropped by report")
+        ticket_before = self.snap().ticket("1")
+        before = len(self.lines())
+        self.run_ok()
+        if not self.wait_for(lambda: any(l.startswith("decision|1|waiting 2h")
+                                         for l in self.lines()[before:])):
+            self.fail("no reminder for #1's page: %r" % self.lines()[before:])
+        self.assertEqual(self.snap().ticket("1"), ticket_before)
+        page_after = dict(self.row(d))
+        self.assertEqual(len(page_after.pop("reminded", [])), 1)
+        self.assertEqual(page_after, page_before)
+        self.assertIs(page_after.get("acked"), False)
+        self.assertEqual(self.state(1), "stuck")
+
+    # ------------------------------------------------------------ item 9: README
+
+    def test_item9_readme_documents_reminders(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        start = text.index('as in `curl -s -d "$DEVLOOP_PAGE_TEXT" ntfy.sh/my-topic`.')
+        end = text.index("The controller follows main itself (#72)")
+        self.assertLess(start, end)
+        between = text[start:end]
+        for part in ("devloop.notify_remind_hours", "devloop.notify_remind_max", "reminded",
+                     "(reminder ", "--forever"):
+            self.assertIn(part, between)
+
+
 if __name__ == "__main__":
     unittest.main()
