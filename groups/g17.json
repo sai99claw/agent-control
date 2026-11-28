@@ -30,8 +30,12 @@
     {
       "at": "2026-11-28T04:27:24Z",
       "event": "main moved to e8472cca1e83: merged it into int/g17"
+    },
+    {
+      "at": "2026-11-28T04:35:11Z",
+      "event": "main moved to 2a29a8ceb4f8: merged it into int/g17"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
-  "main_tried": "e8472cca1e837b7b996a7dd6509c5d7f438096d7"
+  "main_tried": "2a29a8ceb4f8d5d975cb7e1333b2e8b5b36036ce"
 }
