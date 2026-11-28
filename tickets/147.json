@@ -62,6 +62,12 @@
       "event": "set ready by main",
       "why": "",
       "by": "main-session"
+    },
+    {
+      "at": "2026-11-28T11:52:02Z",
+      "event": "dag: moved from no group to g23",
+      "by": "main-session",
+      "why": "D-103: get a hard_block page with hit list and fingerprint for the user's approval"
     }
   ],
   "cost": [
@@ -91,7 +97,7 @@
       ]
     }
   ],
-  "group": null,
+  "group": "g23",
   "target": null,
   "run": null,
   "claimed_at": "2026-11-28T00:54:04Z",

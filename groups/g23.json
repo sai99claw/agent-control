@@ -1,0 +1,19 @@
+{
+  "id": "g23",
+  "branch": "int/g23",
+  "state": "open",
+  "members": [
+    "147"
+  ],
+  "fix_round": 0,
+  "job": null,
+  "created": "2026-11-28T11:52:02Z",
+  "history": [
+    {
+      "at": "2026-11-28T11:52:02Z",
+      "event": "dag: member #147 moved in from no group",
+      "by": "main-session",
+      "why": "D-103: get a hard_block page with hit list and fingerprint for the user's approval"
+    }
+  ]
+}
