@@ -1,13 +1,13 @@
 {
   "id": "g20",
   "branch": "int/g20",
-  "state": "pr",
+  "state": "fixing",
   "members": [
     "166",
     "167",
     "168"
   ],
-  "fix_round": 0,
+  "fix_round": 1,
   "job": null,
   "created": "2026-11-28T09:49:29Z",
   "history": [
@@ -30,8 +30,13 @@
     {
       "at": "2026-11-28T10:38:52Z",
       "event": "main moved to d137c1e097ed: it conflicts with int/g20; not merged"
+    },
+    {
+      "at": "2026-11-28T10:38:54Z",
+      "event": "fix round 1"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
-  "main_tried": "d137c1e097edb0af3421c978b72ed15271600734"
+  "main_tried": "d137c1e097edb0af3421c978b72ed15271600734",
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g20/main-moved.json"
 }
