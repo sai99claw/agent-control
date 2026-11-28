@@ -1021,7 +1021,12 @@ class T65Acceptance(LoopCase):
         self.config(machine_slots=1, regression_exclusive=True)
         self.hold_tests(preflight=4)
         self.int_branch()
-        slot = self.hold_slot()
+        from core import slots
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ.pop("DEVLOOP_MACHINE", None)
+        slot = slots.take_test_run(self.cfg(), None)    # #143: a test run in flight holds it off
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
         proc, _, _ = self.regression()
         hit = self.wait_for(self.is_reg(proc.pid), proc=proc)
         self.assertIsNotNone(hit, self.live())

@@ -35,6 +35,7 @@ Fix by the tickets' current content, shown above: a merged ticket is frozen and 
 revised, so the fix makes the code do what each ticket says now. Commit source and test files
 only, never generated files (caches, build output); a generated file already committed by a ticket
 may be removed with `git rm --cached` and ignored. Run the failing tests with: {test_cmd}
+Run tests only with that command, never with another test runner or the project's own test scripts. When it prints machine busy it ran nothing: do not wait for it or retry it in a loop; go on, and name in your hand-in the checks that were not measured (machine busy).
 
 A verifier's acceptance cases carry the ticket's case mark (`case_mark` above, `T<id>Acceptance`).
 You may change such a case only to make it match that ticket's current acceptance text - never

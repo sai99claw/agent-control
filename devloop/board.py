@@ -579,14 +579,13 @@ def live_rows(cfg, snap):
     for row in rows:
         row["started"] = pool_seconds((row["rec"].get("stamp") or {}).get("started"))
     rows.sort(key=lambda r: (r["state"] == "ended", r["started"] is None, r["started"] or 0, r["name"]))
-    exclusive = sorted(str(r.get("group")) for _, r in running if r.get("kind") == "regression" and r.get("exclusive"))
-    live_queue(rows, exclusive[0] if exclusive else None)
+    live_queue(rows)
     return rows
 
 
-def live_queue(rows, exclusive_group):
+def live_queue(rows):
     """Number the rows that wait for a machine slot (a regression waiting for the whole machine is not one):
-    data-queue k/n by the waiting record's `since`, oldest first, and name the exclusive regression they give way to."""
+    data-queue k/n by the waiting record's `since`, oldest first."""
     queued = [r for r in rows if r["state"] == "slot" and not (r["kind"] == "regression"
                                                               and r["rec"].get("stage") == "machine")]
 
@@ -597,9 +596,6 @@ def live_queue(rows, exclusive_group):
     for k, r in enumerate(sorted(queued, key=order), 1):
         r["text"] = "等機器名額:第 %d 個(共 %d 個在等)" % (k, len(queued))
         r["attrs"]["data-queue"] = "%d/%d" % (k, len(queued))
-        if exclusive_group is not None:
-            r["text"] += ",讓位給 %s 的獨占 regression" % exclusive_group
-            r["attrs"]["data-yield"] = exclusive_group
 
 
 def dep_satisfied(snap, ident):

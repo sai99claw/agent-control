@@ -245,16 +245,25 @@ environment, and a process with it set takes no slot (an agent's `run_tests.py`,
 `ticket_creator.py --revise`). `run_tests.py` outside a slot (the opener's way to run tests) takes
 one without waiting, or runs nothing and exits 2 with machine busy on stderr.
 
-`regression_exclusive` (default false) makes a regression take the whole machine: it runs only
-while no other slot is held, and no new slot is taken while it waits or runs. It
+`regression_exclusive` (default false) makes a regression take the whole machine, which keeps every
+other test run off it. Agents are never kept off by the exclusive mark: an agent takes its slot as
+above and keeps running beside it. It
 needs `machine_slots` (exclusivity is counted in slots; true without a slot count stops every devloop
 script). The mark is a `flock` LOCK_EX on `<worktrees>/slots/exclusive`, held by the regression
-from the moment it starts waiting until it has released every slot; with it held, the regression
-takes every `slot-<i>`, waiting for each, then runs preflight and `full`. Every other taker needs a
-LOCK_SH on that file, only while it takes its slot; its wait for it is a slot wait (no limit for
-an agent or an issuer, its time limits count from when the slot is taken). A regression waits for the whole machine at most `regression_timeout_seconds` ("unmeasured" when the
-machine is not free in time) and its run gets `regression_timeout_seconds` from when the machine is taken, and a regression that dies leaves nothing locked. Nested runs
-(`DEVLOOP_SLOT` set) do not touch the mark.
+from the moment it starts waiting until it ends, so no new test run starts meanwhile; with it held,
+the regression waits for the test runs in flight (a LOCK_EX on `<worktrees>/slots/tests`), not for
+agents, then runs preflight and `full`. A test run is the issuer's red check and each case run, and
+`run_tests.py` inside or outside an agent: it needs a LOCK_SH on the mark only while it takes its
+slot (`slots/slot-<i>`, none when `DEVLOOP_SLOT` is set: it uses its parent's slot), then holds a
+LOCK_SH on `slots/tests` for its whole run. The issuer's wait for it is a slot wait (no limit, its
+time limit counts from when the slot is taken). `run_tests.py` does not wait, inside an agent
+neither (the wait would use up the agent's own timeout): while the mark is held it runs nothing and
+exits 2 with machine busy on stderr. The regression's test commands get `DEVLOOP_MACHINE` (the
+mark's path) in the environment, and a test run with it set takes nothing (no slot, no lock, never
+busy). A regression waits for the whole machine at most `regression_timeout_seconds` ("unmeasured" when the
+machine is not free in time) and its run gets `regression_timeout_seconds` from when the machine is taken, and a regression that dies leaves nothing locked. Without
+`regression_exclusive` no `slots/exclusive` or `slots/tests` file is made and a nested run takes
+nothing.
 
 ## Roles
 
@@ -460,9 +469,7 @@ when an earlier group still holds the chain (`core/chain.waits_for()`), `等 <gM
 
 Every row that waits for a machine slot (state `slot`; a regression waiting for the whole machine
 is not one) shows its place in the queue, `等機器名額:第 k 個(共 n 個在等)` (`data-queue="k/n"`, ordered by
-the `since` of the record that waits, oldest first, ties by record name). While a regression with
-`exclusive` runs, those rows also say whom they give way to: `,讓位給 <group> 的獨占 regression`
-(`data-yield`). After the process rows come the ticket rows, one per ready ticket (`data-kind="ticket"`):
+the `since` of the record that waits, oldest first, ties by record name). After the process rows come the ticket rows, one per ready ticket (`data-kind="ticket"`):
 `待派`, or `等 #<id>(<state>)、… 落地` naming every dependency that is neither landed nor merged into an
 open group; then the decision rows, one per 要你判 card (`data-kind="decision"`), showing what the card
 asks and a link to that tab; the 結束了 rows stay last. Ticket and decision rows have no pid and no start.

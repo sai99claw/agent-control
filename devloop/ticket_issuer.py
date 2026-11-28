@@ -688,10 +688,11 @@ class Issuer:
         return max(1.0, self.deadline - time.time())
 
     def test_slot(self):
-        """A machine slot for one test run, waiting as long as it takes; the wait is added to the
+        """A test run (core/slots.take_test_run: a machine slot, and with devloop.regression_exclusive
+        no regression holding the machine), waiting as long as it takes; the wait is added to the
         issuer's deadline."""
         began = time.time()
-        slot = slots.take(self.cfg, None)
+        slot = slots.take_test_run(self.cfg, None)
         self.test_waited += time.time() - began
         return slot
 
