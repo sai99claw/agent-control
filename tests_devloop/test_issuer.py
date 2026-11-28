@@ -500,6 +500,181 @@ class T114Acceptance(LoopCase):
         self.assert_own_page(snap, "need the user")
 
 
+class T158Acceptance(LoopCase):
+    """Ticket #158: a worker or verifier that finds the ticket wrong hands in kind 'revise' with its
+    reason; the issuer runs the opener itself and starts the next round with the outcome."""
+
+    KEPT = "the %s asked to revise the ticket; the opener kept it as written: the ticket stands: item 2 is possible"
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+
+    # ------------------------------------------------------------ helpers
+
+    def runs_dir(self):
+        return os.path.join(self.tmp, "wt", "runs", "1")
+
+    def read_prompt(self, rnd, role):
+        path = os.path.join(self.runs_dir(), "r%d-%s" % (rnd, role), "prompt.md")
+        self.assertTrue(os.path.exists(path), "%s was not written" % path)
+        with open(path) as fh:
+            return fh.read()
+
+    def revise_dirs(self):
+        if not os.path.isdir(self.runs_dir()):
+            return []
+        return sorted(d for d in os.listdir(self.runs_dir()) if d.startswith("revise-"))
+
+    def revise_sources(self):
+        out = []
+        for d in self.revise_dirs():
+            meta = os.path.join(self.runs_dir(), d, "revise.json")
+            out.append(osx.read_json(meta).get("source") if os.path.exists(meta) else None)
+        return out
+
+    def run_loop(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap().ticket("1")
+
+    @staticmethod
+    def events(t, name):
+        return [h for h in t.get("history") or [] if h.get("event") == name]
+
+    def feedback_event(self, t, rnd):
+        found = [h for h in self.events(t, "feedback") if h.get("round") == rnd]
+        self.assertTrue(found, "no round-%d feedback event: %r" % (rnd, t.get("history")))
+        return found[0]
+
+    def first_seen_with_feedback(self, rnd):
+        """The ticket as the pool first stored it with a round-<rnd> feedback event (landing clears
+        'feedback', so read it from the pool's own git history)."""
+        shas = git(self.pool_path, "log", "--reverse", "--format=%H", "--", "tickets/1.json").split()
+        for sha in shas:
+            res = subprocess.run(["git", "show", "%s:tickets/1.json" % sha], cwd=self.pool_path,
+                                 capture_output=True, text=True)
+            if res.returncode != 0:
+                continue
+            t = json.loads(res.stdout)
+            if any(h.get("event") == "feedback" and h.get("round") == rnd for h in t.get("history") or []):
+                return t
+        self.fail("the pool never stored #1 with a round-%d feedback event" % rnd)
+
+    # ------------------------------------------------------------ acceptance 1 and 2: the templates
+
+    def test_1_2_the_prompt_templates_offer_the_revise_hand_in(self):
+        with open(os.path.join(LOOP, "prompts", "worker.md")) as fh:
+            worker = fh.read()
+        self.assertNotIn("{revise_cmd}", worker)
+        self.assertNotIn("ticket_creator.py", worker)
+        self.assertIn("## If you think the ticket (or the verifier's cases) is wrong", worker)
+        self.assertIn('"kind": "revise"', worker.split("## If you think the ticket (or the verifier's cases) is wrong")[1])
+        self.assertIn('"revise"', worker.split("## Hand-in")[-1])
+        with open(os.path.join(LOOP, "prompts", "verifier.md")) as fh:
+            verifier = fh.read()
+        self.assertIn("## If you think the ticket is wrong", verifier)
+        self.assertIn('"kind": "revise"', verifier.split("## If you think the ticket is wrong")[1])
+        self.assertIn('"revise"', verifier.split("## Hand-in")[-1])
+        self.assertIn("## Feedback from earlier rounds", verifier)
+        self.assertIn("{feedback}", verifier.split("## Feedback from earlier rounds")[1])
+
+    # ------------------------------------------------------------ C1: acceptance 1, 4, 5
+
+    def test_c1_a_worker_revise_hand_in_revised_ends_the_round_free(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_handin", "ok"]}, creator={"1": ["revised"]})
+        t = self.run_loop()
+        prompt = self.read_prompt(1, "worker")
+        self.assertIn('"kind": "revise"', prompt)
+        self.assertNotIn("ticket_creator.py", prompt)
+        self.assertEqual(len(self.revise_dirs()), 1, self.revise_dirs())
+        self.assertEqual(self.revise_sources(), ["worker"])
+        self.assertEqual(len(self.events(t, "revised")), 1, t.get("history"))
+        self.assertEqual(self.feedback_event(t, 1).get("free"), "revision")
+        self.assertIn("a possible thing", self.read_prompt(2, "worker"))
+        self.assertEqual(t["state"], "landed")
+
+    # ------------------------------------------------------------ C2: acceptance 6
+
+    def test_c2_a_worker_revise_hand_in_unchanged_ends_the_round_free_with_the_note(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_handin", "ok"]}, creator={"1": ["unchanged"]})
+        t = self.run_loop()
+        self.assertEqual(self.revise_sources(), ["worker"])
+        self.assertEqual(self.feedback_event(t, 1).get("free"), "revision")
+        seen = self.first_seen_with_feedback(1)
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + self.KEPT % "worker")
+        self.assertIn(self.KEPT % "worker", self.read_prompt(2, "worker"))
+        self.assertEqual(t["acceptance"], ["a"])
+        self.assertEqual(t["state"], "landed")
+
+    # ------------------------------------------------------------ C3: acceptance 7
+
+    def test_c3_a_worker_revise_hand_in_escalated_leaves_one_decision_page(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_handin"]}, creator={"1": ["question"]})
+        t = self.run_loop()
+        self.assertEqual(t["state"], "stuck")
+        self.assertEqual((t.get("stuck") or {}).get("reason"), "decision")
+        found = [row for row in self.snap().inbox.values()
+                 if row.get("kind") == "decision" and row.get("ref") == "1"]
+        self.assertEqual(len(found), 1, found)
+        self.assertTrue(found[0]["text"].startswith("#1 needs your decision (raised by the worker)"),
+                        found[0]["text"])
+        self.assertEqual(len(self.events(t, "escalated")), 1, t.get("history"))
+
+    # ------------------------------------------------------------ C4: acceptance 8
+
+    def test_c4_a_failed_revision_counts_and_the_ticket_stands(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_handin", "ok"]}, creator={"1": ["bad"]})
+        t = self.run_loop()
+        self.assertEqual(self.revise_sources()[:1], ["worker"])
+        ev = self.feedback_event(t, 1)
+        self.assertNotIn("free", ev)
+        seen = self.first_seen_with_feedback(1)
+        self.assertTrue(seen.get("feedback"), seen)
+        text = seen["feedback"][0]
+        self.assertTrue(text.startswith("round 1: the worker asked to revise the ticket; the revision failed: "), text)
+        self.assertTrue(text.endswith("; the ticket stands as written"), text)
+        self.assertEqual(t["acceptance"], ["a"])
+
+    # ------------------------------------------------------------ C5: acceptance 9
+
+    def test_c5_a_revise_hand_in_without_a_reason_runs_no_opener(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_noreason", "ok"]})
+        t = self.run_loop()
+        self.assertEqual(self.revise_dirs(), [])
+        ev = self.feedback_event(t, 1)
+        self.assertNotIn("free", ev)
+        seen = self.first_seen_with_feedback(1)
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: the worker's revise hand-in has no \"reason\"")
+
+    # ------------------------------------------------------------ C6: acceptance 2, 10
+
+    def test_c6_a_verifier_revise_hand_in_unchanged_reruns_the_verifier_with_the_answer(self):
+        self.add(1)
+        self.plan(worker={"1": ["ok"]}, verifier={"1": ["revise_handin", "ok"]}, creator={"1": ["unchanged"]})
+        t = self.run_loop()
+        prompt = self.read_prompt(1, "verifier")
+        self.assertIn('"kind": "revise"', prompt)
+        self.assertIn("## Feedback from earlier rounds", prompt)
+        self.assertEqual(self.revise_sources(), ["verifier"])
+        self.assertEqual(self.feedback_event(t, 1).get("free"), "revision")
+        seen = self.first_seen_with_feedback(1)
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + self.KEPT % "verifier")
+        self.assertIn(self.KEPT % "verifier", self.read_prompt(2, "verifier"))
+        self.assertFalse(os.path.exists(os.path.join(self.runs_dir(), "r2-worker")),
+                         "the worker's round-1 hand-in stood: round 2 runs only the verifier")
+        self.assertEqual(t["state"], "landed")
+
+
 class T138Acceptance(LoopCase):
     """Ticket #138 (D-098): a round-start replay that conflicts ends the round before any agent as a
     free merge round; the conflicting branch restarts at its start point and its old head is kept
