@@ -3,5 +3,7 @@
   "ref": "152,153,154,155,156,157,158",
   "text": "opened #152 The code index lists test_*.py files by path only and leaves out private module functions; #153 The opener's prompt carries only the live part of the DAG; #154 The opener sees the project's hard_block, and a plan that matches a pattern must say why; #155 Fix tickets the controller asks for go into an open group of the chain before a new one; #156 The memory consolidator is told which models read the file it rewrites; #157 A revision that changes a running round's work stops that round, and the round does not count; #158 A worker or verifier that finds the ticket wrong hands in revise, and the issuer runs the opener",
   "at": "2026-11-28T00:55:42Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-28T05:20:10Z"
 }
