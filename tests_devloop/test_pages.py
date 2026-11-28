@@ -1017,6 +1017,126 @@ class PageQuestionPieces(LoopCase):
         self.assertFalse(self.snap().inbox["pr"]["acked"])
 
 
+class T165Acceptance(LoopCase):
+    """#165 (D-103): a hard_block stop's decision page offers approve with its `actl tickets approve`
+    command (first when the opener set hard_block_approval); the board shows it without a button.
+    Expected values come from the ticket's text."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key, None)
+
+    ROW = {"question": "q", "options": [{"action": "approve", "consequence": "c"},
+                                        {"action": "ack", "consequence": "d"}], "recommendation": "r"}
+
+    def test_c1_pages_action_command_and_lines(self):
+        self.assertIn("approve", pages.ACTIONS)
+        self.assertIn("approve", pages.TICKET_ACTIONS)
+        self.assertEqual(pages.ACTIONS, ("revise", "retry", "cancel", "approve", "group-ready", "group-cancel",
+                                         "rerun", "release", "ack"))
+        self.assertEqual(pages.TICKET_ACTIONS, ("revise", "retry", "cancel", "approve"))
+        row = dict(self.ROW)
+        self.assertEqual(pages.problems("7", row), [])
+        self.assertEqual(pages.problems("g3", row), ["option 1: approve is for a ticket, not 'g3'"])
+        self.assertEqual(pages.command("approve", "7", "p2", ""),
+                         "actl tickets approve 7 --page p2 --reason '<your words>'")
+        self.assertEqual(pages.command("approve", "7", "p2", "ok it"),
+                         "actl tickets approve 7 --page p2 --reason 'ok it'")
+        self.assertIn("       $ actl tickets approve 7 --page p2 --reason '<your words>'",
+                      pages.lines("p2", dict(row, ref="7")))
+
+    def test_c2_issuer_stuck_ask_hard_block(self):
+        import inspect
+        import ticket_issuer
+        from core.config import Config
+        self.assertIn("t", inspect.signature(ticket_issuer.Issuer.stuck_ask).parameters)
+        issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "5", "int/g1")
+        keep = {"revise": "the opener changes #5 per your words so its change avoids hard_block; it goes back to ready at round 0",
+                "cancel": "#5 is cancelled; tickets that depend on it keep waiting",
+                "retry": "#5 runs again as written and stops at the same place unless hard_block changed",
+                "approve": "#5 goes back to ready and merges only while its change is exactly the one listed; "
+                           "any other change stops again for your approval"}
+
+        def check(row, actions, recommendation):
+            self.assertEqual([o["action"] for o in row["options"]], actions, row)
+            self.assertEqual(row["question"], "#5's change touches hard_block: approve this exact change, "
+                                              "change the ticket, or cancel it?")
+            self.assertEqual(row["recommendation"], recommendation)
+            self.assertEqual(pages.problems("5", row), [], row)
+            for o in row["options"]:
+                self.assertEqual(o["consequence"], keep[o["action"]], o)
+
+        plain = ("approve only when every listed path and line is what the ticket must do; "
+                 "otherwise revise it so its change avoids hard_block")
+        for args in (("hard_block",), ("hard_block", {"id": "5"}),
+                     ("hard_block", {"id": "5", "hard_block_approval": "   "})):
+            check(issuer.stuck_ask(*args), ["revise", "approve", "cancel", "retry"], plain)
+        check(issuer.stuck_ask("hard_block", {"id": "5", "hard_block_approval": "it must signal its child"}),
+              ["approve", "revise", "cancel", "retry"],
+              "the opener opened #5 knowing it needs your approval at merge: it must signal its child")
+        long = "x" * 300
+        check(issuer.stuck_ask("hard_block", {"id": "5", "hard_block_approval": long}),
+              ["approve", "revise", "cancel", "retry"],
+              pages.one_line("the opener opened #5 knowing it needs your approval at merge: " + long))
+
+    def test_c3_issuer_page_passes_the_ticket_end_to_end(self):
+        self.add(1, hard_block_approval="it must touch the decisions file")
+        self.plan(worker={"1": ["touch_decisions"]})
+        self.controller()
+        got = [(n, r) for n, r in self.snap().inbox.items()
+               if r.get("kind") == "decision" and str(r.get("ref")) == "1"]
+        self.assertEqual(len(got), 1, "decision pages about #1: %r" % got)
+        name, row = got[0]
+        self.assertEqual([o.get("action") for o in row.get("options") or []],
+                         ["approve", "revise", "cancel", "retry"], row)
+        self.assertEqual(row.get("recommendation"),
+                         "the opener opened #1 knowing it needs your approval at merge: it must touch the decisions file")
+        self.assertEqual(pages.problems("1", row), [])
+        res = self.run_py("tickets.py", "inbox", timeout=60)
+        self.assertIn("       $ actl tickets approve 1 --page %s --reason '<your words>'" % name,
+                      res.stdout.splitlines(), res.stdout + res.stderr)
+
+    CARD = {"subject": "5", "page": "p5", "question": "q",
+            "options": [{"action": "revise", "note": "", "consequence": "c1"},
+                        {"action": "approve", "note": "", "consequence": "c2 <b>"},
+                        {"action": "cancel", "note": "", "consequence": "c3"},
+                        {"action": "retry", "note": "", "consequence": "c4"}], "recommendation": "r"}
+
+    def approve_div(self, out, opening):
+        start = out.find(opening)
+        self.assertGreaterEqual(start, 0, out)
+        self.assertEqual(out.count('data-action="approve"'), 1, out)
+        end = out.find("</div>", start)
+        self.assertGreater(end, start, out)
+        body = out[start:end]
+        for bad in ("<form", "<button", "<textarea"):
+            self.assertNotIn(bad, body)
+        self.assertIn("<p class=\"consequence\">c2 &lt;b&gt;</p>", body)
+        self.assertIn("actl tickets approve 5 --page p5 --reason ", body)
+        return body
+
+    def test_c4_board_shows_approve_without_a_button(self):
+        import board
+        self.assertIn("approve", board.ACT_LABELS)
+        self.assertEqual(board.ACT_LABELS["approve"], "核准(只在主線 CLI)")
+        form = '<form method="post" action="act" class="option"'
+        out = board.render_options(self.CARD, True)
+        self.assertEqual(out.count(form), 3, out)
+        self.assertEqual(re.findall(form + r' data-action="([^"]+)"', out), ["revise", "cancel", "retry"])
+        body = self.approve_div(out, '<div class="option" data-action="approve">')
+        self.assertIn("核准(只在主線 CLI)", body)
+        self.assertNotIn("(建議)", body)
+        first = dict(self.CARD, options=[self.CARD["options"][1], self.CARD["options"][0]] + self.CARD["options"][2:])
+        out = board.render_options(first, True)
+        body = self.approve_div(out, '<div class="option" data-action="approve" data-recommended="1">')
+        self.assertIn("核准(只在主線 CLI)(建議)", body)
+        out = board.render_options(self.CARD, False)
+        self.assertEqual(out.count('<div class="option"'), 4, out)
+        self.assertNotIn("<form", out)
+        self.approve_div(out, '<div class="option" data-action="approve">')
+
+
 class T78Acceptance(LoopCase):
     """#78: pages.py (ACTIONS, option, ask, problems, command), Pool.report storing or dropping the
     question/options/recommendation, inbox/wait printing them, release --by/--page, and the docs."""
@@ -1063,8 +1183,8 @@ class T78Acceptance(LoopCase):
 
     def test_actions_option_and_ask(self):
         pages = self.pages()
-        self.assertEqual(pages.ACTIONS, ('revise', 'retry', 'cancel', 'group-ready', 'group-cancel', 'rerun',
-                                         'release', 'ack'))
+        self.assertEqual(pages.ACTIONS, ('revise', 'retry', 'cancel', 'approve', 'group-ready', 'group-cancel',
+                                         'rerun', 'release', 'ack'))
         self.assertEqual(pages.option("retry", "runs again"),
                          {"action": "retry", "note": "", "consequence": "runs again"})
         self.assertEqual(pages.option("group-ready", "back to regression", note="follow #67"),

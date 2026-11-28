@@ -722,7 +722,7 @@ class T80Acceptance(LoopCase):
         t = self.snap().ticket("1")
         self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "hard_block"))
         name, row = self.one(("decision",), "1")
-        self.check("1", row, ["revise", "cancel", "retry"], subject="#1")
+        self.check("1", row, ["revise", "approve", "cancel", "retry"], subject="#1")
 
     def test_w11_opener_could_not_produce_valid_tickets(self):
         self.plan(creator={"-": ["bad", "bad"]})

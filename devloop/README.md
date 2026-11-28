@@ -44,6 +44,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + quick, if 
 | `python3 devloop/tickets.py login-ok <command> [--by NAME]` | after logging in again: remove the machine-wide needs_login record of `<command>` (matched by basename; every other record stays) and ack this project's unread env pages with ref `login-<command>` (acked_by `--by`, default `tickets login-ok`); prints `<command>: login marked ok`. Runs waiting on that record start again within `poll_seconds` + 5 s. Exit 2 with nothing written when `<command>` has no needs_login record |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
 | `python3 devloop/tickets.py ready N [--by NAME] [--page P]` | after deciding on a stuck ticket (one without an open group must then be placed with `actl dag move`) |
+| `python3 devloop/tickets.py approve N --page P --reason "..." [--by NAME]` | only for a ticket stopped on hard_block, and only with N's current hard_block page (the page's fingerprint equals `stuck.hard_block`'s; else exit 2 and nothing is written): records the user's approval on the ticket (`approval`: by, at, reason, page, and the page's paths, lines and fingerprint) with one `hard_block approved` event, acks the pages, and makes the ready transition `ready N` makes (an ungrouped ticket is then placed with `actl dag move N --to gK|new`); the first round after it starts no worker and merges the change as it is, while the hard_block check lets it through only when its hits and fingerprint are equal to the approved ones, else it stops again with a fresh page saying the approval no longer matches (D-103). Main session only: the board has no approve button. A ticket stopped before hit lists existed has none on its page: ready it once so it stops again with one, then approve that page |
 | `python3 devloop/tickets.py ready gN` `[--note "..."] [--by NAME] [--page P] [--via main|web]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling (`--via web` marks a note sent from the board: the fixer gets it cleaned and wrapped behind the injection check, like web text for the opener); `--by` names who gave the answer on the events and `--page` acks that page in the same write |
 | `python3 devloop/tickets.py cancel N --why ... [--by NAME] [--page P]` | drop a ticket |
 | `python3 devloop/tickets.py release gN [--again] [--by NAME] [--page P]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page; refused (exit 2, one line naming the pid) while the group's release job still runs, and its write removes the group's job; `--by` is stored on the 'release re-run' event and `--page` acks that page in the same write (a refused re-run writes nothing) |
@@ -222,7 +223,7 @@ PATH: put first the folder of every agent command the project uses (`dirname "$(
 `agents.<role>` (the command that starts an agent; prompt on stdin),
 `memory` (D-088: the folder of the memory files; default `<pool>/memory`, a relative path is against the project root; see Memory).
 Tests run through the project's existing test interface (`tests.preflight`, optional `tests.quick`, `tests.run`, `tests.full`; `scripts/testiface.py`).
-`hard_block.paths` / `patterns`: a ticket whose own change touches them stops before merging (what it merged in from main does not count). The opener's prompt lists them; a ticket whose outline, test_plan or acceptance matches a pattern is opened only with `hard_block_approval` (why it needs the user's approval at merge), which the created page shows.
+`hard_block.paths` / `patterns`: a ticket whose own change touches them stops before merging (what it merged in from main does not count). The opener's prompt lists them; a ticket whose outline, test_plan or acceptance matches a pattern is opened only with `hard_block_approval` (why it needs the user's approval at merge), which the created page shows; the main session records that approval with `tickets.py approve N --page P`, which lets exactly the listed change merge. The stop's page and the ticket's `stuck.hard_block` list each hit path and each matching added line (file, text, patterns) and the fingerprint of the ticket's own change (sha256 over its inspected paths, added and removed lines), which a replay onto a newer target (D-098) does not change.
 
 `devloop.no_reverify_paths` (D-090; default `["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"]`,
 a project's list replaces it, `[]` turns it off): when main moved after a group was verified and
@@ -733,7 +734,7 @@ per option in the page's order, the recommended one first and marked 建議, eac
 note in an editable box (kept as a draft like the free-text box; no box for 重跑發版 and 知道了) and its
 consequence under it, then the recommendation. An option posts `act` with its action and
 `option=<1-4>` and is redirected to `…&sent=act-<subject>-<page>-o<option>`; a box still holding its
-prepared note does not hold the 30 s reload. Read-only viewers see the same text without buttons.
+prepared note does not hold the 30 s reload. Read-only viewers see the same text without buttons. An approve option is shown with its label, consequence and command and without a form or button for every viewer (only the main session approves, D-103; like `actl dag`, D-096).
 The free-text box and its buttons stay below.
 
 A ticket or group card that is neither stuck nor paused, and a card about anything else, have only
@@ -806,13 +807,14 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
 - **Pages**: a decision or env page may carry `question` (one line, at most 200 characters),
   `options` and `recommendation` (one line, the reason for the recommendation), all three or none
   (`core/pages.py`). Each option is `{action, note, consequence}`; there are 2-4 of them, or exactly
-  one when it is `ack`, and the recommended one is first. Actions: revise, retry, cancel (a ticket),
+  one when it is `ack`, and the recommended one is first. Actions: revise, retry, cancel (a ticket), approve (a ticket; a hard_block stop only, answered in the main session),
   group-ready, group-cancel, rerun, release (a group), ack (any page); each maps to one answer
   command that inbox prints. `Pool.report` checks the set when the page is written: a bad set is
   dropped and the text gets a last line `(options dropped: <the first problem>)`.
 - **Pages close with their subject**: an unread decision or env page whose `ref` is a ticket or group
   is acked (`acked_at`, `acked_by`, no event) in the same pool write that handles that subject; the
   `--page` page keeps `--by` (else `answer`). `tickets.py ready N|gN` acks as `tickets ready`,
+  `approve N` as `tickets approve` (the `--page` page as `--by`),
   `cancel N|gN` as `tickets cancel` (with each member ticket it cancels), `rerun gN` as `tickets rerun`,
   `release gN` as `tickets release` (pages that existed when it started); `ticket_creator.py --revise N
   --from user|main --decision retry|cancel`, and `revise` ending ready or escalated, as `new --revise`

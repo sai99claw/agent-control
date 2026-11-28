@@ -284,6 +284,69 @@ class ReplayUnits(GitIsolatedCase):
         self.assertEqual(git(self.tmp, "status", "--porcelain"), "")
 
 
+class DiffLinesUnits(GitIsolatedCase):
+    """Git.diff_lines: added and removed lines of base...head with the file each belongs to."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="loop-difflines-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        git(self.tmp, "init", "-q", "-b", "main")
+        self.write("mod.txt", "a\nb\nc\n")
+        self.write("gone.txt", "g1\ng2\n")
+        self.write("tail.txt", "t1\nt2\n")
+        git(self.tmp, "add", "-A")
+        git(self.tmp, "commit", "-q", "-m", "base")
+        git(self.tmp, "checkout", "-q", "-b", "t/1")
+        from core.gitx import Git
+        self.g = Git(self.tmp)
+
+    def write(self, path, text):
+        with open(os.path.join(self.tmp, path), "w") as fh:
+            fh.write(text)
+
+    def change(self):
+        git(self.tmp, "add", "-A")
+        git(self.tmp, "commit", "-q", "-m", "change")
+        return self.g.diff_lines("main")
+
+    def test_modified_file(self):
+        self.write("mod.txt", "a\nB\nc\nd\n")
+        self.assertEqual(self.change(), [("-", "mod.txt", "b"), ("+", "mod.txt", "B"), ("+", "mod.txt", "d")])
+
+    def test_new_file(self):
+        self.write("new.txt", "n1\nn2\n")
+        self.assertEqual(self.change(), [("+", "new.txt", "n1"), ("+", "new.txt", "n2")])
+
+    def test_deleted_file_takes_its_old_path(self):
+        os.remove(os.path.join(self.tmp, "gone.txt"))
+        self.assertEqual(self.change(), [("-", "gone.txt", "g1"), ("-", "gone.txt", "g2")])
+
+    def test_path_with_a_space(self):
+        self.write("with space.txt", "s\n")
+        self.write("mod.txt", "a\nc\n")
+        self.assertEqual(self.change(), [("-", "mod.txt", "b"), ("+", "with space.txt", "s")])
+
+    def test_no_newline_marker_is_not_content(self):
+        self.write("tail.txt", "t1\nt2\nt3")
+        self.assertEqual(self.change(), [("+", "tail.txt", "t3")])
+        self.write("tail.txt", "t1\n")
+        git(self.tmp, "commit", "-q", "-am", "again")
+        self.assertEqual(self.g.diff_lines("HEAD~1"), [("-", "tail.txt", "t2"), ("-", "tail.txt", "t3")])
+
+    def test_content_starting_with_plus_plus_or_minus_minus(self):
+        self.write("mod.txt", "-- a\n++ b\n--- c\n+++ d\n")
+        self.assertEqual(self.change(), [
+            ("-", "mod.txt", "a"), ("-", "mod.txt", "b"), ("-", "mod.txt", "c"),
+            ("+", "mod.txt", "-- a"), ("+", "mod.txt", "++ b"), ("+", "mod.txt", "--- c"), ("+", "mod.txt", "+++ d")])
+        self.write("mod.txt", "x\n")
+        git(self.tmp, "add", "-A")
+        git(self.tmp, "commit", "-q", "-m", "again")
+        self.assertEqual(self.g.diff_lines("HEAD~1"), [
+            ("-", "mod.txt", "-- a"), ("-", "mod.txt", "++ b"), ("-", "mod.txt", "--- c"), ("-", "mod.txt", "+++ d"),
+            ("+", "mod.txt", "x")])
+
+
 class NotifyUnits(LoopCase):
     def test_absent_notify_never_spawns(self):
         from unittest import mock

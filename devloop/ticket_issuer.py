@@ -52,6 +52,7 @@ ticket holds its lock <worktrees>/locks/issuer-<N>.lock), or the ticket is no lo
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -82,9 +83,18 @@ class NotOwned(Exception):
 
 
 class Stuck(Exception):
-    def __init__(self, reason, text, page=True):
+    def __init__(self, reason, text, page=True, detail=None):
         super().__init__(text)
-        self.reason, self.text, self.page = reason, text, page
+        self.reason, self.text, self.page, self.detail = reason, text, page, detail
+
+
+def change_fingerprint(paths, triples):
+    """sha256 of a change's inspected paths and its added and removed lines (sign, path, text):
+    the same commits replayed onto a newer target give the same value."""
+    body = {"paths": list(paths),
+            "added": [[path, text] for sign, path, text in triples if sign == "+"],
+            "removed": [[path, text] for sign, path, text in triples if sign == "-"]}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 THROWN_OUT = ("the ticket was revised during this round and the revision threw out the "
@@ -107,6 +117,23 @@ def brief_revised(t):
         elif h.get("event") == "revised" and (h.get("cases_wrong") or brief & set(h.get("fields") or [])):
             changed = True
     return changed
+
+
+APPROVAL_ENDS = ("hard_block approved", "round start", "revised", "set ready by main")
+
+
+def approval_pending(t):
+    """True when `t` carries an approval and, among the events that start or end it ('hard_block
+    approved', 'round start', 'revised', 'set ready by main', 'user decision...'), the newest is
+    'hard_block approved': the first round after the approval has not started yet."""
+    if not isinstance(t.get("approval"), dict):
+        return False
+    last = None
+    for h in t.get("history") or []:
+        what = h.get("event") or ""
+        if what in APPROVAL_ENDS or what.startswith("user decision"):
+            last = what
+    return last == "hard_block approved"
 
 
 def cases_thrown_out(t):
@@ -207,6 +234,7 @@ class Issuer:
 
     def go(self):
         t = self.claim()
+        self.worker_ok = approval_pending(t)   # the approved change merges as it is: no worker this round
         self.live(t)
         if not self.repo.sha(self.target):
             raise Stuck("target", "integration branch %s does not exist" % self.target)
@@ -368,7 +396,7 @@ class Issuer:
                 return ("merging the verifier's branch %s into %s failed (%s); merge it "
                         "yourself and resolve" % (cases["branch"], self.branch, why)), costs
 
-        self.hard_block(g)
+        self.hard_block(g, t)
 
         if complexity(t) == "complex":
             rh = self.start("reviewer", "reviewer.md", t, r, self.wt).finish(
@@ -682,29 +710,50 @@ class Issuer:
                     "missing name - assert the symbol exists first): %s" % ", ".join(errors[:10]))
         return None
 
-    def hard_block(self, g):
+    def hard_block(self, g, t=None):
         main = self.cfg.main_branch
         own = g.sha(main) is not None
         files = g.changed_files(self.target)
         if own:
             from_main = set(g.changed_files(main))
             files = [f for f in files if f in from_main]
-        hits = [f for f in files if any(f == p or f.startswith(p.rstrip("/") + "/")
-                                        for p in self.cfg.hard_paths)]
-        if self.cfg.hard_patterns:
-            added = g.added_lines(self.target)
-            if own:
-                from_main = set(g.added_lines(main))
-                added = [line for line in added if line in from_main]
-            for pat in self.cfg.hard_patterns:
-                try:
-                    rx = re.compile(pat)
-                except re.error:
-                    continue
-                if any(rx.search(line) for line in added):
-                    hits.append("pattern %r" % pat)
-        if hits:
-            raise Stuck("hard_block", "the change touches hard_block: %s" % ", ".join(hits))
+        paths = [f for f in files if any(f == p or f.startswith(p.rstrip("/") + "/")
+                                         for p in self.cfg.hard_paths)]
+        rxs = []
+        for pat in self.cfg.hard_patterns:
+            try:
+                rxs.append((pat, re.compile(pat)))
+            except re.error:
+                continue
+        if not paths and not rxs:
+            return
+        triples = g.diff_lines(self.target)
+        if own:
+            from_main = set(g.diff_lines(main))
+            triples = [x for x in triples if x in from_main]
+        lines = []
+        for sign, path, text in triples:
+            matched = [pat for pat, rx in rxs if rx.search(text)] if sign == "+" else []
+            if matched:
+                lines.append({"file": path, "text": text, "patterns": matched})
+        if not paths and not lines:
+            return
+        detail = {"paths": paths, "lines": lines, "fingerprint": change_fingerprint(files, triples)}
+        ok = (t or {}).get("approval")
+        ok = ok if isinstance(ok, dict) else None
+        if ok and all(ok.get(k) == detail[k] for k in ("paths", "lines", "fingerprint")):
+            self.save(lambda x: event(x, "hard_block approval applied", by=ok.get("by"), approved_at=ok.get("at"),
+                                      fingerprint=detail["fingerprint"]), "hard_block approval applied")
+            return
+        hit_pats = [pat for pat, _ in rxs if any(pat in x["patterns"] for x in lines)]
+        out = ["the change touches hard_block: %s" % ", ".join(paths + ["pattern %r" % p for p in hit_pats])]
+        if ok:
+            out.append("  the approval by %s at %s no longer matches this change (approved fingerprint %s)"
+                       % (ok.get("by"), ok.get("at"), str(ok.get("fingerprint"))[:12]))
+        out += ["  path %s" % p for p in paths]
+        out += ["  line %s: %s  (pattern %s)" % (x["file"], x["text"], ", ".join(x["patterns"])) for x in lines]
+        out.append("  fingerprint %s" % detail["fingerprint"])
+        raise Stuck("hard_block", "\n".join(out), detail=detail)
 
     # ------------------------------------------------------------ agents
 
@@ -824,11 +873,13 @@ class Issuer:
 
     # ------------------------------------------------------------ endings
 
-    def stuck(self, reason, text, page=True):
+    def stuck(self, reason, text, page=True, detail=None):
         def mutate(t):
             t["state"], t["run"] = "stuck", None
             t.pop("waiting", None)
             t["stuck"] = {"reason": reason, "text": text, "at": osx.now()}
+            if detail is not None:
+                t["stuck"]["hard_block"] = detail
             event(t, "stuck", reason=reason)
         self.save(mutate, "stuck (%s)" % reason)
         if page:   # not when the worker's revise escalated in this round: that page is the page
@@ -838,18 +889,29 @@ class Issuer:
             if gid in snap.groups and snap.groups[gid].get("state") == "open" and chain.stuck_holds(snap, self.id, gid):
                 page_text += "\n%s waits for this decision; groups after it in the chain: %s" % (
                     gid, ", ".join(chain.behind(snap, gid)) or "none")
-            self.pool.report("env" if reason == "env" else "decision", self.id, page_text, **self.stuck_ask(reason))
+            extra = self.stuck_ask(reason, snap.ticket(self.id))
+            if detail is not None:
+                extra["hard_block"] = detail
+            self.pool.report("env" if reason == "env" else "decision", self.id, page_text, **extra)
 
-    def stuck_ask(self, reason):
+    def stuck_ask(self, reason, t=None):
         i = self.id
         cancel = pages.option("cancel", "#%s is cancelled; tickets that depend on it keep waiting" % i)
         if reason == "hard_block":
+            revise = pages.option("revise", "the opener changes #%s per your words so its change avoids hard_block; it goes back to ready at round 0" % i)
+            approve = pages.option("approve", "#%s goes back to ready and merges only while its change is exactly the one listed; any other change stops again for your approval" % i)
+            retry = pages.option("retry", "#%s runs again as written and stops at the same place unless hard_block changed" % i)
+            why = ((t or {}).get("hard_block_approval") or "")
+            why = why.strip() if isinstance(why, str) else ""
+            if why:
+                return pages.ask(
+                    "#%s's change touches hard_block: approve this exact change, change the ticket, or cancel it?" % i,
+                    [approve, revise, cancel, retry],
+                    "the opener opened #%s knowing it needs your approval at merge: %s" % (i, why))
             return pages.ask(
-                "#%s's change touches hard_block: change the ticket, or cancel it?" % i,
-                [pages.option("revise", "the opener changes #%s per your words so its change avoids hard_block; it goes back to ready at round 0" % i),
-                 cancel,
-                 pages.option("retry", "#%s runs again as written and stops at the same place unless hard_block changed" % i)],
-                "the change the ticket asks for touches hard_block, so a retry stops at the same place")
+                "#%s's change touches hard_block: approve this exact change, change the ticket, or cancel it?" % i,
+                [revise, approve, cancel, retry],
+                "approve only when every listed path and line is what the ticket must do; otherwise revise it so its change avoids hard_block")
         why = {"rounds": "a retry keeps the ticket as written; change it only when the last feedback shows the ticket itself is wrong",
                "timeout": "running out of time says nothing about the ticket's text",
                "target": "a retry puts #%s into a new integration branch" % i,
@@ -971,7 +1033,7 @@ def _outcome(issuer):
         return issuer.go()
     except Stuck as exc:
         issuer.stop_agents()
-        _safe(lambda: issuer.stuck(exc.reason, exc.text, exc.page))
+        _safe(lambda: issuer.stuck(exc.reason, exc.text, exc.page, exc.detail))
         print("ticket_issuer: #%s stuck (%s): %s" % (issuer.id, exc.reason, exc.text), file=sys.stderr)
         return 1
     except Interrupted as exc:

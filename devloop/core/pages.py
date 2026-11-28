@@ -5,15 +5,15 @@ the recommended option first, and the reason for the recommendation.
     row["options"]         [{"action", "note", "consequence"}, ...]
     row["recommendation"]  one line, at most 200 characters
 
-An action is one of ACTIONS (the board's answer buttons plus release); command() gives the shell
+An action is one of ACTIONS (the board's answer buttons, release, and approve, which only the main session answers); command() gives the shell
 command an option runs. Stdlib only; must not import pool (pool imports this module).
 """
 
 import re
 import shlex
 
-ACTIONS = ("revise", "retry", "cancel", "group-ready", "group-cancel", "rerun", "release", "ack")
-TICKET_ACTIONS = ("revise", "retry", "cancel")
+ACTIONS = ("revise", "retry", "cancel", "approve", "group-ready", "group-cancel", "rerun", "release", "ack")
+TICKET_ACTIONS = ("revise", "retry", "cancel", "approve")
 GROUP_ACTIONS = ("group-ready", "group-cancel", "rerun", "release")
 KEYS = ("question", "options", "recommendation")
 LINE_MAX = 200
@@ -96,6 +96,8 @@ def command(action, ref, page, note):
     if action in ("retry", "cancel"):
         return "actl new --revise %s --from user --decision %s%s --page %s" % (
             ref, action, " --reason %s" % q(note) if note else "", page)
+    if action == "approve":
+        return "actl tickets approve %s --page %s --reason %s" % (q(ref), q(page), q(note) if note else "'<your words>'")
     if action == "group-ready":
         return "actl tickets ready %s%s --page %s" % (ref, " --note %s" % q(note) if note else "", page)
     if action == "group-cancel":
