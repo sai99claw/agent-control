@@ -1800,6 +1800,223 @@ class T132Acceptance(LoopCase):
         self.assertEqual(str(ctx.exception), "working directory does not exist: " + d)
 
 
+class T150Acceptance(LoopCase):
+    """#150: a CLI that says its login is missing or expired parks its program machine-wide as
+    needs_login and is announced by one env page. Expected values come from the ticket's acceptance
+    items 1-6 and the measured claude 401 object, not from the code."""
+
+    LOGIN_401 = {"type": "result", "subtype": "success", "is_error": True, "api_error_status": 401,
+                 "api_error_type": "authentication_error", "duration_ms": 182, "num_turns": 1,
+                 "session_id": "s3", "total_cost_usd": 0,
+                 "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+                           "cache_creation_input_tokens": 0},
+                 "terminal_reason": "api_error",
+                 "result": "Failed to authenticate. API Error: 401 OAuth access token is invalid."}
+    LOGIN_TEXT = "Failed to authenticate. API Error: 401 OAuth access token is invalid."
+    PLAIN_LOGIN = "Not logged in · Please run /login (rate limit headers missing)"
+    ENV_TEXT = ("agy.sh needs a new login\n"
+                "Failed to authenticate. API Error: 401 OAuth access token is invalid.\n"
+                "devloop skips agy.sh in every project on this machine until you log in again and run "
+                "`actl tickets login-ok agy.sh`")
+    WAIT_TEXT = "agy.sh needs a new login"
+    OPENER_TEXT = ("the opener could not run: agy.sh needs a new login; nothing was opened:\n"
+                   "Failed to authenticate. API Error: 401 OAuth access token is invalid.\n"
+                   "log in again, run `actl tickets login-ok agy.sh`, then send the request again with "
+                   "`actl new --request`")
+    NEEDS = "needs login"
+    PARKED = "needs_login"
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.cool = os.environ["AC_COOLDOWN_FILE"]
+        self.login_json = os.path.join(self.tmp, "login.json")
+        with open(self.login_json, "w") as fh:
+            fh.write(json.dumps(self.LOGIN_401) + "\n")
+        self.count = os.path.join(self.tmp, "agy-count")
+        self.agy = self.script("bin", ["cat >/dev/null",
+                                       'n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s' % (self.count, self.count),
+                                       "cat %s" % self.login_json, "exit 1"])
+
+    # ---------------------------------------------------------------- helpers
+
+    def script(self, folder, lines):
+        d = os.path.join(self.tmp, folder)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "agy.sh")
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\n" + "\n".join(lines) + "\n")
+        os.chmod(path, 0o755)
+        return path
+
+    def hand_in(self, touch):
+        return ["sh", "-c", "cat >/dev/null; touch %s; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"" % touch]
+
+    def agents_cfg(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    def runs(self):
+        try:
+            with open(self.count) as fh:
+                return int(fh.read().strip())
+        except FileNotFoundError:
+            return 0
+
+    def commands(self):
+        self.assertTrue(os.path.isfile(self.cool), "no cooldown file was written at $AC_COOLDOWN_FILE")
+        with open(self.cool) as fh:
+            return json.load(fh).get("commands") or {}
+
+    def login_pages(self):
+        return [r for r in self.snap().inbox.values()
+                if r.get("kind") == "env" and r.get("ref") == "login-agy.sh"]
+
+    def worker_rows(self, ident):
+        return [c for c in self.snap().ticket(str(ident)).get("cost") or [] if c.get("role") == "worker"]
+
+    def chain_config(self):
+        chain = [[self.agy], AGENT]
+        self.config(agents=dict(self.agents_cfg(), worker=chain, worker_simple=chain))
+
+    # ---------------------------------------------------------------- items 1-4
+
+    def test_items1_4_a_login_failure_falls_through_parks_and_pages_once(self):
+        self.chain_config()
+        self.add(1)
+        started = time.time()
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+        done = [r for r in self.worker_rows(1) if r.get("outcome") == "done"]
+        self.assertTrue(done, self.worker_rows(1))
+        self.assertTrue((done[0].get("fell_back_from") or [None])[0]
+                        == {"command": self.agy, "model": "agy.sh", "outcome": self.NEEDS},
+                        "the done row does not list the parked command as acceptance 2 gives")
+        rec = self.commands().get("agy.sh")
+        self.assertIsNotNone(rec, "no record under the program's basename")
+        self.assertTrue(rec.get("state") == self.PARKED, "the record's state is not the parked one")
+        self.assertTrue(rec.get("text") == self.LOGIN_TEXT, "the record's text is not the CLI's error line")
+        self.assertEqual((rec.get("project"), rec.get("role")), ("proj", "worker_simple"))
+        self.assertNotIn("until", rec)
+        since = calendar.timegm(time.strptime(rec["since"], self.FMT))
+        self.assertTrue(started - 2 <= since <= time.time() + 2, rec["since"])
+        pages_ = self.login_pages()
+        self.assertEqual(len(pages_), 1, [(r.get("kind"), r.get("ref")) for r in self.snap().inbox.values()])
+        self.assertTrue(pages_[0].get("text") == self.ENV_TEXT, "the env page text is not the one acceptance 4 gives")
+        self.assertEqual(self.runs(), 1)
+
+    def test_item4_one_page_across_parallel_and_later_runs(self):
+        self.chain_config()
+        self.config(max_parallel=2)
+        self.add(1)
+        self.add(2)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        self.assertEqual([self.state(1), self.state(2)], ["landed", "landed"])
+        self.assertEqual(len(self.login_pages()), 1)
+        first = self.runs()
+        self.assertIn(first, (1, 2))
+        self.add(3)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        self.assertEqual(self.state(3), "landed")
+        self.assertEqual(self.runs(), first, "a parked program was started again")
+        self.assertEqual(len(self.login_pages()), 1)
+
+    # ---------------------------------------------------------------- item 1 order
+
+    def test_item1_login_is_checked_before_quota(self):
+        from core import agents
+        from core.config import Config
+        said = os.path.join(self.tmp, "plain.txt")
+        with open(said, "w") as fh:
+            fh.write(self.PLAIN_LOGIN + "\n")
+        b2 = self.script("b2", ["cat >/dev/null", "cat %s" % said, "exit 1"])
+        self.config(agents=dict(self.agents_cfg(), worker=[[b2], self.hand_in(os.path.join(self.tmp, "second-ran"))]))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30).finish()
+        self.assertEqual(hand.kind, "done")
+        tried = (hand.cost or {}).get("fell_back_from") or [{}]
+        self.assertTrue(tried[0].get("outcome") == self.NEEDS, "the first command's outcome is not the login one")
+        self.assertTrue((self.commands().get("agy.sh") or {}).get("state") == self.PARKED,
+                        "no parked record for the program")
+
+    # ---------------------------------------------------------------- item 5
+
+    def test_item5_a_chain_parked_by_login_waits_until_the_record_goes(self):
+        import threading
+        from core import agents
+        from core.config import Config
+        osx.write_json(self.cool, {"version": 1, "commands": {"agy.sh": {
+            "state": self.PARKED, "since": time.strftime(self.FMT, time.gmtime()), "text": "x",
+            "project": "other", "role": "worker"}}})
+        ok_ran = os.path.join(self.tmp, "ok-ran")
+        ok = self.script("ok", ["cat >/dev/null", "touch %s" % ok_ran,
+                                "echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\""])
+        self.config(quota_retry_seconds=600, agents=dict(self.agents_cfg(), worker=[[ok]]))
+        calls, seen, waited = [], {}, threading.Event()
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append(phase)
+            if phase == "wait":
+                seen.update(row=row, until=until, text=text, at=time.time(), ran=os.path.exists(ok_ran))
+                waited.set()
+        p = agents.start(Config(self.proj), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30,
+                         on_quota=hook)
+        self.addCleanup(p.stop)
+        out = {}
+
+        def go():
+            try:
+                out["hand"] = p.finish()
+            except Exception as exc:   # surfaced by the assertions below
+                out["error"] = repr(exc)
+        th = threading.Thread(target=go, daemon=True)
+        th.start()
+        deadline = time.time() + 10
+        while time.time() < deadline and th.is_alive() and not waited.is_set():
+            waited.wait(0.05)
+        self.assertTrue(waited.is_set(), (calls, out.get("error")))
+        self.assertIsNone(seen["row"])
+        self.assertLessEqual(abs(seen["until"] - (seen["at"] + 600)), 3, seen)
+        self.assertTrue(self.WAIT_TEXT in (seen["text"] or ""), "the wait text does not name the program's login")
+        self.assertFalse(seen["ran"] or os.path.exists(ok_ran), "the parked command was started")
+        osx.write_json(self.cool, {"version": 1, "commands": {}})
+        th.join(5)
+        self.assertFalse(th.is_alive(), "the wait did not end after the record was removed")
+        self.assertEqual(calls, ["wait", "over"])
+        self.assertEqual(out["hand"].kind, "done")
+        self.assertTrue(os.path.exists(ok_ran))
+
+    # ---------------------------------------------------------------- item 6
+
+    def test_item6_the_opener_ends_at_once_with_its_login_page(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.config(agents=dict(self.agents_cfg(), creator=[[self.agy]]))
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1)
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+        self.assertEqual(self.runs(), 1)
+        rows = list(self.snap().inbox.values())
+        self.assertEqual(len(self.login_pages()), 1, [(r.get("kind"), r.get("ref")) for r in rows])
+        asks = [r for r in rows if r.get("kind") == "decision" and r.get("ref") == "request"]
+        self.assertEqual(len(asks), 1, [(r.get("kind"), r.get("ref")) for r in rows])
+        page = asks[0]
+        self.assertTrue(page.get("text") == self.OPENER_TEXT, "the page text is not the one acceptance 6 gives")
+        self.assertTrue([(c.get("role"), c.get("outcome")) for c in page.get("cost") or []] == [("creator", self.NEEDS)],
+                        "the page's cost rows are not the one login run")
+        self.assertEqual([o.get("action") for o in page.get("options") or []], ["ack"])
+
+
 class CodexUsageUnits(LoopCase):
     EVENTS = [{"type": "thread.started", "thread_id": "t-9"}, {"type": "turn.started"},
               {"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 40,
