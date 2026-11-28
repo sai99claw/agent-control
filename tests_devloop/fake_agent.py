@@ -84,6 +84,15 @@ if role == "worker":
         hand({"kind": "revise"})
         sys.exit(0)
     open("impl_%s.txt" % ticket, "w").write("bad" if action == "wrong" else "ok")
+    if action == "edit_cases":   # #166: change the body of the verifier's case class
+        path = "cases/test_case_%s.py" % ticket
+        text = open(path).read()
+        open(path, "w").write(text.replace("self.assertTrue(True)", "self.assertTrue(1)"))
+    if action == "dup_cases":   # #166: append a second class of the verifier's case name
+        path = "cases/test_case_%s.py" % ticket
+        text = open(path).read()
+        open(path, "w").write(text + "\n\nclass T%sAcceptance(unittest.TestCase):\n"
+                              "    def test_it(self):\n        pass\n" % ticket)
     if action == "red":
         open("red.txt", "w").write("x")
     if action == "move_main_files":   # #29: $FAKE_WORKER_FILES here, then $FAKE_MAIN_FILES committed to main
@@ -137,12 +146,16 @@ elif role == "verifier":
     if action != "nocommit":
         os.makedirs("cases", exist_ok=True)
         open("cases/case_%s.txt" % ticket, "w").write("case")
-        for kind in ("weak", "error", "unnamed"):
+        for kind in ("weak", "error", "unnamed", "skip", "xfail"):   # #166: skip, xfail
             marker = "cases/case_%s.%s" % (ticket, kind)
             if action == kind:
                 open(marker, "w").write(kind)
             elif os.path.exists(marker):
                 os.unlink(marker)
+        if action == "py_cases":   # #166: what ok does, plus a Python case class with the ticket's mark
+            open("cases/test_case_%s.py" % ticket, "w").write(
+                "import unittest\n\n\nclass T%sAcceptance(unittest.TestCase):\n"
+                "    def test_it(self):\n        self.assertTrue(True)\n" % ticket)
         commit("cases %s" % ticket)
     hand({"kind": "cases", "run": ["case_%s" % ticket]})
 elif role == "reviewer":

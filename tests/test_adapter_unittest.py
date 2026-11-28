@@ -317,6 +317,21 @@ class RunWritesSchemaOne(Fixture):
         self.assertFalse(self.has_result())
 
 
+class T166Acceptance(Fixture):
+    """#166 A1: an expectedFailure whose body fails is recorded as `xfail`, not `pass`."""
+
+    def test_expected_failure_is_xfail_and_rc_0(self):
+        self.put("test_xf.py", "import unittest\n\n\nclass XF(unittest.TestCase):\n"
+                 "    @unittest.expectedFailure\n    def test_xf(self):\n        self.assertEqual(1, 2)\n\n"
+                 "    def test_ok(self):\n        pass\n")
+        done = self.run_adapter("run", "test_xf.XF.test_xf", "test_xf.XF.test_ok")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = {row["id"]: row for row in self.result()["ids"]}
+        self.assertEqual(rows["test_xf.XF.test_xf"]["status"], "xfail")
+        self.assertEqual(rows["test_xf.XF.test_xf"]["message"], "expected failure")
+        self.assertEqual(rows["test_xf.XF.test_ok"]["status"], "pass")
+
+
 class EnvironmentSuspect(Fixture):
     """A3: rc 86 ⇔ `environment_suspect` non-empty (D-019 seven keys)."""
 
