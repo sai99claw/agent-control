@@ -1,0 +1,21 @@
+{
+  "kind": "decision",
+  "ref": "g20",
+  "text": "group g20 is in main (147c47b2d745) but the release failed - not retried, not rolled back (release log: /home/user/agent-control-devloop/runs/release/g20.log):\nrc 86\nlast step: (none printed)\nlast 15 lines of the release log:\nerror: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403\nsend-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly\nrelease: tag a-20261128-g20-147c47b made here but not pushed to origin\nflaky (passed when run again): test_release.T142Acceptance.test_item9_sigterm_stops_the_release_command_and_writes_the_signal (AssertionError: not within 5 s: the release command's process was stopped) - fix ticket: #171",
+  "at": "2026-11-28T11:39:54Z",
+  "acked": false,
+  "question": "g20 is in main (147c47b2d745) but its release failed: leave it for now, or run the release again?",
+  "options": [
+    {
+      "action": "ack",
+      "note": "",
+      "consequence": "nothing is run now; g20 stays landed with its release failed until `actl tickets release g20`"
+    },
+    {
+      "action": "release",
+      "note": "",
+      "consequence": "runs the release once more on 147c47b2d745; its outcome is a new page"
+    }
+  ],
+  "recommendation": "the release log says why it failed, and a re-run before that cause is fixed fails the same way"
+}
