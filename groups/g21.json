@@ -7,16 +7,7 @@
     "170"
   ],
   "fix_round": 0,
-  "job": {
-    "kind": "release",
-    "stamp": {
-      "pid": 26495,
-      "host": "vm",
-      "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
-      "started": "2026-11-28T11:40:06Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/release-job/g21/result-1795866006.json"
-  },
+  "job": null,
   "created": "2026-11-28T10:19:47Z",
   "history": [
     {
@@ -62,6 +53,10 @@
     {
       "at": "2026-11-28T11:40:07Z",
       "event": "release started"
+    },
+    {
+      "at": "2026-11-28T11:40:25Z",
+      "event": "release failed"
     }
   ],
   "base": "abf49852381e3bef69ba1b5014d31bedb9ff2780",
@@ -69,6 +64,6 @@
   "last_regression": "green",
   "verified_sha": "f6067cdb06def20aa96ba01f8f7949058c974e56",
   "landed_sha": "f6067cdb06def20aa96ba01f8f7949058c974e56",
-  "release": "pending",
+  "release": "failed",
   "release_log": "/home/user/agent-control-devloop/runs/release/g21.log"
 }
