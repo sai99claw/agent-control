@@ -3,5 +3,7 @@
   "ref": "171",
   "text": "opened #171 A stop signal that arrives while the release writes its live record still stops the release command",
   "at": "2026-11-28T11:39:48Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-28T11:51:38Z"
 }

@@ -70,6 +70,12 @@
       "at": "2026-11-28T11:50:41Z",
       "event": "landed",
       "group": "g22"
+    },
+    {
+      "at": "2026-11-28T11:51:38Z",
+      "event": "page acknowledged",
+      "page": "20261128T113948Z-created-171",
+      "by": "main-session"
     }
   ],
   "cost": [
