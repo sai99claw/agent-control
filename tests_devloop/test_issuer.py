@@ -1040,8 +1040,10 @@ class RevisedMidRound(LoopCase):
         from core import agents
         run = os.path.join(self.tmp, "run")
         os.makedirs(run)
-        p = agents.Pending("worker", [["sh", "-c", script]], "go", self.proj, dict(os.environ), run,
-                           os.path.join(run, "result.json"), 30, 1)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        env["DEVLOOP_RESULT"] = os.path.join(run, "result.json")
+        p = agents.Pending("worker", [["sh", "-c", script]], "go", self.proj, env, run,
+                           env["DEVLOOP_RESULT"], 30, 1)
         p.launch()
         return p
 
