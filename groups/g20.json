@@ -1,23 +1,14 @@
 {
   "id": "g20",
   "branch": "int/g20",
-  "state": "fixing",
+  "state": "pr",
   "members": [
     "166",
     "167",
     "168"
   ],
   "fix_round": 1,
-  "job": {
-    "kind": "fixer",
-    "stamp": {
-      "pid": 1170,
-      "host": "vm",
-      "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
-      "started": "2026-11-28T10:38:56Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g20/main-moved.json"
-  },
+  "job": null,
   "created": "2026-11-28T09:49:29Z",
   "history": [
     {
@@ -51,6 +42,10 @@
     {
       "at": "2026-11-28T10:39:00Z",
       "event": "fixer agent started (round 1)"
+    },
+    {
+      "at": "2026-11-28T11:18:54Z",
+      "event": "fixer done (rc 0): verify again"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
@@ -84,5 +79,6 @@
       "acceptance": "C1 (start_fixer spawns auto_fixer first, then makes one pool commit, through _start_job's post-spawn write) together with C5 (when the implementation stops calling _start_job with four arguments, replace the 4-argument _start_job stub by a patch of ticket_controller.osx.spawn and keep the assertions)",
       "round": 1
     }
-  ]
+  ],
+  "fix_end_sha": "a759fe75023418ddcb69b46c0317deebef20f502"
 }
