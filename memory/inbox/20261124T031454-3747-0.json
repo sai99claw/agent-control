@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "reviewer",
-  "text": "For an acceptance line of the form 'no code does X any more', search for X in every shape (other helper names, the slice split across lines, isdigit on a suffix) yourself; the implementer's guard test usually greps only the shapes it already removed.",
-  "source": "#122 r1 reviewer",
-  "at": "2026-11-24T03:14:54Z"
-}

@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "reviewer",
-  "text": "For a lock held by a process for its life, check that nothing the process starts can inherit the fd (grep for pass_fds, close_fds=False, os.fork, set_inheritable, preexec_fn); an inherited flock outlives its holder and makes the controller treat a dead issuer as live.",
-  "source": "#130 r1 reviewer",
-  "at": "2026-11-24T14:09:33Z"
-}

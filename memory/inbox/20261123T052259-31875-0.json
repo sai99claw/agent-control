@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "reviewer",
-  "text": "When a ticket changes a function's return shape (e.g. a value to a tuple), grep every caller of it across the repo, tests included, before judging; a single missed caller turns into a crash the diff never shows.",
-  "source": "#119 r1 reviewer",
-  "at": "2026-11-23T05:22:58Z"
-}

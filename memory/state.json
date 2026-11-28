@@ -12,7 +12,8 @@
     "memory/project.md": "2026-11-24T04:10:31Z",
     "memory/role/creator.md": "2026-11-24T14:25:49Z",
     "memory/role/fixer.md": "2026-11-24T03:26:31Z",
-    "memory/role/worker.md": "2026-11-28T00:28:49Z"
+    "memory/role/worker.md": "2026-11-28T00:28:49Z",
+    "memory/role/reviewer.md": "2026-11-28T00:29:29Z"
   },
   "runs": [
     {
@@ -187,6 +188,31 @@
           "cache_write_tokens": 49604,
           "usd": 0.9321794000000001,
           "session_id": "7162a2c7-5dae-4e41-9e14-c2c3dbee1521"
+        }
+      ]
+    },
+    {
+      "path": "memory/role/reviewer.md",
+      "at": "2026-11-28T00:29:29Z",
+      "ok": true,
+      "lessons": 3,
+      "cost": [
+        {
+          "role": "consolidator",
+          "model": "fable",
+          "effort": "medium",
+          "command": "claude",
+          "round": null,
+          "seconds": 19.8,
+          "at": "2026-11-28T00:29:25Z",
+          "outcome": "memory",
+          "run_dir": "/home/user/agent-control-devloop/runs/memory/role-reviewer-2026-11-28T002905Z",
+          "input_tokens": 4,
+          "output_tokens": 1876,
+          "cache_read_tokens": 78791,
+          "cache_write_tokens": 14486,
+          "usd": 0.3226062,
+          "session_id": "340de6aa-ebf9-4d80-84b8-e9f09c0f7384"
         }
       ]
     }
