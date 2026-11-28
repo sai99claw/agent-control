@@ -26,7 +26,12 @@
   "feedback": [
     "round 1: the ticket was revised during this round; the round was stopped and does not count, and the next round works on the revised ticket"
   ],
-  "cases": null,
+  "cases": {
+    "branch": "t/165-cases",
+    "run": [
+      "test_pages.T165Acceptance"
+    ]
+  },
   "history": [
     {
       "at": "2026-11-28T09:28:13Z",
@@ -83,6 +88,10 @@
       "onto": "int/g19",
       "base": "4d36f704d1d9f1d27681ae50b3fec676cbf5f1f0",
       "replayed": 1
+    },
+    {
+      "at": "2026-11-28T10:30:00Z",
+      "event": "cases ready"
     }
   ],
   "cost": [
