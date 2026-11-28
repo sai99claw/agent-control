@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "creator",
-  "text": "When a request states today's behaviour as its premise ('X only does Y'), check it against the area's acceptance tests before designing: a wrong premise can turn a requested addition into the reversal of a shipped rule, and the ticket must then name the reversal, the old cases it changes and what cancelling it would mean.",
-  "source": "request (opener)",
-  "at": "2026-11-27T23:57:46Z"
-}
