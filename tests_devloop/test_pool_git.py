@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,68 @@ class PoolRules(GitIsolatedCase):
     def test_a_write_counts_only_once_pushed(self):
         self.a.update(lambda tx: tx.write("tickets/5.json", {"id": "5"}), "a")
         self.assertIn("5", self.b.snapshot().tickets)
+
+
+class SnapshotCost(GitIsolatedCase):
+    """the measured cost of one snapshot() on a pool the size of the largest project's (about 550 tickets)"""
+
+    @staticmethod
+    def fixture():
+        rows = lambda n: [{"at": "2026-11-28T00:00:00Z", "event": "e" * 120} for _ in range(n)]
+        files = {}
+        for n in range(1, 551):
+            files["tickets/%d.json" % n] = {
+                "id": str(n), "title": "ticket %d" % n, "state": "landed", "group": "g%d" % ((n - 1) % 160 + 1),
+                "objective": "o" * 200, "acceptance": ["a" * 300 for _ in range(8)],
+                "outline": "x" * 4000, "test_plan": "t" * 2000, "history": rows(50)}
+        for k in range(1, 161):
+            files["groups/g%d.json" % k] = {
+                "id": "g%d" % k, "branch": "int/g%d" % k, "state": "landed",
+                "members": [str((k - 1) * 3 % 550 + 1 + j) for j in range(3)], "history": rows(10)}
+        for i in range(1, 301):
+            files["inbox/p%d.json" % i] = {
+                "kind": "landed", "ref": "g%d" % ((i - 1) % 160 + 1), "text": "p" * 300,
+                "at": "2026-11-28T00:00:00Z", "acked": True}
+        files["dag.json"] = {"tickets": {str(n): {"depends_on": []} for n in range(1, 551)}}
+        return files
+
+    def test_snapshot_of_a_550_ticket_pool(self):
+        tmp = tempfile.mkdtemp(prefix="snapshot-cost-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        seed = Pool(os.path.join(tmp, "seed"), remote=None).init()
+        files = self.fixture()
+        for rel, data in files.items():
+            osx.write_json(os.path.join(seed.path, rel), data)
+        git(seed.path, "add", "-A")
+        git(seed.path, "commit", "-q", "-m", "fixture")
+        bare = os.path.join(tmp, "remote.git")
+        git(tmp, "clone", "-q", "--bare", seed.path, bare)
+        path = os.path.join(tmp, "a")
+        git(tmp, "clone", "-q", bare, path)
+        git(path, "config", "user.name", "a")
+        git(path, "config", "user.email", "a@t")
+        pool = Pool(path, remote="origin")
+        pool.snapshot()   # warm-up
+
+        def timed(fn):
+            out = []
+            for _ in range(5):
+                t0 = time.perf_counter()
+                res = fn()
+                out.append(time.perf_counter() - t0)
+            return out, res
+        snaps, snap = timed(pool.snapshot)
+        reads, _ = timed(pool._read_all)
+        size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(path)
+                   if ".git" not in d.split(os.sep) for f in fs if f.endswith(".json"))
+        sys.stderr.write("snapshot cost: 550 tickets, 160 groups, 300 pages, %.1f MB of json, "
+                         "snapshot median %.3f s max %.3f s, read part median %.3f s, %s cores\n"
+                         % (size / 1e6, statistics.median(snaps), max(snaps), statistics.median(reads),
+                            os.cpu_count()))
+        self.assertEqual(len(snap.tickets), 550)
+        self.assertEqual(len(snap.groups), 160)
+        self.assertEqual(len(snap.inbox), 300)
+        self.assertEqual(snap.tickets["275"], files["tickets/275.json"])
 
 
 class ShownState(unittest.TestCase):

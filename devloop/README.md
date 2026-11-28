@@ -788,6 +788,7 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
 
 - **Pool**: every write is pull → change → commit → push; a rejected push re-reads and applies the
   change again. The pool is the only state; logs under `<worktrees>/runs/` are only logs.
+- **Pool reads are not cached**: `Pool.snapshot()` takes the pool lock, syncs (with a remote: `git fetch` and `git reset --hard`) and reads every file on every call. Measured 2026-11-28 on 4 cores with a synthetic pool of 550 tickets, 160 groups and 300 pages (10.5 MB of JSON): 0.060 s per call (median of 5, max 0.072 s), 0.038 s of it reading the files. A cache keyed by the pool repo's local HEAD sha, dropped by any write through `Pool`, would be added only above 0.5 s per call (D-102 group 6.1); a remote pool's network fetch is not in this number and such a cache would not save it. Rerun: `python3 -m unittest tests_devloop.test_pool_git.SnapshotCost` from the repo root (the numbers are printed on stderr).
 - **Agents** get a prompt on stdin and write their hand-in to `$DEVLOOP_RESULT`; nothing else is read.
 - **Exit codes**: 0 done · 1 stuck/red (recorded) · 2 refused or could not start · 3 needs the user
   (a page was written; under `--forever` an env or unmeasured result pauses the group instead of
