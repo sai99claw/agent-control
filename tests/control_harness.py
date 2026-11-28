@@ -165,7 +165,6 @@ DEFAULT_CONFIG = {
     "events_file": "board/events.jsonl",
     "answers_file": "board/answers.jsonl",
     "main_branch": "main",
-    "routing": {"implement": "opus"},
     "memory": {"consolidator": "fable", "applies_to": ["memory/model/*.md"],
                "inbox_suffix": ".inbox.md"},
     "lease_seconds": {"opener": 900, "verifier": 3600, "land": 1800,

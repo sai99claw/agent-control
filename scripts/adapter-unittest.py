@@ -10,8 +10,7 @@
 and the shim is gone (#162: the gate calls `scripts/testiface.py`, whose built-in `select` / `run` /
 `full` is this file). `EnvironmentResult` (statistical environment
 suspects, `environment_fail_fast_threshold`) and `LogStream` moved here verbatim — the D-019 row shape
-(`suspect_row`, `parse_environment_suspects`) stays in `status.py`, which `status.py done` needs even
-in a copy that has no adapter next to it.
+(`suspect_row`, `parse_environment_suspects`) stays in `status.py`, which `scripts/testiface.py` imports too.
 
 ## Environment (§4)
 `AC_ROOT` (whose `board/config.json` carries `tests.unittest`; unset = cwd's main repo root),

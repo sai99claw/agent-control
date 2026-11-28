@@ -20,9 +20,8 @@ never be migrated.
 
 ## Schema
 `SCHEMA` types the keys that exist at base (design §2 rows marked *existing*) plus the keys the
-scripts read today but the design table does not list (`verifier`, `gate`, `guard_main_paths`,
-`unit_cmd`, `regression`, `regression_auto_ticket`) — calling a key A reads "possibly retired" would
-be a wrong next step. `tests` and `board.key_file` are typed now so rows 3a / 3b / 5 add data, not
+scripts read today but the design table does not list (`verifier`, `gate`, `guard_main_paths`) —
+calling a key A reads "possibly retired" would be a wrong next step. `tests` and `board.key_file` are typed now so rows 3a / 3b / 5 add data, not
 schema. A nested key is typed only when its row is here; nested unknown keys are not warned.
 """
 
@@ -47,7 +46,6 @@ SCHEMA = [
     ("worktree_dir", "string", NO_DEFAULT),        # ../<repo>-wt, computed by the readers
     ("port", "int", 18905),
     ("health_urls", "object", NO_DEFAULT),
-    ("routing", "object", NO_DEFAULT),
     ("model_tiers", "list", NO_DEFAULT),
     ("effort", "object", NO_DEFAULT),
     ("worker", "object", NO_DEFAULT),
@@ -66,11 +64,9 @@ SCHEMA = [
     ("lease_seconds.verifier", "int", NO_DEFAULT),
     ("lease_seconds.land", "int", NO_DEFAULT),
     ("lease_seconds.worker", "int", NO_DEFAULT),
-    ("flaky_threshold", "int", NO_DEFAULT),
     ("flake_auto_single_runs", "int", NO_DEFAULT),
     ("flake_auto_group_runs", "int", NO_DEFAULT),
     ("environment_fail_fast_threshold", "int", NO_DEFAULT),
-    ("flaky_auto_ticket", "bool", NO_DEFAULT),
     ("verify_case", "object", NO_DEFAULT),
     ("verify_case.timeout_seconds", "int", NO_DEFAULT),
     ("batch_fix", "object", NO_DEFAULT),
@@ -110,9 +106,6 @@ SCHEMA = [
     # read at base, not in the design table
     ("gate", "object", NO_DEFAULT),
     ("guard_main_paths", "list", NO_DEFAULT),
-    ("unit_cmd", "string", NO_DEFAULT),
-    ("regression", "object", NO_DEFAULT),
-    ("regression_auto_ticket", "bool", NO_DEFAULT),
 ]
 TOP_KEYS = {key for key, _, _ in SCHEMA if "." not in key}
 ROLE_CARD_NOTE = ("project role cards now overlay $AC_HOME/memory/role; "
