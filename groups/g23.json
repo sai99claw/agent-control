@@ -14,6 +14,11 @@
       "event": "dag: member #147 moved in from no group",
       "by": "main-session",
       "why": "D-103: get a hard_block page with hit list and fingerprint for the user's approval"
+    },
+    {
+      "at": "2026-11-28T11:52:06Z",
+      "event": "branch int/g23 made from main 1ba5de2d53cf"
     }
-  ]
+  ],
+  "base": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501"
 }
