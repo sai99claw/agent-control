@@ -1,7 +1,7 @@
 {
   "id": "g17",
   "branch": "int/g17",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "159",
     "160",
@@ -54,10 +54,17 @@
     {
       "at": "2026-11-28T05:19:41Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-28T05:19:45Z",
+      "event": "landed (release failed)"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
   "main_tried": "67809e72adf70ca80cb387aebf3c04cc050fc31b",
   "last_regression": "green",
-  "verified_sha": "622733720a558e3496e1b49f1738ad0cdb6e942d"
+  "verified_sha": "622733720a558e3496e1b49f1738ad0cdb6e942d",
+  "landed_sha": "622733720a558e3496e1b49f1738ad0cdb6e942d",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g17.log"
 }
