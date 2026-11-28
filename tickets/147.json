@@ -83,6 +83,22 @@
       "at": "2026-11-28T11:52:13Z",
       "event": "round start",
       "round": 1
+    },
+    {
+      "at": "2026-11-28T11:52:16Z",
+      "event": "rebased",
+      "branch": "t/147-cases",
+      "onto": "int/g23",
+      "base": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501",
+      "replayed": 1
+    },
+    {
+      "at": "2026-11-28T11:52:16Z",
+      "event": "rebased",
+      "branch": "t/147",
+      "onto": "int/g23",
+      "base": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501",
+      "replayed": 1
     }
   ],
   "cost": [
@@ -122,8 +138,8 @@
   },
   "claimed_at": "2026-11-28T11:52:08Z",
   "branch_base": {
-    "t/147-cases": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
-    "t/147": "5578f25e1adb6fdd0005b707fbc560e63f6428d6"
+    "t/147-cases": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501",
+    "t/147": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501"
   },
   "stuck": null
 }
