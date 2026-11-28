@@ -665,3 +665,12 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 | P2-5 `status.py` 死碼 | 大致成立 | 6.2 |
 
 </details>
+
+## 2026-11-28 第一階段 1、2、3、5 組落地;#147 卡在 hard_block
+
+- 已合入 main(622733720a55):g12(#142–#146)、g14(#148–#151)、g15(#152–#156)、g16(#157、#158)、g17(#159–#161)。
+  發版五組都是雲端 tag push 403(rc 86),頁已 ack;要發版請在使用者本機 `actl tickets release gN`。
+- #147(regression 停下時連測試一起停)一定要加 `os.kill`/`killpg`,命中 A 的 hard_block;
+  stuck 頁只有 revise/cancel/retry,沒有「核准」的路。已向使用者說明三個選項(先開票加「綁 sha 的核准」再核准 #147 /
+  主線這次手動合 / 取消),**等使用者決定**。頁 20261128T005836Z-decision-147 未 ack。
+- 第 4 組(誠實驗收、flock、start_fixer 寫一次)與第 6 組(快照成本、status.py 死碼)還沒開票。
