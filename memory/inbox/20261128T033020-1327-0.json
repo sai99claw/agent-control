@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "osx.alive must not reap a child (waitpid WNOHANG): a sibling's live-record check then steals the exit code from that child's Popen.wait(), which reads 0; use waitid with WNOWAIT.",
+  "source": "#150 r3 worker",
+  "at": "2026-11-28T03:30:19Z"
+}
