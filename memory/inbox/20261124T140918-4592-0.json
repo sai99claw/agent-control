@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "run_tests.py takes ids relative to the configured test dir (e.g. test_issuer.T131Acceptance); a tests_devloop.-prefixed id fails with an ImportError, not a test failure.",
-  "source": "#131 r1 verifier",
-  "at": "2026-11-24T14:09:17Z"
-}

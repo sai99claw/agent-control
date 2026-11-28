@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "core/chain functions are also called with hand-built SimpleNamespace snapshots (test_board_dag, test_board_decide, test_board_server, test_groups); a new attribute a chain reader needs must be read with a fallback, or every stand-in fixture breaks.",
-  "source": "group g11 fix r1",
-  "at": "2026-11-24T15:54:01Z"
-}

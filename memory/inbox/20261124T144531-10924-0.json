@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "test_issuer.Revise's ticket_creator cases go red under a worker's own DEVLOOP_ROLE/DEVLOOP_RESULT environment even on base; run them with those variables unset before attributing a red to the change.",
-  "source": "#137 r1 worker",
-  "at": "2026-11-24T14:45:31Z"
-}

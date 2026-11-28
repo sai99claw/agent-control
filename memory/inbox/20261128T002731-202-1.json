@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "`claude -p --output-format json` prints one result object whose `result` is the agent's last message when `is_error` is false and the CLI's own error when it is true (measured, CLI 2.1.332; exit 1 on errors); the message sits after usage and modelUsage, beyond the first 200 characters of the line. Anything that classifies agent logs reads `is_error` before any text.",
-  "source": "request (opener)",
-  "at": "2026-11-28T00:27:31Z"
-}

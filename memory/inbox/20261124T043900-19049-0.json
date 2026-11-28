@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "With the fake test commands a stage lasts about 0.1 s (a regression's full stage held its live record for 0.10-0.14 s, measured), shorter than any reasonable poll interval. A loop test that must see a state that lasts only one fake step reads it from inside that step (a declared test command that copies the record) instead of sampling from outside; a 0.2 s sampler missed it in half the runs. (#108 test_a7)",
-  "source": "request (opener)",
-  "at": "2026-11-24T04:39:00Z"
-}

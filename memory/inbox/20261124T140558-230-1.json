@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "Two issuers of one ticket share its worktree and branch: when one merges, its cleanup removes t<N> and t<N>-cases under the other, whose next agent start then fails with a 'not found' text naming the worktree, and the stale one writes its stuck over the merged or landed ticket. Anything that returns a running ticket to ready while its issuer lives produces this (measured 2026-11-24).",
-  "source": "request (opener)",
-  "at": "2026-11-24T14:05:57Z"
-}

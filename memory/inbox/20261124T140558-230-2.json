@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "A restarted controller adopts issuers it did not start only by the ticket's run stamp (pid, host, boot id); its own children are judged by Popen. Liveness bugs therefore show only after a controller restart, and a reproduction must stop the controller alone (SIGTERM to its pid) and start a new one.",
-  "source": "request (opener)",
-  "at": "2026-11-24T14:05:57Z"
-}

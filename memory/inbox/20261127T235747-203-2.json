@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "A liveness stamp a test fakes with a process must not be a child the test leaves unreaped: an ended child is a zombie that osx.alive() in another process still reports alive, so a controller waiting on it never sees it end. Start such a process detached (`sh -c 'sleep N >/dev/null 2>&1 & echo $!'`). (inferred from core/osx.alive)",
-  "source": "request (opener)",
-  "at": "2026-11-27T23:57:46Z"
-}

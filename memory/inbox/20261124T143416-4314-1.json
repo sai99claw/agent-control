@@ -1,7 +1,0 @@
-{
-  "layer": "project",
-  "name": "project",
-  "text": "A ticket branch that has merged its target cannot be moved with `git rebase --onto <new> <base>`: rebase drops the merge commit but replays every commit it brought in. The ticket's own commits are the first-parent, non-merge commits not reachable from its recorded base, its targets or its old cases head. (measured 2026-11-24)",
-  "source": "request (opener)",
-  "at": "2026-11-24T14:34:15Z"
-}
