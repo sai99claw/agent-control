@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "tests/test_project_config.py A3Doctor.test_a3_clean_version_2_has_no_rows asserts that `actl doctor` on the sandbox's default config prints no 'retired': taking a key out of project_config.SCHEMA while tests/control_harness.py DEFAULT_CONFIG still sets it turns that case red, so the same ticket removes the key from DEFAULT_CONFIG. (measured 2026-11-28)",
+  "source": "request (opener)",
+  "at": "2026-11-28T10:19:45Z"
+}
