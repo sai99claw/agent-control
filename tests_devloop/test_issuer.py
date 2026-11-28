@@ -2822,6 +2822,196 @@ class HardBlockOwnChange(LoopCase):
         issuer.hard_block(g)
 
 
+class T163Acceptance(LoopCase):
+    """#163: a hard_block stop lists every hit path and matched added line, and records a
+    fingerprint of the ticket's own change that a replay onto a newer target keeps."""
+
+    FP_F1 = "9f1402d85621cccfe852c47c332b9689f891b2af1b9818fc015bd24efbb8e313"
+    P_F1 = ["docs/DECISIONS.md", "impl.py", "keep.txt"]
+    A_F1 = [["docs/DECISIONS.md", "own"], ["impl.py", "y = 2"],
+            ["impl.py", "z = 3  # FORBIDDEN_MARK zz_forbidden"], ["keep.txt", "c"]]
+    PATHS_F1 = ["docs/DECISIONS.md"]
+    LINES_F1 = [{"file": "impl.py", "text": "z = 3  # FORBIDDEN_MARK zz_forbidden",
+                 "patterns": ["FORBIDDEN_MARK", "zz_forbidden"]}]
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k, None)
+
+    # ------------------------------------------------------------ helpers (own, not inherited)
+
+    @staticmethod
+    def fp(paths, added, removed):
+        """The A3 formula, written from the ticket text (the oracle)."""
+        import hashlib
+        return hashlib.sha256(json.dumps({"paths": paths, "added": added, "removed": removed},
+                                         sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    def write(self, root, rel, text, mode="w"):
+        full = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(full) or root, exist_ok=True)
+        with open(full, mode) as fh:
+            fh.write(text)
+
+    def commit_all(self, root, msg):
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", msg)
+
+    def set_patterns(self, patterns):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["hard_block"]["patterns"] = patterns
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        self.commit_all(self.proj, "patterns")
+
+    def fixture(self, f2=False):
+        """F1 (or F2 with f2=True) as written in the ticket; returns (issuer, Git(worktree))."""
+        import ticket_issuer
+        from core.config import Config
+        from core.gitx import Git
+        self.set_patterns(["FORBIDDEN_MARK", "zz_forbidden"])
+        self.write(self.proj, "keep.txt", "a\nb\n")
+        self.commit_all(self.proj, "keep")
+        git(self.proj, "branch", "int/g1", "main")
+        if f2:
+            self.write(self.proj, "main_code.py", "x = 1  # FORBIDDEN_MARK\n")
+            self.commit_all(self.proj, "main code")
+        wt = os.path.join(self.tmp, "t1")
+        git(self.proj, "worktree", "add", "-q", wt, "-b", "t/1", "int/g1")
+        if f2:
+            git(wt, "merge", "-q", "--no-edit", "main")
+        self.write(wt, "keep.txt", "c\n", mode="a")
+        self.write(wt, "impl.py", "y = 2\nz = 3  # FORBIDDEN_MARK zz_forbidden\n")
+        self.write(wt, "docs/DECISIONS.md", "own\n")
+        self.commit_all(wt, "own")
+        return ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1"), Git(wt)
+
+    def stop(self, issuer, g):
+        import ticket_issuer
+        with self.assertRaises(ticket_issuer.Stuck) as cm:
+            issuer.hard_block(g)
+        exc = cm.exception
+        self.assertEqual(exc.reason, "hard_block")
+        detail = getattr(exc, "detail", None)
+        self.assertIsNotNone(detail, "Stuck carries no detail: %r" % (exc.text,))
+        self.assertIsInstance(detail, dict)
+        return exc, detail
+
+    def assert_f1_detail(self, detail):
+        self.assertEqual(sorted(detail), ["fingerprint", "lines", "paths"])
+        self.assertEqual(detail["paths"], self.PATHS_F1)
+        self.assertEqual(detail["lines"], self.LINES_F1)
+        self.assertEqual(self.fp(self.P_F1, self.A_F1, []), self.FP_F1)   # oracle matches the ticket's literal
+        self.assertEqual(detail["fingerprint"], self.FP_F1)
+
+    # ------------------------------------------------------------ A1-A5
+
+    def test_a1_stuck_carries_the_hit_list(self):
+        import inspect
+        import ticket_issuer
+        issuer, g = self.fixture()
+        exc, detail = self.stop(issuer, g)
+        self.assert_f1_detail(detail)
+        params = inspect.signature(ticket_issuer.Stuck.__init__).parameters
+        self.assertIn("detail", params)
+        self.assertIsNone(params["detail"].default)
+        self.assertIsNone(ticket_issuer.Stuck("env", "x").detail)
+        self.assertEqual(ticket_issuer.Stuck("env", "x", detail={"k": 1}).detail, {"k": 1})
+
+    def test_a2_stuck_text_has_four_lines(self):
+        issuer, g = self.fixture()
+        exc, detail = self.stop(issuer, g)
+        self.assertEqual(exc.text.splitlines(), [
+            "the change touches hard_block: docs/DECISIONS.md, pattern 'FORBIDDEN_MARK', pattern 'zz_forbidden'",
+            "  path docs/DECISIONS.md",
+            "  line impl.py: z = 3  # FORBIDDEN_MARK zz_forbidden  (pattern FORBIDDEN_MARK, zz_forbidden)",
+            "  fingerprint " + self.FP_F1])
+        self.assertEqual(detail["fingerprint"], self.FP_F1)
+
+    def test_a3_fingerprint_f1(self):
+        issuer, g = self.fixture()
+        exc, detail = self.stop(issuer, g)
+        self.assert_f1_detail(detail)
+
+    def test_a3_merged_in_main_counts_in_neither_hits_nor_fingerprint_f2(self):
+        issuer, g = self.fixture(f2=True)
+        exc, detail = self.stop(issuer, g)
+        self.assert_f1_detail(detail)
+
+    def test_a4_replay_keeps_the_detail(self):
+        issuer, g = self.fixture()
+        exc, first = self.stop(issuer, g)
+        self.assert_f1_detail(first)
+        self.write(self.proj, "other.txt", "o\n")
+        self.commit_all(self.proj, "other")
+        git(self.proj, "branch", "-f", "int/g1", "main")
+        git(g.cwd, "rebase", "-q", "int/g1")
+        self.assertEqual(git(g.cwd, "rev-parse", "HEAD~1"), git(self.proj, "rev-parse", "main"))
+        exc, again = self.stop(issuer, g)
+        self.assertEqual(again, first)
+        self.assertEqual(again["fingerprint"], self.FP_F1)
+
+    def variant(self, change, want_fp, paths, added, removed):
+        issuer, g = self.fixture()
+        change(g.cwd)
+        self.commit_all(g.cwd, "variant")
+        exc, detail = self.stop(issuer, g)
+        self.assertEqual(detail["paths"], self.PATHS_F1)
+        self.assertEqual(detail["lines"], self.LINES_F1)
+        self.assertEqual(self.fp(paths, added, removed), want_fp)   # oracle matches the ticket's literal
+        self.assertNotEqual(want_fp, self.FP_F1)
+        self.assertEqual(detail["fingerprint"], want_fp)
+
+    def test_a5a_added_line_changes_the_fingerprint(self):
+        added = self.A_F1[:3] + [["impl.py", "w = 4"]] + self.A_F1[3:]
+        self.variant(lambda wt: self.write(wt, "impl.py", "w = 4\n", mode="a"),
+                     "82e724276c69e44f056e4c3bd7e31f78e390adc3f9610a5c5a44f2c38da42333",
+                     self.P_F1, added, [])
+
+    def test_a5b_removed_line_changes_the_fingerprint(self):
+        self.variant(lambda wt: self.write(wt, "keep.txt", "b\nc\n"),
+                     "7f988bccb37045975883a7f67b78198097cc4ab7974691ae7e330c2d791756ff",
+                     self.P_F1, self.A_F1, [["keep.txt", "a"]])
+
+    def test_a5c_empty_new_file_changes_the_fingerprint(self):
+        self.variant(lambda wt: self.write(wt, "empty.txt", ""),
+                     "9898ffec620c20f09929a0d6fe1f38c929fb23676229eed539c60e6f1c82f0d9",
+                     ["docs/DECISIONS.md", "empty.txt", "impl.py", "keep.txt"], self.A_F1, [])
+
+    # ------------------------------------------------------------ A6 (real controller)
+
+    def test_a6_ticket_and_page_end_to_end(self):
+        self.set_patterns(["FORBIDDEN_MARK"])
+        self.add(1)
+        self.env["FAKE_WORKER_FILES"] = json.dumps({"impl.py": "z = 3  # FORBIDDEN_MARK\n",
+                                                    "docs/DECISIONS.md": "own\n"})
+        self.plan(worker={"1": ["write_files"]})
+        res = self.controller()
+        t = self.snap().ticket("1")
+        self.assertEqual(t.get("state"), "stuck", res.stdout + res.stderr)
+        self.assertEqual(t["stuck"]["reason"], "hard_block")
+        self.assertIn("hard_block", t["stuck"], t["stuck"])
+        self.assertEqual(sorted(t["stuck"]), ["at", "hard_block", "reason", "text"])
+        hb = t["stuck"]["hard_block"]
+        self.assertEqual(hb["paths"], ["docs/DECISIONS.md"])
+        self.assertEqual(hb["lines"], [{"file": "impl.py", "text": "z = 3  # FORBIDDEN_MARK",
+                                        "patterns": ["FORBIDDEN_MARK"]}])
+        self.assertRegex(hb["fingerprint"], r"^[0-9a-f]{64}$")
+        rows = [r for r in self.snap().inbox.values() if r.get("kind") == "decision" and r.get("ref") == "1"]
+        self.assertEqual(len(rows), 1, self.snap().inbox)
+        row = rows[0]
+        self.assertEqual(row.get("hard_block"), hb)
+        self.assertEqual(row["text"].splitlines(), [
+            "#1 is stuck (hard_block): the change touches hard_block: docs/DECISIONS.md, pattern 'FORBIDDEN_MARK'",
+            "  path docs/DECISIONS.md",
+            "  line impl.py: z = 3  # FORBIDDEN_MARK  (pattern FORBIDDEN_MARK)",
+            "  fingerprint " + hb["fingerprint"]])
+        self.assertEqual([o.get("action") for o in row.get("options") or []], ["revise", "cancel", "retry"])
+
+
 class BlockedCheckUnits(unittest.TestCase):
     """Issuer.blocked_check and the agent-environment free round (implementer's tests of #115)."""
 
