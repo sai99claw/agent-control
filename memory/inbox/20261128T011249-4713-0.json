@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "A docs ticket that adds shell commands must keep its added lines clear of board/config.json hard_block.patterns: the check matches every added line, docs and tests included, so a manual stop written as the kill command with a dash option stops the ticket before merging. Name the patterns by reference and give the worker a diff check that reads them from the config.",
+  "source": "request (opener)",
+  "at": "2026-11-28T01:12:49Z"
+}

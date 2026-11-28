@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a ticket adds a repeated action on records that already exist (a reminder on old pages, a retry on old jobs), space each repeat from the last one done rather than from a schedule fixed at creation, and say what the first pass after the upgrade does to the old records; otherwise a restart or an upgrade sends every missed repeat at once.",
+  "source": "request (opener)",
+  "at": "2026-11-28T01:12:49Z"
+}

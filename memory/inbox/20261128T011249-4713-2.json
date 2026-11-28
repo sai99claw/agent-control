@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a request says to base something on a file in another project, look for it before writing the ticket; when it lives outside the readable repository (a per-user install location), write on the ticket what was found instead, which shape the ticket follows, and the commands that compare it on that machine, so the main session can ask for the real file.",
+  "source": "request (opener)",
+  "at": "2026-11-28T01:12:49Z"
+}
