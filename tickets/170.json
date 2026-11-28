@@ -22,7 +22,7 @@
   "vision": "VISION, 這份文件是什麼: every mechanism, field and script must map to the vision or be justified with numbers, else downgraded or deleted; and the rule 'add one gate, remove one'. status.py goes from 1211 lines (57 KB, roughly 15k tokens for any agent or code-map reader that opens it) to about 110, and six schema keys nothing reads leave A. Metric: 每張落地票的 token 與時間 (down), by roughly 12k tokens for each agent that reads status.py while working on the test interface or adapter.",
   "removes": "The 39 unused functions and 13 unused constants of scripts/status.py (its whole command line: start, phase, done, failures, suspects, rundir, regression-red, show) and the six config keys only they read (flaky_threshold, flaky_auto_ticket, routing, unit_cmd, regression, regression_auto_ticket) from A's config schema.",
   "id": "170",
-  "state": "running",
+  "state": "merged",
   "round": 1,
   "created": "2026-11-28T10:19:47Z",
   "request": "Phase one, group 6 of the improvement plan: measure first, and subtraction (D-100, D-102). Source: external audit\nP2-2 and P2-5. One group, two tickets.\n\n6.1 Measure the cost of `Pool.snapshot()` on a pool the size of tabby_pool's (about 550 tickets; build a synthetic\npool of that size in the test). Record the measured time in the ticket's result. Only if it is slow (over 0.5 s on\nthis machine per call) add a cache keyed by the pool repo's local HEAD sha, invalidated by any write through Pool;\notherwise add no cache and leave a short note in devloop/README.md with the measured number.\n\n6.2 Remove dead code from scripts/status.py: keep only the functions still used by `testiface.py` and\n`adapter-unittest.py` (find the real callers with grep), and remove the config keys only that dead code read.\nNothing else changes behavior.\n\nvision: the snapshot path is measured before anyone optimizes it, and status.py holds only code something uses.\nremoves: the unused functions of scripts/status.py and the config keys only they read.\n",
@@ -57,6 +57,11 @@
     {
       "at": "2026-11-28T10:32:41Z",
       "event": "cases ready"
+    },
+    {
+      "at": "2026-11-28T10:32:47Z",
+      "event": "merged",
+      "target": "int/g21"
     }
   ],
   "cost": [
@@ -80,16 +85,45 @@
         "169",
         "170"
       ]
+    },
+    {
+      "role": "worker",
+      "model": "sonnet",
+      "effort": "medium",
+      "command": "claude",
+      "round": 1,
+      "seconds": 84.8,
+      "at": "2026-11-28T10:32:38Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/170/r1-worker",
+      "input_tokens": 24,
+      "output_tokens": 5110,
+      "cache_read_tokens": 689266,
+      "cache_write_tokens": 33876,
+      "usd": 0.2555786,
+      "session_id": "5726b5d6-d9f5-4c4f-9e06-7aa5c02bb23c"
+    },
+    {
+      "role": "verifier",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": 1,
+      "seconds": 84.8,
+      "at": "2026-11-28T10:32:38Z",
+      "outcome": "cases",
+      "run_dir": "/home/user/agent-control-devloop/runs/170/r1-verifier",
+      "input_tokens": 20,
+      "output_tokens": 5554,
+      "cache_read_tokens": 532189,
+      "cache_write_tokens": 29637,
+      "usd": 0.4546938,
+      "session_id": "d778788b-b73d-4e49-8cae-032061ce6f93"
     }
   ],
   "group": "g21",
   "target": "int/g21",
-  "run": {
-    "pid": 32319,
-    "host": "vm",
-    "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
-    "started": "2026-11-28T10:31:07Z"
-  },
+  "run": null,
   "claimed_at": "2026-11-28T10:31:05Z",
   "branch_base": {
     "t/170-cases": "e0be9537a5adb4374108a0b7e77e75eec29b9f51",
