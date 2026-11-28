@@ -3,5 +3,7 @@
   "ref": "162",
   "text": "opened #162 Dispatch gives free slots to ready tickets of the earliest group in the chain first",
   "at": "2026-11-28T09:05:13Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-28T11:51:26Z"
 }
