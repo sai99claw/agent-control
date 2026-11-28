@@ -1,7 +1,7 @@
 {
   "id": "g20",
   "branch": "int/g20",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "166",
     "167",
@@ -72,6 +72,10 @@
     {
       "at": "2026-11-28T11:27:21Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-28T11:27:25Z",
+      "event": "landed"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
@@ -108,5 +112,8 @@
   ],
   "fix_end_sha": "a759fe75023418ddcb69b46c0317deebef20f502",
   "last_regression": "green",
-  "verified_sha": "147c47b2d7457590fe747d6d72c00cf20011e99c"
+  "verified_sha": "147c47b2d7457590fe747d6d72c00cf20011e99c",
+  "landed_sha": "147c47b2d7457590fe747d6d72c00cf20011e99c",
+  "release": "pending",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g20.log"
 }

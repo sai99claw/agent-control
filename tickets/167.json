@@ -20,7 +20,7 @@
   "vision": "VISION 'one request from start to end' (scripts do the hand-offs, the main session does not watch): two controllers cannot both run. Metrics 'tokens and time per landed ticket' and 'how much waits for me': a second controller would dispatch a second issuer for a ticket (project memory: two issuers on one ticket remove each other's worktree and overwrite merged with stuck), costing a full ticket run and a page. No incident measured; this is prevention.",
   "removes": "the create-then-write PidLock path (O_EXCL create, then the JSON write, and the unlink on release and on a stale holder)",
   "id": "167",
-  "state": "merged",
+  "state": "landed",
   "round": 1,
   "created": "2026-11-28T09:49:29Z",
   "request": "Phase one, group 4 of the improvement plan: honest acceptance and reliability (D-100, D-102). Source: external audit\nP0-2, P0-3, P0-6, P1-6, each confirmed by the main session reading the code; T main session agreed (2026-11-26).\nKeep these as one group, three tickets.\n\n4.1 Acceptance results must be honest.\n- Problem (read in code): a skipped acceptance case (rc 0) counts as green; `red_check()` treats skip as red but\n  expectedFailure is recorded as `pass`; nothing checks whether the worker edited the `T<N>Acceptance` cases.\n- Layer 1: `run_cases()` requires each case to be exactly `pass`; `red_check()` requires exactly `fail`.\n  expectedFailure is recorded as `xfail` (not pass).\n- Layer 2: from round 2 on, a worker change that alters the `T<N>Acceptance` definitions is sent back. Compare by\n  AST (classes and functions), and check the count of same-named definitions. A round that went through `--revise`\n  (the ticket was rewritten) is not a violation. The verifier prompt gets one line: helpers specific to this ticket\n  go inside the class.\n\n4.2 Controller lock uses flock.\n- Problem (read in code): `PidLock` creates an empty file and then writes JSON; two `actl run` starting at once can\n  both take the lock.\n- Do: keep the lock file (do not delete it), use `fcntl.flock`, clear the stamp on release; `controller_alive()` and\n  existing tests keep passing.\n\n4.3 start_fixer writes once.\n- Do: `start_fixer()` writes the pool once, after the spawn, and passes `--round` to `auto_fixer.py`.\n\nvision: an acceptance result means what it says, and two controllers cannot both run.\nremoves: the two-write path in start_fixer; the create-then-write PidLock path.\n",
@@ -59,6 +59,11 @@
       "at": "2026-11-28T10:19:01Z",
       "event": "merged",
       "target": "int/g20"
+    },
+    {
+      "at": "2026-11-28T11:27:25Z",
+      "event": "landed",
+      "group": "g20"
     }
   ],
   "cost": [
@@ -143,5 +148,16 @@
   "branch_base": {
     "t/167-cases": "3b77f2626165aedcb64ebb44225be0e17990067a",
     "t/167": "3b77f2626165aedcb64ebb44225be0e17990067a"
+  },
+  "landed_sha": "147c47b2d7457590fe747d6d72c00cf20011e99c",
+  "cost_total": {
+    "input_tokens": 120,
+    "output_tokens": 56823,
+    "cache_read_tokens": 5991736,
+    "cache_write_tokens": 169418,
+    "usd": 3.690649933333334,
+    "seconds": 974.9333333333333,
+    "runs": 4,
+    "unknown_runs": 0
   }
 }
