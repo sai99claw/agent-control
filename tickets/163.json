@@ -23,7 +23,7 @@
   "removes": "none: the request removes nothing and this ticket adds no gate or rule; it makes the existing hard_block stop say what matched.",
   "id": "163",
   "state": "running",
-  "round": 0,
+  "round": 1,
   "created": "2026-11-28T09:28:13Z",
   "request": "Add a user approval path for tickets stopped by hard_block (decision D-103 in docs/DECISIONS.md; user's words \"1 選a\").\n\nProblem (confirmed in code): `TicketIssuer.hard_block()` in devloop/ticket_issuer.py raises Stuck(\"hard_block\") when the\nticket's own change touches a hard_block path or adds a line matching a hard_block pattern. The stuck decision page only\noffers revise / cancel / retry. A ticket whose job necessarily matches a pattern (e.g. #147, which must send signals to\nthe process group it started) can never pass: retry stops at the same place, and there is no way to record the user's\napproval. The rule \"hard_block tickets stop before merge for the user's ruling\" has no ruling step.\n\nWanted:\n1. The hard_block stuck page lists exactly what matched: each hit path, and each added line that matched a pattern\n   (file and line text), so the user can judge it from the page.\n2. A new answer on that page: approve. CLI, main session only (not the board, like D-096): e.g.\n   `actl tickets approve N --page P --reason \"...\"`. It records in the ticket's state who approved, when, the reason,\n   and a fingerprint of the change that was shown (computed from the ticket's own change, the same lines/paths\n   hard_block inspects, so a replay of the same commits onto a newer target head under D-098 keeps the approval valid).\n   Then the ticket is re-queued so the issuer runs its merge step again.\n3. On the next hard_block check, if the current hits and the fingerprint of the ticket's own change equal the\n   approved fingerprint, the check passes and the merge goes on; the approval is written to the ticket history.\n   If the change differs in any way (new lines, new paths, different content), the approval does not apply and the\n   ticket stops again with a fresh page that says the earlier approval no longer matches.\n4. Approve is offered only on hard_block stuck pages; other stuck reasons keep their current answers.\n5. devloop/README.md (the stuck page answers) and CLAUDE.md's answer list mention approve.\n\nThe code of this ticket itself must not add lines matching A's hard_block patterns (`os\\.kill`, `killpg`, `pkill`,\n`kill -`) and must not edit docs/DECISIONS.md or docs/VISION.md. In tests, write such strings so the pattern does\nnot match the source line (e.g. build them by concatenation).\n\nAcceptance: a ticket stopped by hard_block, approved, then retried with the same change passes the check and merges;\nthe same ticket with one extra matching line after approval stops again; approve on a non-hard_block page is refused;\nthe page shows the matched lines.\n\nvision: a hard_block stop becomes a real user ruling: the user sees what matched and approves that exact change, and\na later change needs approval again.\nremoves: nothing.\n",
   "feedback": [],
@@ -42,6 +42,11 @@
       "at": "2026-11-28T10:05:59Z",
       "event": "issuer started",
       "target": "int/g19"
+    },
+    {
+      "at": "2026-11-28T10:06:04Z",
+      "event": "round start",
+      "round": 1
     }
   ],
   "cost": [
