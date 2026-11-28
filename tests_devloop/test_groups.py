@@ -1093,6 +1093,88 @@ class T135Acceptance(LoopCase):
                                  "(actl dag move 1 --to gK|new)"], pages[0]["text"])
 
 
+class T162Acceptance(LoopCase):
+    """#162 (verifier): when more ready tickets can start than there are free slots, dispatch starts
+    those whose group comes earliest in chain.order, and keeps DAG (topo) order inside one group."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def group(self, gid, members, state="open", branch=False, **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": state, "members": list(members),
+             "fix_round": 0, "job": None, "created": "2026-11-23T00:00:00Z", "history": []}
+        g.update(fields)
+        if branch:
+            git(self.proj, "branch", "int/" + gid, "main")
+        self.pool.update(lambda tx: tx.put_group(g), "test: group %s" % gid)
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.started, c.issued = [], []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        c.start_issuer = lambda ident, gid: c.issued.append((ident, gid))
+        return c
+
+    def edge_g1_after_g2(self):
+        self.pool.update(lambda tx: tx.put_dag(dict(tx.data.raw["dag"], group_after={"g1": ["g2"]})),
+                         "test: edge")
+
+    def test_a1_group_after_edge_puts_its_group_first(self):
+        from core import chain
+        self.config(max_parallel=1)
+        self.add(1, group="g1")
+        self.add(2, group="g2")
+        self.group("g1", ["1"])
+        self.group("g2", ["2"])
+        self.edge_g1_after_g2()
+        snap = self.snap()
+        self.assertEqual(chain.order(snap), ["g2", "g1"])                  # fixture premise
+        self.assertEqual(dagmod.topo(snap.dag), ["1", "2"])                # fixture premise
+        c = self.ctl()
+        c.dispatch(snap)
+        self.assertEqual(c.issued, [("2", "g2")])
+
+    def test_a2_creation_stamps_put_the_older_group_first(self):
+        from core import chain
+        self.config(max_parallel=1)
+        self.add(1, group="g1")
+        self.add(2, group="g2")
+        self.group("g1", ["1"], created="2026-11-24T00:00:00Z")
+        self.group("g2", ["2"], created="2026-11-23T00:00:00Z")
+        snap = self.snap()
+        self.assertEqual(chain.order(snap), ["g2", "g1"])                  # fixture premise
+        c = self.ctl()
+        c.dispatch(snap)
+        self.assertEqual(c.issued, [("2", "g2")])
+
+    def test_a3_chain_first_then_topo_order_inside_a_group(self):
+        from core import chain
+        self.config(max_parallel=2)
+        self.add(1, group="g1")
+        self.add(6, group="g2")
+        self.add(2, deps=[6], group="g2")
+        self.add(4, group="g2")
+        self.group("g1", ["1"])
+        self.group("g2", ["6", "2", "4"])
+        self.edge_g1_after_g2()
+        snap = self.snap()
+        self.assertEqual(chain.order(snap), ["g2", "g1"])                  # fixture premise
+        self.assertEqual(dagmod.topo(snap.dag), ["1", "6", "2", "4"])      # fixture premise
+        c = self.ctl()
+        c.dispatch(snap)
+        self.assertEqual(c.issued, [("6", "g2"), ("4", "g2")])
+
+
 class DagEditUnits(LoopCase):
     """#125 (the implementer's): core/dagedit.py checks and writes, and the docs and test map
     (acceptance 8 and 9)."""
