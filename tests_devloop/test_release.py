@@ -1008,6 +1008,105 @@ class T142Acceptance(LoopCase):
         self.assertIn("<dt>發版</dt><dd>發版中</dd>", detail)
 
 
+class T171Acceptance(LoopCase):
+    """Ticket #171: an exception after the release command started never leaves it running."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[key]
+        self.sha = git(self.proj, "rev-parse", "main").strip()
+
+    def run_with_put_raising(self, exc):
+        """release.run with inflight.put raising exc; returns (outcome, the one spawned Popen)."""
+        from core import release
+        from core.config import Config
+        self.config(machine_slots=None, release="sleep 30")
+        real = release.osx.spawn
+        spawned = []
+
+        def spawn(*a, **kw):
+            p = real(*a, **kw)
+            spawned.append(p)
+            return p
+
+        outcome = {}
+        with mock.patch.object(release.osx, "spawn", side_effect=spawn), \
+                mock.patch.object(release.inflight, "put", side_effect=exc):
+            try:
+                outcome["result"] = release.run(Config(self.proj), {"id": "g1", "members": ["1"]}, self.sha)
+            except BaseException as e:      # noqa: B036 - the case checks what reached the caller
+                outcome["raised"] = e
+        self.assertEqual(len(spawned), 1, "release.run did not start the command once with osx.spawn")
+        p = spawned[0]
+        self.addCleanup(lambda: osx.alive(p.pid) and osx.kill_tree(p.pid, grace=1))
+        return outcome, p
+
+    def test_acceptance1_interrupted_live_record_write_stops_the_command(self):
+        from core import agents
+        exc = agents.Interrupted("signal 15")
+        outcome, p = self.run_with_put_raising(exc)
+        self.assertIs(outcome.get("raised"), exc, "release.run did not raise the Interrupted: %r" % outcome)
+        self.assertFalse(osx.alive(p.pid), "the release command was still running when Interrupted reached the caller")
+
+    def test_acceptance2_failed_live_record_write_stops_the_command(self):
+        outcome, p = self.run_with_put_raising(osx.OSFailure("cannot write the live record"))
+        self.assertNotIn("raised", outcome, outcome)
+        self.assertEqual(outcome["result"], (False, "cannot write the live record"))
+        self.assertFalse(osx.alive(p.pid), "the release command was still running when release.run returned")
+
+    def test_acceptance3_sigterm_during_live_record_write_stops_the_command(self):
+        g = os.path.join(self.tmp, "release-group")
+        pidf = os.path.join(self.tmp, "release-pid")
+        self.config(machine_slots=None,
+                    release="echo $$ > %s; sleep 60 & echo $! > %s.tmp; mv %s.tmp %s; wait" % (g, pidf, pidf, pidf))
+        out = os.path.join(self.tmp, "out.json")
+        argv = ["--group", "g1", "--sha", self.sha, "--tickets", "1", "--out", out]
+        code = "\n".join([
+            "import sys, time",
+            "sys.path.insert(0, %r)" % LOOP,
+            "import release_job",
+            "from core import inflight",
+            "real = inflight.put",
+            "def put(cfg, name, rec):",
+            "    time.sleep(30)",
+            "    return real(cfg, name, rec)",
+            "inflight.put = put",
+            "sys.exit(release_job.main(%r))" % argv,
+        ])
+        proc = subprocess.Popen(["python3", "-c", code], cwd=self.proj, env=self.env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        end = time.time() + 30
+        while not os.path.exists(pidf) and proc.poll() is None and time.time() < end:
+            time.sleep(0.05)
+        if not os.path.exists(pidf):
+            self.fail("the release command did not write its pid file (job rc %r): %s"
+                      % (proc.poll(), proc.stdout.read() if proc.poll() is not None else ""))
+        with open(pidf) as fh:
+            rel_pid = int(fh.read().strip())
+        with open(g) as fh:
+            leader = int(fh.read().strip())
+        self.addCleanup(lambda: osx.alive(leader) and osx.kill_tree(leader, grace=1))
+        proc.send_signal(signal.SIGTERM)
+        try:
+            rc = proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.fail("release_job.py did not exit within 10 s of SIGTERM")
+        self.assertEqual(rc, 2, proc.stdout.read())
+        with open(out) as fh:
+            data = json.load(fh)
+        self.assertIs(data.get("ok"), False, data)
+        self.assertEqual(data.get("signal"), "SIGTERM", data)
+        self.assertEqual(data.get("text"), "stopped by SIGTERM; the release command was stopped", data)
+        self.assertEqual(data.get("sha"), self.sha, data)
+        end = time.time() + 10
+        while osx.alive(rel_pid) and time.time() < end:
+            time.sleep(0.05)
+        if osx.alive(rel_pid):
+            self.fail("not within 10 s: the release command's process was stopped")
+
+
 class ReleaseTimeoutSetting(LoopCase):
     def test_release_timeout_defaults_to_3600_and_can_be_set(self):
         from core.config import Config
