@@ -46,7 +46,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, inflight, memory, osx, pages  # noqa: E402
+from core import agents, cooldown, inflight, memory, osx, pages  # noqa: E402
 from core import chain as chainmod  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core import dagedit  # noqa: E402
@@ -401,16 +401,39 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
         hand = agents.run(cfg, "creator", prompt, cfg.root, run_dir, cfg.agent_timeout_seconds)
         if hand.cost:
             rows.append(hand.cost)
-        if (hand.cost or {}).get("outcome") == "out of quota":
-            seen, at = agents._log_tail(hand.log)
-            reset = agents.quota_reset(seen, at)
+        login = None
+        if (hand.cost or {}).get("outcome") == "needs login":
+            program = hand.cost["command"]
+            login = (program, (cooldown.records().get(program) or {}).get("text")
+                     or agents.login_line(agents.cli_error(hand.log)[0]))
+        elif hand.cooling and hand.cooling.get("state") == "needs_login":
+            login = (hand.cooling["command"], hand.cooling["text"])
+        if login:
+            program, said = login
+            text = ("the opener could not run: %s needs a new login; nothing was opened:\n%s\nlog in again, "
+                    "run `actl tickets login-ok %s`, then send the request again with `actl new --request`"
+                    % (program, said, program))
+            pool.report("decision", "request", text, request=request[:2000],
+                        cost=[hand.cost] if hand.cost else [], **pages.ask(
+                            "the opener needs a new login: send the request again after logging in?",
+                            [pages.option("ack", "nothing was opened; log in again, run `actl tickets login-ok %s`, "
+                                                 "then send the request again with `actl new --request`" % program)],
+                            "the opener could not run because %s needs a new login" % program))
+            print(text)
+            return 1
+        if hand.cooling or(hand.cost or {}).get("outcome") == "out of quota":
+            if hand.cooling:      # nothing ran: the opener's commands are cooling machine-wide
+                excerpt, reset = hand.cooling["text"], hand.cooling["until"]
+            else:
+                seen, at = agents.cli_error(hand.log)
+                excerpt, reset = agents._excerpt(seen), agents.quota_reset(seen, at)
             if reset is not None:
                 when = ("the limit resets at %s: send the request again after that time with "
                         "`actl new --request`" % time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(reset)))
             else:
                 when = ("the reset time could not be read from the message: send the request again "
                         "once the limit has reset, with `actl new --request`")
-            text = "the opener is out of quota; nothing was opened:\n%s\n%s" % (agents._excerpt(seen), when)
+            text = "the opener is out of quota; nothing was opened:\n%s\n%s" % (excerpt, when)
             pool.report("decision", "request", text, request=request[:2000], cost=rows, **pages.ask(
                 "the opener is out of quota: send the request again after the limit resets?",
                 [pages.option("ack", "nothing was opened; send the request again with `actl new --request` after the limit resets")],

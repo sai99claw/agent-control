@@ -42,7 +42,8 @@ def quota_hook(pool, path, costs):
     memory/state.json gets "waiting" (with `path`); after the wait "waiting" goes."""
     def on_quota(phase, row=None, until=None, text=None):
         if phase == "wait":
-            costs.append(row)
+            if row is not None:           # None: every command was cooling, nothing ran
+                costs.append(row)
             mark = {"reason": "quota", "path": path, "since": osx.now(),
                     "until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until)),
                     "text": (text or "")[:200]}
