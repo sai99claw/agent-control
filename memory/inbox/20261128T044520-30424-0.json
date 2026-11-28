@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a test_plan checks a ticket field after the ticket lands, first confirm the merge path does not clear or rewrite that field; if it does, say which snapshot of the ticket the check reads (for example, as first seen with a given event).",
+  "source": "#157 revise (opener)",
+  "at": "2026-11-28T04:45:20Z"
+}
