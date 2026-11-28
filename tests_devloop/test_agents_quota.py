@@ -83,7 +83,8 @@ class AgentChains(LoopCase):
 
     def test_out_of_quota_tries_the_next_command(self):
         agents_cfg = json.load(open(os.path.join(self.proj, "board", "config.json")))["devloop"]["agents"]
-        self.config(agents=dict(agents_cfg, worker=[AGENT, AGENT], worker_simple=[AGENT, AGENT]))
+        chain = [AGENT + ["--model", "a"], AGENT + ["--model", "b"]]
+        self.config(agents=dict(agents_cfg, worker=chain, worker_simple=chain))
         self.add(1)
         self.plan(worker={"1": ["quota", "ok"]})
         res = self.controller()
@@ -166,6 +167,225 @@ class OpenerOtherFailureRetries(LoopCase):
         self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
         for want in ("out of quota", "Claude AI usage limit reached|1900000000", "2030-03-17T17:46:40Z"):
             self.assertIn(want, res.stdout)
+
+
+class T149Acceptance(LoopCase):
+    """#149: a quota hit with a readable reset cools that command (program + --model) for every agent
+    start on the machine, through one file in $AC_COOLDOWN_FILE. Expected values come from the
+    ticket's acceptance items 1-7, not from the code."""
+
+    RESET_2H = "You've hit your limit · resets in 2h"
+    NO_RESET = "Error: usage limit reached"
+    EPOCH_PREFIX = "Claude AI usage limit reached|"
+    OPENER_TEXT = "Claude AI usage limit reached|1900000000"
+    OPENER_UNTIL = "2030-03-17T17:46:40Z"
+    PAGE_TEXT = ("the opener is out of quota; nothing was opened:\n"
+                 "Claude AI usage limit reached|1900000000\n"
+                 "the limit resets at 2030-03-17T17:46:40Z: send the request again after that time with "
+                 "`actl new --request`")
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.cool = os.path.join(self.tmp, "cooldown.json")
+        self.env["AC_COOLDOWN_FILE"] = os.environ["AC_COOLDOWN_FILE"] = self.cool
+
+    # ---------------------------------------------------------------- helpers
+
+    def stamp(self, epoch):
+        return time.strftime(self.FMT, time.gmtime(epoch))
+
+    def epoch(self, stamp):
+        return calendar.timegm(time.strptime(stamp, self.FMT))
+
+    def fixture(self, name, text):
+        path = os.path.join(self.tmp, name + ".txt")
+        with open(path, "w") as fh:
+            fh.write(text + "\n")
+        return path
+
+    def cmd(self, model, script):
+        return ["sh", "-c", "cat >/dev/null; " + script, "sh", "--model", model]
+
+    def ran(self, name):
+        return os.path.join(self.tmp, name + "-ran")
+
+    def hands_in(self, model, name):
+        return self.cmd(model, "touch %s; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"" % self.ran(name))
+
+    def says(self, model, name, text, code=1):
+        return self.cmd(model, "touch %s; cat %s; exit %d" % (self.ran(name), self.fixture(name, text), code))
+
+    def write_records(self, records):
+        osx.write_json(self.cool, {"version": 1, "commands": records})
+
+    def record(self, until, text, project="other", role="worker"):
+        return {"state": "quota", "until": self.stamp(until), "since": self.stamp(time.time()),
+                "text": text, "project": project, "role": role}
+
+    def read_file(self):
+        self.assertTrue(os.path.isfile(self.cool), "no cooldown file was written at $AC_COOLDOWN_FILE")
+        with open(self.cool) as fh:
+            data = json.load(fh)
+        self.assertEqual(data.get("version"), 1, data)
+        return data.get("commands")
+
+    def agents_cfg(self, proj=None):
+        with open(os.path.join(proj or self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    # ---------------------------------------------------------------- items 1-3
+
+    def test_items1_3_a_readable_reset_writes_the_record(self):
+        from core import agents
+        from core.config import Config
+        self.config(agents=dict(self.agents_cfg(), worker=[self.says("m1", "w", self.RESET_2H)]))
+        agents.start(Config(self.proj), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30).finish()
+        ended = time.time()
+        commands = self.read_file()
+        self.assertEqual(sorted(commands or {}), ["sh m1"], commands)
+        rec = commands["sh m1"]
+        self.assertEqual(rec.get("state"), "quota", rec)
+        self.assertLessEqual(abs(self.epoch(rec["until"]) - (ended + 7260)), 3, rec)
+        self.assertTrue(rec.get("text") == self.RESET_2H, "the record's text is not the printed text")
+        self.assertEqual((rec.get("project"), rec.get("role")), ("proj", "worker"), rec)
+        self.assertLessEqual(abs(self.epoch(rec["since"]) - ended), 3, rec)
+
+    # ---------------------------------------------------------------- item 4
+
+    def test_item4_a_second_project_skips_a_cooling_command(self):
+        from core import agents
+        from core.config import Config
+        until = self.stamp(time.time() + 3600)
+        self.write_records({"sh m1": dict(self.record(0, "x"), until=until)})
+        proj2 = os.path.join(self.tmp, "proj2")
+        os.makedirs(os.path.join(proj2, "board"))
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            cfg = json.load(fh)
+        cfg["devloop"]["worktrees"] = os.path.join(self.tmp, "wt2")
+        cfg["devloop"]["agents"]["reviewer"] = [self.says("m1", "a", self.NO_RESET), self.hands_in("m2", "b")]
+        with open(os.path.join(proj2, "board", "config.json"), "w") as fh:
+            json.dump(cfg, fh)
+        hand = agents.start(Config(proj2), "reviewer", "go", proj2, os.path.join(self.tmp, "run2"), 30).finish()
+        self.assertFalse(os.path.exists(self.ran("a")), "the cooling command was started")
+        self.assertEqual(hand.kind, "done")
+        self.assertEqual((hand.cost or {}).get("fell_back_from"),
+                         [{"command": "sh", "model": "m1", "outcome": "cooling", "until": until}])
+
+    # ---------------------------------------------------------------- item 5
+
+    def test_item5_whole_chain_cooling_waits_with_no_slot_and_no_row(self):
+        import fcntl
+        import threading
+        from core import agents, inflight
+        from core.config import Config
+        now = int(time.time())
+        self.write_records({"sh m1": self.record(now + 2, "first cools"),
+                            "sh m2": self.record(now + 4, "second cools")})
+        self.config(machine_slots=1,
+                    agents=dict(self.agents_cfg(), worker=[self.hands_in("m1", "m1"), self.hands_in("m2", "m2")]))
+        cfg = Config(self.proj)
+        calls, seen = [], {}
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append(phase)
+            if phase != "wait":
+                return
+            seen.update(row=row, until=until, text=text,
+                        m1=os.path.exists(self.ran("m1")), m2=os.path.exists(self.ran("m2")),
+                        live=[r for _, r in inflight.records(cfg)])
+            fd = os.open(os.path.join(self.tmp, "wt", "slots", "slot-0"), os.O_RDWR | os.O_CREAT)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                seen["slot_free"] = True
+            except OSError:
+                seen["slot_free"] = False
+            finally:
+                os.close(fd)
+
+        out = {}
+
+        def go():
+            try:
+                out["hand"] = agents.start(cfg, "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30,
+                                           on_quota=hook).finish()
+            except Exception as exc:   # surfaced by the assertions below
+                out["error"] = repr(exc)
+        th = threading.Thread(target=go, daemon=True)
+        th.start()
+        th.join(30)
+        self.assertFalse(th.is_alive(), "the run did not end")
+        self.assertIn("wait", calls, (calls, out.get("error")))
+        self.assertIsNone(seen["row"])
+        self.assertLessEqual(abs(seen["until"] - (now + 2)), 1, seen)
+        self.assertEqual(seen["text"], "first cools")
+        self.assertFalse(seen["m1"] or seen["m2"], "a command ran before the cooling wait")
+        self.assertTrue(seen["slot_free"], "slot-0 stayed held during the cooling wait")
+        self.assertTrue([r for r in seen["live"] if r.get("kind") == "agent" and r.get("state") == "quota"],
+                        seen["live"])
+        self.assertEqual(calls, ["wait", "over"])
+        self.assertEqual(out["hand"].kind, "done")
+        self.assertTrue(os.path.exists(self.ran("m1")))
+        self.assertFalse(os.path.exists(self.ran("m2")))
+
+    # ---------------------------------------------------------------- item 6
+
+    def test_item6_fall_through_into_cooling_waits_for_the_earliest(self):
+        from core import agents
+        from core.config import Config
+        now = int(time.time())
+        x_until = now + 3
+        self.write_records({"sh m1": self.record(x_until, "x cools")})
+        count = os.path.join(self.tmp, "y-count")
+        said = self.fixture("y", self.EPOCH_PREFIX + str(now + 3600))
+        y = self.cmd("m2", 'n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s; cat %s; exit 1'
+                     % (count, count, said))
+        self.config(quota_retry_seconds=600, agents=dict(self.agents_cfg(), worker=[self.hands_in("m1", "x"), y]))
+        waits = []
+
+        def hook(phase, row=None, until=None, text=None):
+            if phase == "wait":
+                waits.append((row, until))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30,
+                            on_quota=hook).finish()
+        self.assertEqual(len(waits), 1, waits)
+        row, until = waits[0]
+        self.assertEqual(((row or {}).get("outcome"), (row or {}).get("model")), ("quota", "m2"), row)
+        self.assertLessEqual(abs(until - x_until), 1, (until, x_until))
+        self.assertEqual(hand.kind, "done")
+        self.assertTrue(os.path.exists(self.ran("x")))
+        with open(count) as fh:
+            self.assertEqual(fh.read().strip(), "1")
+        rec = (self.read_file() or {}).get("sh m2")
+        self.assertIsNotNone(rec, "no record for the command that ran")
+        self.assertLessEqual(abs(self.epoch(rec["until"]) - (now + 3660)), 3, rec)
+
+    # ---------------------------------------------------------------- item 7
+
+    def test_item7_the_opener_ends_at_once_with_its_page(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.write_records({"python3": dict(self.record(0, self.OPENER_TEXT), until=self.OPENER_UNTIL)})
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=60)
+        self.assertEqual(res.returncode, 1)
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.plan_path), "count-creator--")),
+                         "the fake creator ran")
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+        rows = list(self.snap().inbox.values())
+        self.assertEqual(len(rows), 1, [r.get("kind") for r in rows])
+        page = rows[0]
+        self.assertEqual((page.get("kind"), page.get("ref")), ("decision", "request"))
+        self.assertTrue(page.get("text") == self.PAGE_TEXT, "the page text is not the one acceptance 7 gives")
+        self.assertEqual(page.get("cost"), [])
+        self.assertEqual([o.get("action") for o in page.get("options") or []], ["ack"])
 
 
 class T31Acceptance(LoopCase):
@@ -329,7 +549,8 @@ class T31Acceptance(LoopCase):
 
     # 8
     def test_a_readable_reset_phrase_alone_marks_out_of_quota(self):
-        self.config(agents=dict(self.agents_cfg(), worker=[AGENT, AGENT], worker_simple=[AGENT, AGENT]))
+        chain = [AGENT + ["--model", "a"], AGENT + ["--model", "b"]]
+        self.config(agents=dict(self.agents_cfg(), worker=chain, worker_simple=chain))
         self.env["FAKE_QUOTA_TEXT"] = "You've hit your limit · resets 3pm"
         self.add(1)
         self.plan(worker={"1": ["quota", "ok"]})
@@ -791,6 +1012,115 @@ class QuotaResetCodexUnits(unittest.TestCase):
         self.assertEqual(agents.quota_reset("try again in 3d", self.AT), self.AT + 3 * 86400)
 
 
+class CliErrorUnits(unittest.TestCase):
+    """agents.cli_error per log format and _says_quota on top of it (implementer's tests of #148)."""
+
+    OK = {"type": "result", "subtype": "success", "is_error": False, "api_error_status": None,
+          "usage": {"input_tokens": 1}, "result": "the agent said usage limit reached, resets 3pm"}
+    QUOTA_TEXT = "Claude AI usage limit reached"
+    BARE_429 = "API Error: 429"
+    CODEX_QUOTA = ("You\u2019ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) "
+                   "or try again in 2 days 3 hours")
+    AGENT_WORDS = "The test hit a rate limit, so I stopped."
+    PLAIN_QUOTA = "error: rate limit, resets in 2h\n"
+    PLAIN_429 = ("HTTP 429\n", "status 429, retrying\n")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.n = 0
+
+    def log(self, *lines, raw=None):
+        self.n += 1
+        path = os.path.join(self.tmp, "log%d" % self.n)
+        with open(path, "w") as fh:
+            fh.write(raw if raw is not None else "".join(
+                (json.dumps(x) if isinstance(x, dict) else x) + "\n" for x in lines))
+        os.utime(path, (1800000000, 1800000000))
+        return path
+
+    def claude(self, **over):
+        return dict(self.OK, **over)
+
+    def test_claude_object_gives_result_only_when_is_error(self):
+        from core import agents
+        self.assertEqual(agents.cli_error(self.log("noise", self.claude())), ("", 1800000000))
+        err = self.claude(is_error=True, result=self.QUOTA_TEXT)
+        self.assertEqual(agents.cli_error(self.log(err)), (self.QUOTA_TEXT, 1800000000))
+
+    def test_last_claude_object_wins(self):
+        from core import agents
+        err = self.claude(is_error=True, result=self.QUOTA_TEXT)
+        self.assertEqual(agents.cli_error(self.log(err, self.claude()))[0], "")
+        self.assertEqual(agents.cli_error(self.log(self.claude(), err))[0], self.QUOTA_TEXT)
+
+    def test_result_line_without_is_error_is_a_plain_log(self):
+        from core import agents
+        path = self.log({"type": "result", "usage": {"input_tokens": 1}}, self.PLAIN_QUOTA)
+        self.assertEqual(agents.cli_error(path), agents._log_tail(path))
+
+    def test_codex_error_texts_in_order_and_nothing_else(self):
+        from core import agents
+        path = self.log({"type": "thread.started", "thread_id": "t"}, {"type": "turn.started"},
+                        {"type": "error", "message": "one"},
+                        {"type": "item.completed", "item": {"type": "agent_message", "text": self.AGENT_WORDS}},
+                        {"type": "item.completed", "item": {"type": "reasoning", "text": self.AGENT_WORDS}},
+                        {"type": "item.completed", "item": {"type": "command_execution",
+                                                            "aggregated_output": self.AGENT_WORDS}},
+                        {"type": "item.completed", "item": {"type": "error", "message": "two"}},
+                        {"type": "turn.failed", "error": {"message": "three"}})
+        self.assertEqual(agents.cli_error(path), ("one\ntwo\nthree", 1800000000))
+
+    def test_codex_without_error_is_empty(self):
+        from core import agents
+        path = self.log({"type": "thread.started", "thread_id": "t"}, {"type": "turn.started"},
+                        {"type": "item.completed", "item": {"type": "agent_message", "text": self.AGENT_WORDS}},
+                        {"type": "turn.completed", "usage": {"input_tokens": 1}})
+        self.assertEqual(agents.cli_error(path), ("", 1800000000))
+        self.assertFalse(agents._says_quota(path))
+
+    def test_plain_log_is_its_tail(self):
+        from core import agents
+        path = self.log(raw="x" * 9000 + self.PLAIN_QUOTA)
+        text, at = agents.cli_error(path)
+        self.assertEqual((text, at), agents._log_tail(path))
+        self.assertEqual(len(text), 8000)
+        self.assertTrue(agents._says_quota(path))
+
+    def test_missing_log(self):
+        from core import agents
+        before = time.time()
+        text, at = agents.cli_error(os.path.join(self.tmp, "none"))
+        self.assertEqual(text, "")
+        self.assertTrue(before <= at <= time.time())
+
+    def test_quota_only_from_what_the_cli_said(self):
+        from core import agents
+        self.assertFalse(agents._says_quota(self.log(self.claude())))
+        self.assertTrue(agents._says_quota(self.log(self.claude(is_error=True, result=self.QUOTA_TEXT))))
+        codex = self.log({"type": "thread.started", "thread_id": "t"},
+                         {"type": "turn.failed", "error": {"message": self.CODEX_QUOTA}})
+        self.assertTrue(agents._says_quota(codex))
+        text, at = agents.cli_error(codex)
+        self.assertEqual(agents.quota_reset(text, at), 1800000000 + 2 * 86400 + 3 * 3600)
+        codex_err = self.log({"type": "turn.started"}, {"type": "error", "message": self.CODEX_QUOTA})
+        self.assertTrue(agents._says_quota(codex_err))
+
+    def test_bare_429_is_not_quota(self):
+        from core import agents
+        for raw in self.PLAIN_429:
+            self.assertFalse(agents._says_quota(self.log(raw=raw)), raw)
+        err = self.claude(is_error=True, api_error_status=429, result=self.BARE_429)
+        self.assertFalse(agents._says_quota(self.log(err)))
+
+    def test_readme_says_where_quota_is_read(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            section = fh.read().split("## Agents, models and tests")[1].split("\n## ")[0]
+        for phrase in ("--output-format json", "`is_error` is true", "never when it is false",
+                       "exec --json", "turn.failed", "any other log its\n  tail"):
+            self.assertIn(phrase, section)
+
+
 class UnderscoredQuotaUnits(LoopCase):
     """#102: usage_limit_reached and rate_limit_error read as out of quota; the excerpt keeps the CLI's words."""
 
@@ -844,6 +1174,114 @@ class UnderscoredQuotaUnits(LoopCase):
         hand = agents.start(Config(self.proj), "worker", "go", self.proj,
                             os.path.join(self.tmp, "run"), 30).finish()
         self.assertEqual(hand.cost["outcome"], "out of quota")
+
+
+class T148Acceptance(LoopCase):
+    """#148: quota is read from the CLI's own error (a claude result object, codex error events), not
+    from the agent's words. Expected values come from the ticket's acceptance items 2-5."""
+
+    CLAUDE_OK = json.dumps({
+        "type": "result", "subtype": "success", "is_error": False, "api_error_status": None,
+        "duration_ms": 900, "num_turns": 3, "session_id": "s1", "total_cost_usd": 0.01,
+        "usage": {"input_tokens": 5, "output_tokens": 7, "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0},
+        "terminal_reason": "completed",
+        "result": "I stopped: the API said usage limit reached, resets 3pm"})
+    QUOTA_RESULT = "Claude AI usage limit reached"
+    EPOCH_RESULT = "Claude AI usage limit reached|1900000000"
+    CLAUDE_QUOTA = json.dumps({
+        "type": "result", "subtype": "success", "is_error": True, "api_error_status": 429,
+        "duration_ms": 900, "num_turns": 3, "session_id": "s2", "total_cost_usd": 0,
+        "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0},
+        "terminal_reason": "api_error", "result": QUOTA_RESULT})
+    CLAUDE_EPOCH = json.dumps(dict(json.loads(CLAUDE_QUOTA), result=EPOCH_RESULT))
+    CODEX_AGENT = "\n".join(json.dumps(e) for e in (
+        {"type": "thread.started", "thread_id": "t1"},
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message",
+                                            "text": "The test hit a rate limit, so I stopped."}}))
+    PAGE_TEXT = ("the opener is out of quota; nothing was opened:\n"
+                 "Claude AI usage limit reached|1900000000\n"
+                 "the limit resets at 2030-03-17T17:46:40Z: send the request again after that time with "
+                 "`actl new --request`")
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def fixture(self, name, text):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w") as fh:
+            fh.write(text + "\n")
+        return path
+
+    def agents_cfg(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    def second(self):
+        ran = os.path.join(self.tmp, "second-ran")
+        return ran, ["sh", "-c", "cat >/dev/null; touch %s; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"" % ran]
+
+    def chain_no_hand_in(self, log_text, code):
+        from core import agents
+        from core.config import Config
+        said = self.fixture("said.txt", log_text)
+        first = ["sh", "-c", "cat >/dev/null; cat %s; exit %d" % (said, code)]
+        ran, second = self.second()
+        self.config(agents=dict(self.agents_cfg(), worker=[first, second]))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj,
+                            os.path.join(self.tmp, "run"), 30).finish()
+        self.assertIsNone(hand.result)
+        self.assertEqual((hand.cost or {}).get("outcome"), "no hand-in")
+        self.assertFalse(os.path.exists(ran), "the next command of the chain was started")
+
+    def test_item2_claude_is_error_false_is_not_quota(self):
+        self.chain_no_hand_in(self.CLAUDE_OK, 0)
+
+    def test_item3_codex_agent_message_is_not_quota(self):
+        self.chain_no_hand_in(self.CODEX_AGENT, 1)
+
+    def test_item4_wait_text_is_the_result_string(self):
+        from core import agents
+        from core.config import Config
+        said = self.fixture("said.txt", self.CLAUDE_QUOTA)
+        count = os.path.join(self.tmp, "count")
+        argv = ["sh", "-c", 'cat >/dev/null; n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s; '
+                'if [ "$n" -lt 1 ]; then cat %s; exit 1; fi; '
+                'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"' % (count, count, said)]
+        self.config(agents=dict(self.agents_cfg(), worker=argv), quota_retry_seconds=1)
+        calls = []
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append((phase, text, until, time.time()))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj,
+                            os.path.join(self.tmp, "run"), 30, on_quota=hook).finish()
+        waits = [c for c in calls if c[0] == "wait"]
+        self.assertEqual(len(waits), 1, [c[0] for c in calls])
+        self.assertTrue(waits[0][1] == self.QUOTA_RESULT, "the wait text is not the result string")
+        self.assertAlmostEqual(waits[0][2], waits[0][3] + 1, delta=0.5)   # quota_retry_seconds
+        self.assertEqual(hand.kind, "done")
+
+    def test_item5_opener_page_text(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        said = self.fixture("said.txt", self.CLAUDE_EPOCH)
+        self.config(agents=dict(self.agents_cfg(),
+                                creator=["sh", "-c", "cat >/dev/null; cat %s; exit 1" % said]))
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1)
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+        rows = list(self.snap().inbox.values())
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0].get("text") == self.PAGE_TEXT, "the page text is not the one acceptance 5 gives")
 
 
 class T32Acceptance(LoopCase):
@@ -1125,6 +1563,201 @@ class AgentEnv(LoopCase):
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
 
 
+
+class CooldownUnits(LoopCase):
+    """#149 implementer's tests: core/cooldown.py, the cooling skip and wait in agents.Pending, the
+    hooks with row None, Config.env and the harness."""
+
+    RESET_TEXT = "Error: usage limit reached, resets in 2h"
+    NO_RESET_TEXT = "Error: usage limit reached"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.file = os.environ["AC_COOLDOWN_FILE"]
+
+    def cmd(self, model, script):
+        return ["sh", "-c", "cat >/dev/null; " + script, "sh", "--model", model]
+
+    def cfg(self, worker, **devloop):
+        from core.config import Config
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        self.config(agents=dict(agents_cfg, worker=worker), **devloop)
+        return Config(self.proj)
+
+    def stamp(self, epoch):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+    def write(self, commands):
+        with open(self.file, "w") as fh:
+            json.dump({"version": 1, "commands": commands}, fh)
+
+    def data(self):
+        with open(self.file) as fh:
+            return json.load(fh)
+
+    def test_path_and_key(self):
+        from core import cooldown
+        self.assertEqual(cooldown.path(), self.file)
+        os.environ.pop("AC_COOLDOWN_FILE")
+        self.assertEqual(cooldown.path(), os.path.join(os.path.expanduser("~"), ".agent-control", "cooldown.json"))
+        for argv, want in ((["claude", "-p", "--model", "opus", "--effort", "high"], "claude opus"),
+                           (["/x/agy.sh", "high"], "agy.sh"), (["sh", "-c", "x", "sh", "--model", "m1"], "sh m1"),
+                           (AGENT, "python3"), (["claude", "--model"], "claude")):
+            self.assertEqual(cooldown.key(argv), want)
+
+    def test_missing_or_broken_file_is_no_record_and_the_next_write_replaces_it(self):
+        from core import cooldown
+        os.environ["AC_COOLDOWN_FILE"] = deep = os.path.join(self.tmp, "a", "b", "cooldown.json")
+        self.assertEqual(cooldown.records(), {})
+        os.makedirs(os.path.dirname(deep))
+        for broken in ("{not json", "[1]", '{"commands": 3}'):
+            with open(deep, "w") as fh:
+                fh.write(broken)
+            self.assertIsNone(cooldown.blocking(["sh"], time.time()))
+        cooldown.record_quota(["sh", "--model", "m1"], time.time() + 100, "t", "proj", "worker")
+        with open(deep) as fh:
+            data = json.load(fh)
+        self.assertEqual(data["version"], 1)
+        self.assertEqual(sorted(data["commands"]), ["sh m1"])
+        rec = data["commands"]["sh m1"]
+        self.assertEqual(sorted(rec), ["project", "role", "since", "state", "text", "until"])
+        self.assertEqual((rec["state"], rec["project"], rec["role"]), ("quota", "proj", "worker"))
+        self.assertIsNotNone(cooldown.blocking(["sh", "-x", "--model", "m1"], time.time()))
+
+    def test_the_lock_file_stays_and_a_record_is_replaced(self):
+        from core import cooldown
+        cooldown.record_quota(["sh"], time.time() + 100, "one", "p1", "worker")
+        ino = os.stat(self.file + ".lock").st_ino
+        cooldown.record_quota(["sh"], time.time() + 200, "two", "p2", "reviewer")
+        self.assertEqual(os.stat(self.file + ".lock").st_ino, ino)
+        rec = self.data()["commands"]["sh"]
+        self.assertEqual((rec["text"], rec["project"], rec["role"]), ("two", "p2", "reviewer"))
+
+    def test_a_failed_write_prints_one_line_and_goes_on(self):
+        from core import cooldown
+        blocker = os.path.join(self.tmp, "file")
+        open(blocker, "w").close()
+        os.environ["AC_COOLDOWN_FILE"] = os.path.join(blocker, "cooldown.json")
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            cooldown.record_quota(["sh"], time.time() + 100, "t", "p", "worker")
+        self.assertEqual(len(err.getvalue().strip().splitlines()), 1, err.getvalue())
+
+    def test_expired_records_are_ignored_and_dropped_at_the_next_write(self):
+        from core import cooldown
+        now = time.time()
+        self.write({"old": {"state": "quota", "until": self.stamp(now - 5)},
+                    "live": {"state": "quota", "until": self.stamp(now + 100)}})
+        self.assertIsNone(cooldown.blocking(["old"], now))
+        self.assertIsNotNone(cooldown.blocking(["live"], now))
+        cooldown.record_quota(["new"], now + 50, "t", "p", "worker")
+        self.assertEqual(sorted(self.data()["commands"]), ["live", "new"])
+
+    def test_a_reset_records_and_no_reset_does_not(self):
+        from core import agents
+        fixture = os.path.join(self.tmp, "text")
+        for text in (self.NO_RESET_TEXT, self.RESET_TEXT):
+            with open(fixture, "w") as fh:
+                fh.write(text + "\n")
+            hand = agents.start(self.cfg([self.cmd("m1", "cat %s; exit 1" % fixture)]), "worker", "go",
+                                self.proj, os.path.join(self.tmp, "run"), 30).finish()
+            self.assertEqual(hand.cost["outcome"], "out of quota")
+            if text == self.NO_RESET_TEXT:
+                self.assertFalse(os.path.exists(self.file))
+        rec = self.data()["commands"]["sh m1"]
+        self.assertEqual(rec["text"], self.RESET_TEXT)
+        self.assertAlmostEqual(calendar.timegm(time.strptime(rec["until"], "%Y-%m-%dT%H:%M:%SZ")),
+                               time.time() + 7260, delta=3)
+
+    def test_without_the_hook_a_cooling_chain_returns_at_once(self):
+        from core import agents
+        until = time.time() + 600
+        self.write({"sh m1": {"state": "quota", "until": self.stamp(until), "text": "cools"}})
+        ran = os.path.join(self.tmp, "ran")
+        chain = [["/no/such/agent"], self.cmd("m1", "touch %s" % ran)]
+        began = time.time()
+        hand = agents.run(self.cfg(chain), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30)
+        self.assertLess(time.time() - began, 5)
+        self.assertEqual((hand.result, hand.cost, hand.log), (None, None, None))
+        self.assertEqual(hand.cooling, {"until": int(until), "text": "cools", "command": "sh m1", "state": "quota"})
+        self.assertIn("sh m1", hand.problem())
+        self.assertFalse(os.path.exists(ran))
+
+    def test_stop_during_a_cooling_wait_returns_none_and_the_wait_counts_in_waited(self):
+        import threading
+        from core import agents
+        self.write({"sh m1": {"state": "quota", "until": self.stamp(time.time() + 3), "text": "cools"}})
+        seen = threading.Event()
+        calls = []
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append((phase, row))
+            if phase == "wait":
+                seen.set()
+        p = agents.start(self.cfg([self.cmd("m1", 'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"')]),
+                         "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30, on_quota=hook)
+        out = {}
+        th = threading.Thread(target=lambda: out.update(hand=p.finish()))
+        th.start()
+        self.assertTrue(seen.wait(10))
+        time.sleep(0.2)
+        self.assertTrue(p.sleeping)
+        self.assertIsNone(p.stop())
+        th.join(30)
+        self.assertEqual(calls[0], ("wait", None))
+        self.assertGreaterEqual(p.waited, 1.0)     # the issuer's deadline adds p.waited
+        self.assertEqual(out["hand"].kind, "done")
+
+    def test_hooks_take_row_none(self):
+        import auto_fixer
+        import memory_keeper
+        import ticket_issuer
+        from core.config import Config
+        until = time.time() + 60
+        self.add(1, state="running", target="int/g1")
+        ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1").on_quota(
+            "wait", row=None, until=until, text="cools")
+        t = self.snap().ticket("1")
+        self.assertEqual(t.get("cost") or [], [])
+        self.assertEqual(t["waiting"]["until"], self.stamp(until))
+        self.assertEqual(t["history"][-1]["event"], "waiting for quota")
+        self.assertNotIn("role", t["history"][-1])
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "branch": "int/g1", "state": "fixing",
+                                                  "members": [], "fix_round": 1}), "test: g1")
+        auto_fixer.quota_hook(self.pool, "g1")("wait", row=None, until=until, text="cools")
+        g = self.snap().groups["g1"]
+        self.assertEqual(g.get("cost") or [], [])
+        self.assertEqual(g["waiting"]["reason"], "quota")
+        self.assertNotIn("role", g["history"][-1])
+        costs = []
+        memory_keeper.quota_hook(self.pool, "memory/role/worker.md", costs)("wait", row=None, until=until,
+                                                                          text="cools")
+        self.assertEqual(costs, [])
+        self.assertEqual(self.snap().memory_state["waiting"]["path"], "memory/role/worker.md")
+
+    def test_env_and_harness_name_the_file(self):
+        from core.config import Config
+        self.assertEqual(self.file, os.path.join(self.tmp, "cooldown.json"))
+        self.assertEqual(self.env["AC_COOLDOWN_FILE"], self.file)
+        self.assertEqual(Config(self.proj).env(DEVLOOP_ROLE="worker")["AC_COOLDOWN_FILE"], self.file)
+
+    def test_readme_bullet(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            text = fh.read()
+        section = text.split("## Agents, models and tests (D-084)")[1].split("\n## ")[0]
+        bullet = section.split("\n- ")[2]
+        for phrase in ("~/.agent-control/cooldown.json", "AC_COOLDOWN_FILE", ".lock", "`claude opus`",
+                       "`cooling`", "no cost row", "opener"):
+            self.assertIn(phrase, bullet)
+
 class T132Acceptance(LoopCase):
     """#132: a command whose working directory is gone says so, and an agent chain stops there."""
 
@@ -1165,6 +1798,223 @@ class T132Acceptance(LoopCase):
             p = agents.start(cfg, "worker", "prompt", d, os.path.join(self.tmp, "run"), 30)
             self.addCleanup(p.stop)
         self.assertEqual(str(ctx.exception), "working directory does not exist: " + d)
+
+
+class T150Acceptance(LoopCase):
+    """#150: a CLI that says its login is missing or expired parks its program machine-wide as
+    needs_login and is announced by one env page. Expected values come from the ticket's acceptance
+    items 1-6 and the measured claude 401 object, not from the code."""
+
+    LOGIN_401 = {"type": "result", "subtype": "success", "is_error": True, "api_error_status": 401,
+                 "api_error_type": "authentication_error", "duration_ms": 182, "num_turns": 1,
+                 "session_id": "s3", "total_cost_usd": 0,
+                 "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+                           "cache_creation_input_tokens": 0},
+                 "terminal_reason": "api_error",
+                 "result": "Failed to authenticate. API Error: 401 OAuth access token is invalid."}
+    LOGIN_TEXT = "Failed to authenticate. API Error: 401 OAuth access token is invalid."
+    PLAIN_LOGIN = "Not logged in · Please run /login (rate limit headers missing)"
+    ENV_TEXT = ("agy.sh needs a new login\n"
+                "Failed to authenticate. API Error: 401 OAuth access token is invalid.\n"
+                "devloop skips agy.sh in every project on this machine until you log in again and run "
+                "`actl tickets login-ok agy.sh`")
+    WAIT_TEXT = "agy.sh needs a new login"
+    OPENER_TEXT = ("the opener could not run: agy.sh needs a new login; nothing was opened:\n"
+                   "Failed to authenticate. API Error: 401 OAuth access token is invalid.\n"
+                   "log in again, run `actl tickets login-ok agy.sh`, then send the request again with "
+                   "`actl new --request`")
+    NEEDS = "needs login"
+    PARKED = "needs_login"
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.cool = os.environ["AC_COOLDOWN_FILE"]
+        self.login_json = os.path.join(self.tmp, "login.json")
+        with open(self.login_json, "w") as fh:
+            fh.write(json.dumps(self.LOGIN_401) + "\n")
+        self.count = os.path.join(self.tmp, "agy-count")
+        self.agy = self.script("bin", ["cat >/dev/null",
+                                       'n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s' % (self.count, self.count),
+                                       "cat %s" % self.login_json, "exit 1"])
+
+    # ---------------------------------------------------------------- helpers
+
+    def script(self, folder, lines):
+        d = os.path.join(self.tmp, folder)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "agy.sh")
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\n" + "\n".join(lines) + "\n")
+        os.chmod(path, 0o755)
+        return path
+
+    def hand_in(self, touch):
+        return ["sh", "-c", "cat >/dev/null; touch %s; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"" % touch]
+
+    def agents_cfg(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    def runs(self):
+        try:
+            with open(self.count) as fh:
+                return int(fh.read().strip())
+        except FileNotFoundError:
+            return 0
+
+    def commands(self):
+        self.assertTrue(os.path.isfile(self.cool), "no cooldown file was written at $AC_COOLDOWN_FILE")
+        with open(self.cool) as fh:
+            return json.load(fh).get("commands") or {}
+
+    def login_pages(self):
+        return [r for r in self.snap().inbox.values()
+                if r.get("kind") == "env" and r.get("ref") == "login-agy.sh"]
+
+    def worker_rows(self, ident):
+        return [c for c in self.snap().ticket(str(ident)).get("cost") or [] if c.get("role") == "worker"]
+
+    def chain_config(self):
+        chain = [[self.agy], AGENT]
+        self.config(agents=dict(self.agents_cfg(), worker=chain, worker_simple=chain))
+
+    # ---------------------------------------------------------------- items 1-4
+
+    def test_items1_4_a_login_failure_falls_through_parks_and_pages_once(self):
+        self.chain_config()
+        self.add(1)
+        started = time.time()
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+        done = [r for r in self.worker_rows(1) if r.get("outcome") == "done"]
+        self.assertTrue(done, self.worker_rows(1))
+        self.assertTrue((done[0].get("fell_back_from") or [None])[0]
+                        == {"command": self.agy, "model": "agy.sh", "outcome": self.NEEDS},
+                        "the done row does not list the parked command as acceptance 2 gives")
+        rec = self.commands().get("agy.sh")
+        self.assertIsNotNone(rec, "no record under the program's basename")
+        self.assertTrue(rec.get("state") == self.PARKED, "the record's state is not the parked one")
+        self.assertTrue(rec.get("text") == self.LOGIN_TEXT, "the record's text is not the CLI's error line")
+        self.assertEqual((rec.get("project"), rec.get("role")), ("proj", "worker_simple"))
+        self.assertNotIn("until", rec)
+        since = calendar.timegm(time.strptime(rec["since"], self.FMT))
+        self.assertTrue(started - 2 <= since <= time.time() + 2, rec["since"])
+        pages_ = self.login_pages()
+        self.assertEqual(len(pages_), 1, [(r.get("kind"), r.get("ref")) for r in self.snap().inbox.values()])
+        self.assertTrue(pages_[0].get("text") == self.ENV_TEXT, "the env page text is not the one acceptance 4 gives")
+        self.assertEqual(self.runs(), 1)
+
+    def test_item4_one_page_across_parallel_and_later_runs(self):
+        self.chain_config()
+        self.config(max_parallel=2)
+        self.add(1)
+        self.add(2)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        self.assertEqual([self.state(1), self.state(2)], ["landed", "landed"])
+        self.assertEqual(len(self.login_pages()), 1)
+        first = self.runs()
+        self.assertIn(first, (1, 2))
+        self.add(3)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        self.assertEqual(self.state(3), "landed")
+        self.assertEqual(self.runs(), first, "a parked program was started again")
+        self.assertEqual(len(self.login_pages()), 1)
+
+    # ---------------------------------------------------------------- item 1 order
+
+    def test_item1_login_is_checked_before_quota(self):
+        from core import agents
+        from core.config import Config
+        said = os.path.join(self.tmp, "plain.txt")
+        with open(said, "w") as fh:
+            fh.write(self.PLAIN_LOGIN + "\n")
+        b2 = self.script("b2", ["cat >/dev/null", "cat %s" % said, "exit 1"])
+        self.config(agents=dict(self.agents_cfg(), worker=[[b2], self.hand_in(os.path.join(self.tmp, "second-ran"))]))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30).finish()
+        self.assertEqual(hand.kind, "done")
+        tried = (hand.cost or {}).get("fell_back_from") or [{}]
+        self.assertTrue(tried[0].get("outcome") == self.NEEDS, "the first command's outcome is not the login one")
+        self.assertTrue((self.commands().get("agy.sh") or {}).get("state") == self.PARKED,
+                        "no parked record for the program")
+
+    # ---------------------------------------------------------------- item 5
+
+    def test_item5_a_chain_parked_by_login_waits_until_the_record_goes(self):
+        import threading
+        from core import agents
+        from core.config import Config
+        osx.write_json(self.cool, {"version": 1, "commands": {"agy.sh": {
+            "state": self.PARKED, "since": time.strftime(self.FMT, time.gmtime()), "text": "x",
+            "project": "other", "role": "worker"}}})
+        ok_ran = os.path.join(self.tmp, "ok-ran")
+        ok = self.script("ok", ["cat >/dev/null", "touch %s" % ok_ran,
+                                "echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\""])
+        self.config(quota_retry_seconds=600, agents=dict(self.agents_cfg(), worker=[[ok]]))
+        calls, seen, waited = [], {}, threading.Event()
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append(phase)
+            if phase == "wait":
+                seen.update(row=row, until=until, text=text, at=time.time(), ran=os.path.exists(ok_ran))
+                waited.set()
+        p = agents.start(Config(self.proj), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30,
+                         on_quota=hook)
+        self.addCleanup(p.stop)
+        out = {}
+
+        def go():
+            try:
+                out["hand"] = p.finish()
+            except Exception as exc:   # surfaced by the assertions below
+                out["error"] = repr(exc)
+        th = threading.Thread(target=go, daemon=True)
+        th.start()
+        deadline = time.time() + 10
+        while time.time() < deadline and th.is_alive() and not waited.is_set():
+            waited.wait(0.05)
+        self.assertTrue(waited.is_set(), (calls, out.get("error")))
+        self.assertIsNone(seen["row"])
+        self.assertLessEqual(abs(seen["until"] - (seen["at"] + 600)), 3, seen)
+        self.assertTrue(self.WAIT_TEXT in (seen["text"] or ""), "the wait text does not name the program's login")
+        self.assertFalse(seen["ran"] or os.path.exists(ok_ran), "the parked command was started")
+        osx.write_json(self.cool, {"version": 1, "commands": {}})
+        th.join(5)
+        self.assertFalse(th.is_alive(), "the wait did not end after the record was removed")
+        self.assertEqual(calls, ["wait", "over"])
+        self.assertEqual(out["hand"].kind, "done")
+        self.assertTrue(os.path.exists(ok_ran))
+
+    # ---------------------------------------------------------------- item 6
+
+    def test_item6_the_opener_ends_at_once_with_its_login_page(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.config(agents=dict(self.agents_cfg(), creator=[[self.agy]]))
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1)
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+        self.assertEqual(self.runs(), 1)
+        rows = list(self.snap().inbox.values())
+        self.assertEqual(len(self.login_pages()), 1, [(r.get("kind"), r.get("ref")) for r in rows])
+        asks = [r for r in rows if r.get("kind") == "decision" and r.get("ref") == "request"]
+        self.assertEqual(len(asks), 1, [(r.get("kind"), r.get("ref")) for r in rows])
+        page = asks[0]
+        self.assertTrue(page.get("text") == self.OPENER_TEXT, "the page text is not the one acceptance 6 gives")
+        self.assertTrue([(c.get("role"), c.get("outcome")) for c in page.get("cost") or []] == [("creator", self.NEEDS)],
+                        "the page's cost rows are not the one login run")
+        self.assertEqual([o.get("action") for o in page.get("options") or []], ["ack"])
 
 
 class CodexUsageUnits(LoopCase):
@@ -1218,6 +2068,34 @@ class CodexUsageUnits(LoopCase):
             self.config(prices=ok)
             Config(self.proj)
 
+
+
+class LoginOkUnits(LoopCase):
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.cool = os.environ["AC_COOLDOWN_FILE"]
+        rec = {"state": "needs_login", "since": "2026-01-01T00:00:00Z", "text": "x", "project": "p", "role": "worker"}
+        with open(self.cool, "w") as fh:
+            json.dump({"version": 1, "commands": {"agy.sh": rec}}, fh)
+
+    def test_path_argument_matches_by_basename_and_default_acked_by(self):
+        page = self.pool.report("env", "login-agy.sh", "needs a new login")
+        res = self.run_py("tickets.py", "login-ok", os.path.join(self.tmp, "x", "agy.sh"))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        with open(self.cool) as fh:
+            self.assertEqual(json.load(fh)["commands"], {})
+        row = self.pool.snapshot().inbox[page]
+        self.assertTrue(row["acked"])
+        self.assertEqual(row["acked_by"], "tickets login-ok")
+
+    def test_clear_login_and_names(self):
+        from core import cooldown
+        self.assertEqual(cooldown.login_names(), ["agy.sh"])
+        self.assertFalse(cooldown.clear_login("other"))
+        self.assertTrue(cooldown.clear_login("agy.sh"))
+        self.assertEqual(cooldown.login_names(), [])
 
 
 class WorktreeRemakeUnits(LoopCase):
@@ -1373,6 +2251,462 @@ class MissingProgramKeepsText(unittest.TestCase):
                 self.assertNotIsInstance(ctx.exception, osx.CwdMissing)
                 self.assertTrue(str(ctx.exception).startswith(
                     "cannot start no-such-program-132: not found ("), str(ctx.exception))
+
+
+class T151Acceptance(LoopCase):
+    """#151: `tickets.py login-ok <command>` removes the program's machine-wide needs_login record
+    and acks its env page, so a run waiting on it resumes. Expected values come from the ticket's
+    acceptance items 1-4, not from the code."""
+
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+    PARKED = "needs_login"
+    QUOTA_TEXT = "You've hit your limit · resets 3pm"
+    PAGE_TEXT = "agy.sh needs a new login\nx"
+    OK_LINE = "agy.sh: login marked ok"
+    REFUSE = "tickets: %s is not waiting for a login (waiting for a login: %s)"
+    ROW = "| `python3 devloop/tickets.py login-ok <command> [--by NAME]`"
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.cool = os.environ["AC_COOLDOWN_FILE"]
+        now = time.time()
+        self.parked = {"state": self.PARKED, "since": time.strftime(self.FMT, time.gmtime(now)), "text": "x",
+                       "project": "proj", "role": "worker"}
+        self.quota = {"state": "quota", "until": time.strftime(self.FMT, time.gmtime(now + 3600)),
+                      "since": time.strftime(self.FMT, time.gmtime(now)), "text": self.QUOTA_TEXT,
+                      "project": "p", "role": "worker"}
+
+    def write(self, commands):
+        osx.write_json(self.cool, {"version": 1, "commands": commands})
+
+    def commands(self):
+        with open(self.cool) as fh:
+            return json.load(fh).get("commands")
+
+    def raw(self):
+        with open(self.cool, "rb") as fh:
+            return fh.read()
+
+    def inbox(self):
+        return {k: dict(v) for k, v in self.snap().inbox.items()}
+
+    # ---------------------------------------------------------------- item 1
+
+    def test_item1_removes_the_record_keeps_the_rest_and_acks_the_page(self):
+        self.write({"agy.sh": self.parked, "claude opus": self.quota})
+        page = self.pool.report("env", "login-agy.sh", self.PAGE_TEXT)
+        other = self.pool.report("env", "g9", "other")
+        res = self.run_py("tickets.py", "login-ok", "agy.sh", "--by", "tester")
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        self.assertIn(self.OK_LINE, res.stdout)
+        self.assertEqual(self.commands(), {"claude opus": self.quota})
+        rows = self.snap().inbox
+        self.assertIs(rows[page].get("acked"), True, rows[page])
+        self.assertEqual(rows[page].get("acked_by"), "tester")
+        self.assertFalse(rows[other].get("acked"), rows[other])
+
+    # ---------------------------------------------------------------- item 2
+
+    def test_item2_no_record_writes_nothing_and_exits_2(self):
+        self.write({"claude opus": self.quota})
+        page = self.pool.report("env", "login-nosuch", "p")
+        before, pages_before = self.raw(), self.inbox()
+        res = self.run_py("tickets.py", "login-ok", "nosuch")
+        self.assertEqual(res.returncode, 2, (res.stdout, res.stderr[-2000:]))
+        self.assertIn(self.REFUSE % ("nosuch", "none"), res.stderr)
+        self.assertEqual(self.raw(), before)
+        self.assertEqual(self.inbox(), pages_before)
+        self.assertFalse(self.snap().inbox[page].get("acked"))
+        # a quota record under the name is not a login wait; the parked name is listed
+        self.write({"agy.sh": self.parked, "claude opus": self.quota})
+        login = self.pool.report("env", "login-agy.sh", self.PAGE_TEXT)
+        before, pages_before = self.raw(), self.inbox()
+        res = self.run_py("tickets.py", "login-ok", "claude")
+        self.assertEqual(res.returncode, 2, (res.stdout, res.stderr[-2000:]))
+        self.assertIn(self.REFUSE % ("claude", "agy.sh"), res.stderr)
+        self.assertEqual(self.raw(), before)
+        self.assertEqual(self.inbox(), pages_before)
+        self.assertFalse(self.snap().inbox[login].get("acked"))
+
+    # ---------------------------------------------------------------- item 3
+
+    def test_item3_a_parked_run_resumes_and_lands(self):
+        ok_dir = os.path.join(self.tmp, "ok")
+        os.makedirs(ok_dir)
+        ok = os.path.join(ok_dir, "agy.sh")
+        ok_ran = os.path.join(self.tmp, "ok-ran")
+        with open(ok, "w") as fh:
+            fh.write("#!/bin/sh\ncat >/dev/null\ntouch %s\necho '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"\n" % ok_ran)
+        os.chmod(ok, 0o755)
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        self.config(quota_retry_seconds=600, agents=dict(agents_cfg, worker=[[ok]], worker_simple=[[ok]]))
+        self.write({"agy.sh": self.parked})
+        self.add(1, needs_verifier=False)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py")], cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        t = {}
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            t = self.snap().ticket("1")
+            if t.get("waiting") or proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        self.assertTrue(t.get("waiting"), (t.get("state"), proc.poll()))
+        self.assertFalse(os.path.exists(ok_ran), "the parked command was started before login-ok")
+        started = time.time()
+        res = self.run_py("tickets.py", "login-ok", "agy.sh")
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        limit = 0.2 + 5
+        deadline = started + limit + 1
+        while time.time() < deadline and not os.path.exists(ok_ran) and proc.poll() is None:
+            time.sleep(0.05)
+        self.assertTrue(os.path.exists(ok_ran), "the chain did not start again after login-ok")
+        self.assertLessEqual(os.path.getmtime(ok_ran) - started, limit)
+        try:
+            out, err = proc.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            self.fail("the controller did not finish within 60 s after login-ok")
+        self.assertEqual(proc.returncode, 0, err[-2000:])
+        self.assertEqual(self.state(1), "landed")
+
+    # ---------------------------------------------------------------- item 4
+
+    def test_item4_docs_name_login_ok(self):
+        def read(*parts):
+            with open(os.path.join(HOME, *parts)) as fh:
+                return fh.read()
+        readme = read("devloop", "README.md").splitlines()
+        rows = [i for i, ln in enumerate(readme) if ln.startswith(self.ROW)]
+        self.assertEqual(len(rows), 1, "README has not exactly one login-ok row")
+        wait = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py wait")]
+        self.assertEqual(len(wait), 1)
+        self.assertEqual(rows[0], wait[0] + 1, "the login-ok row does not follow the wait row")
+        self.assertTrue(readme[rows[0] + 1].startswith("| `python3 devloop/tickets.py list`"), readme[rows[0] + 1])
+        actl = [ln for ln in read("bin", "actl").splitlines() if ln.startswith("  tickets ")]
+        self.assertEqual(len(actl), 1)
+        self.assertIn("|release", actl[0])
+        words = re.split(r"[\s|]+", actl[0])
+        self.assertIn("login-ok", words)
+        self.assertEqual(words.index("login-ok"), words.index("release") + 1, actl[0])
+        doc = read("devloop", "tickets.py").split('"""')[1]
+        self.assertIn("login-ok", doc)
+
+
+class LoginUnits(LoopCase):
+    """#150 implementer's tests: agents.LOGIN_SIGNS and _says_login, cooldown.record_login and the
+    replace rules, the one env page, the parked wait and the opener's login page."""
+
+    LOGIN_TEXTS = (
+        "Invalid API key · Fix external API key",
+        "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+        "Not logged in · Please run /login",
+        "Login expired · Please run /login",
+        "OAuth token revoked · Please run /login",
+        "Login reached its time limit · Please run /login",
+        "Authentication required · Sign in again to continue",
+        "Invalid auth token · Fix external auth token",
+        "Not logged in. Run claude auth login to authenticate.",
+        "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+        "Failed to authenticate: this login reached its time limit and cannot be renewed. "
+        "Run `claude auth login` to sign in again",
+        "Anthropic profile login expired · Re-authenticate your Anthropic profile",
+        "API Error: 401 Invalid API key · Please run /login",
+        'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired"}}',
+        "Your access token could not be refreshed because your refresh token has expired. "
+        "Please log out and sign in again.",
+        "Your access token could not be refreshed because your refresh token was already used. "
+        "Please log out and sign in again.",
+        "Your access token could not be refreshed because your refresh token was revoked. "
+        "Please log out and sign in again.",
+        "Your access token could not be refreshed. Please log out and sign in again.",
+        "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+        "no Codex credentials were found",
+        "Run codex login or provide an API key through a supported auth env var.",
+        "Codex account has no refresh token; sign in again",
+        "Not logged in",
+    )
+    OTHER_TEXTS = (
+        "You've hit your limit · resets 3pm",
+        "Claude AI usage limit reached|1900000000",
+        "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again in 2 days 3 hours",
+        'API Error: 429 {"type":"error","error":{"type":"usage_limit_reached","message":"x"}}',
+        "Authentication error · This may be a temporary network issue, please try again",
+    )
+    LOGIN_LINE = "Not logged in · Please run /login"
+    QUOTA_RESET = "Error: usage limit reached, resets in 2h"
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.file = os.environ["AC_COOLDOWN_FILE"]
+
+    cfg = CooldownUnits.cfg
+
+    def stamp(self, epoch):
+        return time.strftime(self.FMT, time.gmtime(epoch))
+
+    def write(self, commands):
+        osx.write_json(self.file, {"version": 1, "commands": commands})
+
+    def data(self):
+        with open(self.file) as fh:
+            return json.load(fh)
+
+    def log(self, text, claude=False):
+        path = os.path.join(self.tmp, "agent.log")
+        with open(path, "w") as fh:
+            if claude:
+                fh.write(json.dumps({"type": "result", "is_error": True, "result": text}) + "\n")
+            else:
+                fh.write("some work\n" + text + "\n")
+        return path
+
+    def program(self, name, script):
+        """An executable <tmp>/<dir>/<name> running `script` (stdin read first)."""
+        folder = os.path.join(self.tmp, "p%d" % len(os.listdir(self.tmp)))
+        os.makedirs(folder)
+        path = os.path.join(folder, name)
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\ncat >/dev/null\n%s\n" % script)
+        os.chmod(path, 0o755)
+        return path
+
+    def fixture(self, text):
+        path = os.path.join(self.tmp, "fixture-%d.txt" % len(os.listdir(self.tmp)))
+        with open(path, "w") as fh:
+            fh.write(text + "\n")
+        return path
+
+    DONE = ["sh", "-c", "cat >/dev/null; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\""]
+
+    def env_pages(self, ref):
+        return [r for r in self.snap().inbox.values() if (r.get("kind"), r.get("ref")) == ("env", ref)]
+
+    # ---------------------------------------------------------------- acceptance 1: the text table
+
+    def test_the_text_table(self):
+        from core import agents
+        for text in self.LOGIN_TEXTS:
+            for claude in (False, True):
+                with self.subTest(n=self.LOGIN_TEXTS.index(text), claude=claude):
+                    self.assertTrue(agents._says_login(self.log(text, claude), 1))
+                    self.assertFalse(agents._says_login(self.log(text, claude), 0))
+        for text in self.OTHER_TEXTS:
+            with self.subTest(other=self.OTHER_TEXTS.index(text)):
+                self.assertFalse(agents._says_login(self.log(text), 1))
+                self.assertFalse(agents._says_login(self.log(text, True), 1))
+        self.assertEqual(agents.login_line("a\n  %s  \nb" % self.LOGIN_LINE), self.LOGIN_LINE)
+        self.assertEqual(len(agents.login_line(self.LOGIN_LINE + "x" * 300)), 200)
+
+    def test_login_is_checked_before_quota_and_exit_0_is_neither(self):
+        from core import agents
+        both = self.fixture(self.LOGIN_LINE + " (rate limit headers missing)")
+        hand = agents.start(self.cfg([["sh", "-c", "cat >/dev/null; cat %s; exit 1" % both]]), "worker", "go",
+                            self.proj, os.path.join(self.tmp, "run"), 30).finish()
+        self.assertEqual(hand.cost["outcome"], "needs login")
+        self.assertEqual(self.data()["commands"]["sh"]["state"], "needs_login")
+        os.unlink(self.file)
+        hand = agents.start(self.cfg([["sh", "-c", "cat >/dev/null; cat %s; exit 0" % both]]), "worker", "go",
+                            self.proj, os.path.join(self.tmp, "run2"), 30).finish()
+        self.assertNotEqual(hand.cost["outcome"], "needs login")
+        self.assertNotEqual((agents.cooldown.records().get("sh") or {}).get("state"), "needs_login")
+
+    # ---------------------------------------------------------------- acceptance 2: replace rules
+
+    def test_record_login_replace_rules_and_model_variants(self):
+        from core import cooldown
+        now = time.time()
+        self.write({"claude": {"state": "quota", "until": self.stamp(now + 100), "text": "q"},
+                    "claude opus": {"state": "quota", "until": self.stamp(now + 100), "text": "q"}})
+        self.assertTrue(cooldown.record_login(["claude", "-p", "--model", "sonnet"], "t1", "proj", "worker"))
+        self.assertFalse(cooldown.record_login(["/x/claude"], "t2", "p2", "reviewer"))
+        rec = self.data()["commands"]["claude"]
+        self.assertEqual(rec, {"state": "needs_login", "since": rec["since"], "text": "t1", "project": "proj",
+                               "role": "worker"})
+        self.assertLessEqual(abs(calendar.timegm(time.strptime(rec["since"], self.FMT)) - now), 3)
+        cooldown.record_quota(["claude"], now + 500, "q2", "proj", "worker")
+        self.assertEqual(self.data()["commands"]["claude"]["state"], "needs_login")
+        for argv in (["claude"], ["claude", "--model", "opus"], ["/usr/bin/claude", "--model", "haiku"]):
+            self.assertEqual((cooldown.blocking(argv, now) or {}).get("state"), "needs_login", argv)
+        # a login record has no until and is kept by every later rewrite, however old
+        cooldown.record_quota(["codex"], now + 50, "q3", "proj", "worker")
+        self.assertEqual(sorted(self.data()["commands"]), ["claude", "claude opus", "codex"])
+        self.assertIsNone(cooldown.blocking(["claude"], now + 10 ** 6).get("until"))
+
+    # ---------------------------------------------------------------- acceptance 3-4: skip and page
+
+    def test_one_page_then_skipped_without_another(self):
+        from core import agents
+        count = os.path.join(self.tmp, "count")
+        fail = self.program("agy.sh", 'echo x >> %s\ncat %s\nexit 1' % (count, self.fixture(self.LOGIN_LINE)))
+        chain = [[fail, "--model", "m1"], self.DONE]
+        for n in (1, 2):
+            hand = agents.start(self.cfg(chain), "worker", "go", self.proj,
+                                os.path.join(self.tmp, "run%d" % n), 30).finish()
+            self.assertEqual(hand.kind, "done")
+            self.assertEqual(hand.cost["fell_back_from"],
+                             [{"command": fail, "model": "m1", "outcome": "needs login"}])
+        with open(count) as fh:
+            self.assertEqual(len(fh.read().split()), 1)
+        pages_ = self.env_pages("login-agy.sh")
+        self.assertEqual(len(pages_), 1)
+        self.assertEqual(pages_[0]["text"], "agy.sh needs a new login\n%s\ndevloop skips agy.sh in every project "
+                         "on this machine until you log in again and run `actl tickets login-ok agy.sh`"
+                         % self.LOGIN_LINE)
+        rec = self.data()["commands"]["agy.sh"]
+        self.assertEqual((rec["text"], rec["role"], "until" in rec), (self.LOGIN_LINE, "worker", False))
+
+    def test_a_page_that_cannot_be_written_prints_one_line_and_goes_on(self):
+        from core import agents
+        fail = self.program("agy.sh", "cat %s\nexit 1" % self.fixture(self.LOGIN_LINE))
+        err = io.StringIO()
+        with mock.patch("core.pool.Pool.report", side_effect=osx.OSFailure("no pool")), \
+                mock.patch("sys.stderr", err):
+            hand = agents.start(self.cfg([[fail], self.DONE]), "worker", "go", self.proj,
+                                os.path.join(self.tmp, "run"), 30).finish()
+        self.assertEqual(hand.kind, "done")
+        self.assertEqual(len(err.getvalue().strip().splitlines()), 1, err.getvalue())
+        self.assertEqual(self.data()["commands"]["agy.sh"]["state"], "needs_login")
+
+    def test_without_the_hook_a_login_parked_chain_returns_at_once(self):
+        from core import agents
+        self.write({"agy.sh": {"state": "needs_login", "since": self.stamp(time.time()), "text": "x"}})
+        ran = os.path.join(self.tmp, "ran")
+        hand = agents.run(self.cfg([[self.program("agy.sh", "touch %s" % ran)]]), "worker", "go", self.proj,
+                          os.path.join(self.tmp, "run"), 30)
+        self.assertEqual((hand.result, hand.cost), (None, None))
+        self.assertEqual((hand.cooling["state"], hand.cooling["command"], hand.cooling["text"]),
+                         ("needs_login", "agy.sh", "x"))
+        self.assertIn("agy.sh", hand.problem())
+        self.assertFalse(os.path.exists(ran))
+
+    # ---------------------------------------------------------------- acceptance 5: the parked wait
+
+    def test_a_mixed_park_waits_for_the_cooling_until_and_restarts(self):
+        import threading
+        from core import agents
+        now = time.time()
+        self.write({"agy.sh": {"state": "needs_login", "since": self.stamp(now), "text": "x"},
+                    "sh m1": {"state": "quota", "until": self.stamp(now + 3), "text": "cools"}})
+        ran = os.path.join(self.tmp, "ran")
+        chain = [[self.program("agy.sh", "exit 1")],
+                 ["sh", "-c", "cat >/dev/null; touch %s; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"" % ran,
+                  "sh", "--model", "m1"]]
+        calls = []
+        p = agents.start(self.cfg(chain, quota_retry_seconds=600), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30,
+                         on_quota=lambda phase, row=None, until=None, text=None: calls.append((phase, row, until, text)))
+        box = []
+        t = threading.Thread(target=lambda: box.append(p.finish()))
+        t.start()
+        t.join(15)
+        self.assertFalse(t.is_alive())
+        self.assertEqual([c[0] for c in calls], ["wait", "over"])
+        self.assertEqual((calls[0][1], calls[0][3]), (None, "cools"))
+        self.assertLessEqual(abs(calls[0][2] - int(now + 3)), 1)
+        self.assertEqual(box[0].kind, "done")
+        self.assertEqual([h["outcome"] for h in box[0].cost["fell_back_from"]], ["needs login"])
+        self.assertGreater(p.waited, 1)
+
+    def test_a_login_run_at_the_chain_end_hands_its_row_to_the_wait(self):
+        import threading
+        from core import agents
+        count = os.path.join(self.tmp, "count")
+        once = self.program("agy.sh", 'n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s\n'
+                            'if [ "$n" -lt 1 ]; then cat %s; exit 1; fi\n'
+                            'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"'
+                            % (count, count, self.fixture(self.LOGIN_LINE)))
+        calls = []
+        seen = threading.Event()
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append((phase, row, until, text))
+            seen.set()
+        p = agents.start(self.cfg([[once]], quota_retry_seconds=600), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30, on_quota=hook)
+        box = []
+        t = threading.Thread(target=lambda: box.append(p.finish()))
+        t.start()
+        self.assertTrue(seen.wait(10))
+        self.assertEqual(calls[0][1]["outcome"], "needs login")
+        self.assertEqual(calls[0][3], "agy.sh needs a new login (actl tickets login-ok agy.sh)")
+        self.assertLessEqual(abs(calls[0][2] - (time.time() + 600)), 5)
+        self.assertIsNone(p.stop())
+        self.write({})
+        t.join(5)
+        self.assertFalse(t.is_alive())
+        self.assertEqual([c[0] for c in calls], ["wait", "over"])
+        self.assertEqual(box[0].kind, "done")
+
+    # ---------------------------------------------------------------- acceptance 6: the opener
+
+    def opener(self, chain, records):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.config(agents=dict({r: AGENT for r in ROLES}, creator=chain))
+        self.write(records)
+        return self.run_py("ticket_creator.py", "--request", "x", timeout=60)
+
+    def test_the_opener_with_a_login_parked_chain(self):
+        now = time.time()
+        res = self.opener([AGENT], {"python3": {"state": "needs_login", "since": self.stamp(now), "text": "x"}})
+        self.assertEqual(res.returncode, 1, res.stderr)
+        rows = [r for r in self.snap().inbox.values() if r.get("kind") == "decision"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["text"], "the opener could not run: python3 needs a new login; nothing was opened:\n"
+                         "x\nlog in again, run `actl tickets login-ok python3`, then send the request again "
+                         "with `actl new --request`")
+        self.assertEqual((rows[0]["ref"], rows[0]["cost"]), ("request", []))
+        self.assertEqual([o["action"] for o in rows[0]["options"]], ["ack"])
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+
+    def test_the_opener_with_a_mixed_park_gets_the_quota_page(self):
+        now = time.time()
+        res = self.opener([AGENT, ["sh", "-c", "exit 1", "sh", "--model", "m1"]],
+                          {"python3": {"state": "needs_login", "since": self.stamp(now), "text": "x"},
+                           "sh m1": {"state": "quota", "until": "2030-03-17T17:46:40Z", "text": "cools"}})
+        self.assertEqual(res.returncode, 1, res.stderr)
+        rows = [r for r in self.snap().inbox.values() if r.get("kind") == "decision"]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["text"].startswith("the opener is out of quota; nothing was opened:\ncools\n"),
+                        "not the out-of-quota page")
+        self.assertIn("2030-03-17T17:46:40Z", rows[0]["text"])
+
+    # ---------------------------------------------------------------- acceptance 7: README
+
+    def test_readme_bullet_follows_the_cooldown_bullet(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        sec = text.split("\n## Agents, models and tests (D-084)", 1)[1].split("\n## ", 1)[0]
+        bullets = sec.split("\n- ")
+        i = [n for n, b in enumerate(bullets) if b.startswith("Quota cooldown")][0]
+        nxt = bullets[i + 1]
+        for word in ("claude", "codex", "log tail", "needs_login", "until", "login-<program>",
+                     "`actl tickets login-ok <program>`", "waits"):
+            self.assertIn(word, nxt)
+
+    # ---------------------------------------------------------------- exit code kept
+
+    def test_alive_leaves_a_dead_child_for_its_own_wait(self):
+        """A live-record check (osx.alive) on a child that exited must not reap it: a run's
+        exit code decides login, and a reaped child reads exit code 0 in Popen.wait()."""
+        proc = subprocess.Popen(["sh", "-c", "exit 3"])
+        deadline = time.time() + 10
+        while time.time() < deadline and osx.alive(proc.pid):
+            time.sleep(0.02)
+        self.assertFalse(osx.alive(proc.pid))
+        self.assertEqual(proc.wait(timeout=10), 3)
 
 
 class ChainStartUnits(LoopCase):

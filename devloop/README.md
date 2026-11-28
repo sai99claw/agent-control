@@ -38,6 +38,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + quick, if 
 | `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching); a run that ends idle with tickets or groups left undone writes one idle page (ref `controller`, the same lines on stderr) saying what each waits for; an open group held by stuck members gets `<gid> waits for the decision on #<N>[, #<M>]` (D-097); after a group's own line, each group that waits on an earlier one gets `<gid> waits for <gM> to land (place <k> in the chain)` |
 | `python3 devloop/tickets.py inbox` / `ack P [--by NAME]` | pages: created, landed, decision, env, cancelled, idle; `--by` sets acked_by and, for a page whose ref is a ticket or group, writes a 'page acknowledged' event on it (`ack --all --by NAME` only sets acked_by); a page with options also prints its question, each option with the command it runs, and the recommendation |
 | `python3 devloop/tickets.py wait [--timeout S] [--kind K,...]` | block until a page arrives that was not in the inbox at its start (new = not there then, not acked, kind listed in `--kind`), print it as inbox does, exit 0; exit 1 after `--timeout S` with no new page; exit 2 for a bad kind, a timeout <= 0 or no pool |
+| `python3 devloop/tickets.py login-ok <command> [--by NAME]` | after logging in again: remove the machine-wide needs_login record of `<command>` (matched by basename; every other record stays) and ack this project's unread env pages with ref `login-<command>` (acked_by `--by`, default `tickets login-ok`); prints `<command>: login marked ok`. Runs waiting on that record start again within `poll_seconds` + 5 s. Exit 2 with nothing written when `<command>` has no needs_login record |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
 | `python3 devloop/tickets.py ready N [--by NAME] [--page P]` | after deciding on a stuck ticket (one without an open group must then be placed with `actl dag move`) |
 | `python3 devloop/tickets.py ready gN` `[--note "..."] [--by NAME] [--page P] [--via main|web]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling (`--via web` marks a note sent from the board: the fixer gets it cleaned and wrapped behind the injection check, like web text for the opener); `--by` names who gave the answer on the events and `--page` acks that page in the same write |
@@ -291,7 +292,10 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 
 - `agents.<role>` is one command or a chain of commands; the next one is tried when a command is
   not installed or its run ends saying the account is out of quota (a quota phrase or a readable
-  reset in its log, without a hand-in). When the last command of the chain says quota, the issuer
+  reset in what the CLI itself said, without a hand-in: for a claude `--output-format json` log
+  its result object's `result` when `is_error` is true, never when it is false; for a codex
+  `exec --json` log its error and turn.failed events (and error items); for any other log its
+  tail; `agents.cli_error`). When the last command of the chain says quota, the issuer
   waits for the reset read from the CLI's message ("resets 3pm", "resets 3:30pm", "resets at
   15:00", "will reset at 5pm" as local time; "resets in 2h 30m" / "in 45m" / "in 1 hour";
   codex's "try again at Nov 11th, 2026 2:23 AM" (year optional), "try again at 2:23 AM" and
@@ -309,6 +313,32 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   `worker_simple` (tickets with `complexity: simple`) sonnet medium, creator opus xhigh,
   consolidator fable then opus. To try `agy` for workers, put it first in the worker chain, e.g.
   `"worker": [["agy", "...", "high"], ["claude", "-p", "--model", "opus", "--effort", "medium", ...]]`.
+- Quota cooldown (machine-wide): a run out of quota whose CLI message has a readable reset writes
+  its command into `~/.agent-control/cooldown.json` (or `$AC_COOLDOWN_FILE`; devloop passes the
+  resolved path to every agent and test run; a flock on the `.lock` file beside it guards each
+  rewrite) until that reset. The key is the program and its `--model` (e.g. `claude opus`; effort
+  and other arguments are left out), so every role and every project on the machine shares it.
+  Every chain start skips a cooling command; the row of the command that runs lists it in
+  `fell_back_from` with outcome `cooling` and its `until`. When every command left is cooling, the
+  issuer, auto_fixer and memory_keeper wait for the earliest `until` (the `waiting` mark and
+  events as above, but no cost row: nothing ran) and then start the chain again; the opener ends at
+  once with its out-of-quota page, the record's text and `until` standing for the message and the
+  reset.
+- Expired login (machine-wide, D-102): a run that ends with no hand-in, not timed out and a
+  non-zero exit code, whose CLI error text (claude's result text, codex's error events; any other
+  CLI's log tail) holds one of `agents.LOGIN_SIGNS` ("not logged in", "please run /login",
+  "invalid api key", "oauth access token is invalid", "refresh token has expired", "no codex
+  credentials", …), is a login failure, checked before quota: never counted as out of quota. Its
+  program is written into the cooldown file as `{"state": "needs_login", "since", "text",
+  "project", "role"}` under the program's name alone (no `--model`, no `until`): every `--model`
+  of it is skipped by every chain start of every role and project on the machine (cost row and
+  `fell_back_from` outcome `needs login`), until `actl tickets login-ok <program>` removes it. The
+  failure that parks the program sends one env page `login-<program>` (through devloop.notify);
+  later failures and skips send none. A chain whose every command is parked waits like a cooling
+  one (re-reading the file every `poll_seconds`; with only login records, until
+  `quota_retry_seconds` at most, then it looks again) and starts again as soon as one command is
+  free; the opener does not wait: it ends with a decision page `request` telling you to log in and
+  run `actl tickets login-ok <program>`.
 - A ticket may carry `effort` (low … max); it replaces the worker command's `--effort`.
 - The verifier names every acceptance case `T<id>Acceptance`: the mark must appear in each case's id as the test interface reports it in
   result.json (Python unittest: a class of that name; other runners: the test or file name); the

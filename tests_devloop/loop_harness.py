@@ -105,7 +105,8 @@ class LoopCase(GitIsolatedCase):
         self.env = dict(os.environ, AC_ROOT=self.proj, FAKE_PLAN=self.plan_path,
                         PATH=guard + os.pathsep + os.environ.get("PATH", ""),
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
-                        GIT_COMMITTER_EMAIL="t@t")
+                        GIT_COMMITTER_EMAIL="t@t", AC_COOLDOWN_FILE=os.path.join(self.tmp, "cooldown.json"))
+        os.environ["AC_COOLDOWN_FILE"] = self.env["AC_COOLDOWN_FILE"]   # restored by GitIsolatedCase's patch
         # a test's loop has its own slots: when the suite itself runs under a machine slot (an
         # agent's run_tests.py), the inherited DEVLOOP_SLOT must not switch the test loop's slots off
         self.env.pop("DEVLOOP_SLOT", None)

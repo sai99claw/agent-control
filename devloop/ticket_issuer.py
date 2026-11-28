@@ -666,9 +666,10 @@ class Issuer:
                     "text": (text or "")[:200]}
 
             def mutate(t):
-                t.setdefault("cost", []).append(row)
+                if row is not None:       # None: every command was cooling, nothing ran
+                    t.setdefault("cost", []).append(row)
                 t["waiting"] = mark
-                event(t, "waiting for quota", role=row.get("role"), until=mark["until"])
+                event(t, "waiting for quota", until=mark["until"], **({"role": row.get("role")} if row else {}))
             self.save(mutate, "waiting for quota")
         else:
             self.save(lambda t: (t.pop("waiting", None), event(t, "quota wait over")),

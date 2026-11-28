@@ -11,6 +11,17 @@ names (quota_reset) or devloop.quota_retry_seconds, then starts the chain again 
 command (D-091). A ticket may ask for a reasoning effort (D-047); it replaces the
 command's own `--effort`.
 
+A quota message with a readable reset cools the command machine-wide (core/cooldown.py): every
+chain start skips a cooling command (fell_back_from outcome "cooling"). When every command left
+is cooling, a caller with `on_quota` waits for the earliest reset (hook "wait" with row None when
+nothing ran) and one without gets a Hand with `cooling` set at once.
+
+A run that ends with no hand-in, not timed out and a non-zero exit code, whose CLI error text holds
+a LOGIN_SIGNS phrase, is a login failure (checked before quota): its program is parked machine-wide
+as needs_login (fell_back_from / cost outcome "needs login") until `actl tickets login-ok`, and the
+first such failure sends one env page "login-<program>". A chain whose every command is parked
+(needs_login or cooling) waits like a cooling one, re-reading the file every devloop.poll_seconds.
+
 Cost (D-045, D-084): every run records role, model, effort, seconds, tokens (input, output, cache
 read, cache write), dollars, session id, outcome and run dir. A run that was stopped (timeout)
 prints no usage; its tokens are then read from the CLI's transcript (D-076 #124). A codex log
@@ -26,14 +37,20 @@ import json
 import os
 import re
 import string
+import sys
 import time
 
-from . import inflight, osx, slots
+from . import cooldown, inflight, osx, slots
 
 PROMPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 QUOTA_SIGNS = ("usage limit", "rate limit", "quota", "credit balance", "limit reached",
                "out of credits", "too many requests")
+LOGIN_SIGNS = ("not logged in", "please run /login", "run /login", "claude auth login", "login expired",
+               "oauth token has expired", "oauth token revoked", "oauth access token is invalid",
+               "invalid api key", "invalid auth token", "failed to authenticate", "authentication required",
+               "sign in again", "log in again", "reached its time limit", "refresh token has expired",
+               "no codex credentials", "run codex login")
 
 
 # Roles that start without a machine slot (issue #7): the opener (also when revising) and memory
@@ -44,9 +61,13 @@ NO_SLOT_ROLES = ("creator", "consolidator", "consolidator_peer")
 class Hand:
     """What came back from one agent run."""
 
-    def __init__(self, role, result, rc, timed_out, log, cost, why=None):
+    def __init__(self, role, result, rc, timed_out, log, cost, why=None, cooling=None):
         self.role, self.result, self.rc, self.timed_out = role, result, rc, timed_out
         self.log, self.cost, self.why = log, cost, why
+        # nothing ran, every command was parked: {"until": epoch, "text", "command": key,
+        # "state": "quota" | "needs_login"}; a login park has the program as command and the
+        # record's text
+        self.cooling = cooling
 
     @property
     def kind(self):
@@ -147,7 +168,9 @@ def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None,
     `on_quota(phase, row=None, until=None, text=None)`: when given, a run whose last command is
     out of quota waits for the reset instead of ending. Before the wait it is called with phase
     "wait", the run's cost row (outcome "quota"), the epoch the wait ends and an excerpt of the
-    CLI's message; after the wait with phase "over". Without it the run ends as before.
+    CLI's message; after the wait with phase "over". Without it the run ends as before. When
+    every command is cooling (core/cooldown.py) nothing runs: row is None, until the earliest
+    reset of the cooling commands and text that record's text.
 
     `before_spawn()`: when given, called right before every command start of the chain (the
     first, each fall-through, each restart after a quota wait); what it raises leaves launch()."""
@@ -191,6 +214,8 @@ class Pending:
         self.popped = 0
         self.started = time.time()
         self.proc = self.argv = self.log = self.slot = None
+        self.cooling = self.cooling_argv = None   # set when the last start found only parked commands
+        self.parked = []         # the commands that start found parked
         # seconds spent waiting for a machine slot (every launch adds) or for a quota reset
         self.waited = 0.0
         self.waited_before = 0.0  # self.waited when this run's own clock (self.started) last started
@@ -221,6 +246,9 @@ class Pending:
         except BaseException:
             self._release()
             raise
+        if self.proc is None:        # every command left is cooling: nothing to hold a slot for
+            self._release()
+            return
         self._live("running", {"pid": self.proc.pid, "host": osx.host(), "boot": osx.boot_id(),
                                "started": osx.now()}, self.argv)
         if self.slot is not None:
@@ -257,9 +285,20 @@ class Pending:
             env = dict(self.env, **{slots.ENV: self.slot.path})
         if self.before_spawn is not None:
             self.before_spawn()
+        parked = []
+        self.proc = self.cooling = self.cooling_argv = None
         while self.chain:
             argv = self.chain.pop(0)
             self.popped += 1
+            rec = cooldown.blocking(argv, time.time())
+            if rec is not None:
+                if rec.get("state") == "needs_login":
+                    self.tried.append({"command": argv[0], "model": model_of(argv), "outcome": "needs login"})
+                else:
+                    self.tried.append({"command": argv[0], "model": model_of(argv), "outcome": "cooling",
+                                       "until": rec["until"]})
+                parked.append((argv, rec))
+                continue
             try:
                 os.unlink(self.result_path)
             except FileNotFoundError:
@@ -281,17 +320,21 @@ class Pending:
             self.argv = argv
             self.index = self.first + self.popped - 1
             return
+        if parked:
+            self.parked = [argv for argv, _ in parked]
+            self.cooling, self.cooling_argv = self._park_of(parked, time.time())
+            return
         raise osx.OSFailure("no command for %s could start (%s)" % (self.role, last))
 
     def stop(self):
         """Stop the run. Returns its cost row with outcome "interrupted", or None when finish()
-        already collected it (that row is in its Hand) or it is waiting for a quota reset (that
-        row went to on_quota)."""
+        already collected it (that row is in its Hand), it is waiting for a quota reset (that
+        row went to on_quota) or nothing runs because every command is parked."""
         if self.proc is not None:
             osx.kill_tree(self.proc.pid)
         self._release()
         self._unlive()
-        if self.hand is not None or self.sleeping:
+        if self.hand is not None or self.sleeping or (self.proc is None and self.cooling is not None):
             return None
         return self._cost(None, None, False, False, outcome="interrupted")
 
@@ -304,6 +347,19 @@ class Pending:
 
     def _finish(self):
         while True:
+            if self.proc is None:        # nothing started: every command left is parked
+                self._release()
+                if self.on_quota is None:
+                    if self.cooling["state"] == "needs_login":
+                        why = "every command of %s is parked: %s needs a new login" % (
+                            self.chain_role or self.role, self.cooling["command"])
+                    else:
+                        why = "every command of %s is cooling after a quota hit (%s until %s)" % (
+                            self.chain_role or self.role, self.cooling["command"],
+                            time.strftime(cooldown.FMT, time.gmtime(self.cooling["until"])))
+                    return Hand(self.role, None, None, False, None, None, why=why, cooling=self.cooling)
+                self._wait_parked(None, self.parked)
+                continue
             # only the time under a slot counts
             left = max(1.0, self.timeout - (time.time() - self.started - (self.waited - self.waited_before)))
             rc, timed_out = osx.wait(self.proc, left)
@@ -313,35 +369,142 @@ class Pending:
                 result = None
             if result is not None and not isinstance(result, dict):
                 result = None
-            out_of_quota = result is None and not timed_out and _says_quota(self.log)
-            if out_of_quota and self.chain:
+            login = result is None and not timed_out and _says_login(self.log, rc)
+            out_of_quota = result is None and not timed_out and not login and _says_quota(self.log)
+            if login:
+                self._park_login()
+            if out_of_quota:
+                self._cool()
+            if (login or out_of_quota) and self.chain:
+                ran = (self.argv, self.log, self.attempt_started, len(self.tried))
                 self.tried.append({"command": self.argv[0], "model": model_of(self.argv),
-                                   "outcome": "out of quota"})
+                                   "outcome": "needs login" if login else "out of quota"})
                 self.launch()
-                continue
-            if out_of_quota and self.on_quota is not None:
-                self._wait_for_quota()
+                if self.proc is not None:
+                    continue
+                # every command left is parked: the run that said quota or login is the one that ends
+                self.argv, self.log, self.attempt_started, n = ran
+                del self.tried[n:]
+            if (login or out_of_quota) and self.on_quota is not None:
+                self._wait_for_quota(login)
                 continue
             self._release()
-            cost = self._cost(result, rc, timed_out, out_of_quota)
+            cost = self._cost(result, rc, timed_out, out_of_quota, outcome="needs login" if login else None)
             return Hand(self.role, result, rc, timed_out, self.log, cost)
 
-    def _wait_for_quota(self):
-        """The last command said quota: hand the row to the caller, sleep until the reset with no
-        slot held, then start the whole chain again with a fresh clock (D-091)."""
-        self._release()
-        row = self._cost(None, None, False, True, outcome="quota")
-        text, at = _log_tail(self.log)
-        now = time.time()
+    def _park_of(self, parked, now):
+        """(the Hand's cooling dict, the argv it names) for [(argv, record)] that are all parked:
+        the earliest cooling record, else the first needs_login program in chain order with the
+        quota_retry_seconds horizon."""
+        cool = [(cooldown.epoch(rec["until"]), rec, argv) for argv, rec in parked
+                if rec.get("state") != "needs_login"]
+        if cool:
+            until, rec, argv = min(cool, key=lambda c: c[0])
+            return {"until": until, "text": rec.get("text") or "", "command": cooldown.key(argv),
+                    "state": "quota"}, argv
+        argv, rec = parked[0]
         retry = getattr(self.cfg, "quota_retry_seconds", None) or 1800
-        wait = quota_wait(text, at, now, retry)
+        return {"until": now + retry, "text": rec.get("text") or "", "command": os.path.basename(argv[0]),
+                "state": "needs_login"}, argv
+
+    def _all_parked(self, argvs, now):
+        """[(argv, record)] when every one of `argvs` is parked at `now`, else None."""
+        recs = [(argv, cooldown.blocking(argv, now)) for argv in argvs]
+        if not recs or any(rec is None for _, rec in recs):
+            return None
+        return recs
+
+    def _wait_parked(self, row, argvs):
+        """Every command of `argvs` is parked: hand `row` (or None) to the caller and wait with no
+        slot held, re-reading the file every devloop.poll_seconds, until one of them is no longer
+        parked or the horizon passes; then start the whole chain again."""
+        self._release()
         self.proc = None
-        self._live("quota", osx.stamp(), self.argv, until=now + wait)
-        self.on_quota("wait", row=row, until=now + wait, text=_excerpt(text))
+        now = time.time()
+        recs = self._all_parked(argvs, now)
+        if recs is None:         # one came free since the start looked: start again at once
+            park, argv = self.cooling, self.cooling_argv
+            until = now
+        else:
+            park, argv = self._park_of(recs, now)
+            until = park["until"]
+        text = park["text"] if park else ""
+        if park and park["state"] == "needs_login":
+            text = "%s needs a new login (actl tickets login-ok %s)" % (park["command"], park["command"])
+        self._live("quota", osx.stamp(), argv, until=until)
+        self.on_quota("wait", row=row, until=until, text=text)
         self.sleeping = True     # from here on the row is the caller's: stop() returns None
         began = time.time()
-        time.sleep(max(0.0, now + wait - began))
+        poll = getattr(self.cfg, "poll_seconds", None) or 10
+        while True:
+            now = time.time()
+            if now >= until or self._all_parked(argvs, now) is None:
+                break
+            time.sleep(min(poll, until - now))
         self.waited += time.time() - began
+        self._restart()
+
+    def _park_login(self):
+        """A login failure parks its program machine-wide; the run that makes the transition sends
+        the one env page (a page that cannot be written prints one line and the run goes on)."""
+        program = os.path.basename(self.argv[0])
+        text = login_line(cli_error(self.log)[0])
+        if not cooldown.record_login(self.argv, text, getattr(self.cfg, "name", None),
+                                     self.chain_role or self.role) or self.cfg is None:
+            return
+        from .config import pool_for
+        try:
+            pool_for(self.cfg).report("env", "login-" + program, (
+                "%s needs a new login\n%s\ndevloop skips %s in every project on this machine until you "
+                "log in again and run `actl tickets login-ok %s`") % (program, text, program, program))
+        except Exception as exc:
+            print("agents: cannot write the login page for %s (%s)" % (program, exc), file=sys.stderr)
+
+    def _cool(self):
+        """An out-of-quota run whose message names a reset cools its command machine-wide."""
+        text, at = cli_error(self.log)
+        if quota_reset(text, at) is None:
+            return
+        now = time.time()
+        retry = getattr(self.cfg, "quota_retry_seconds", None) or 1800
+        cooldown.record_quota(self.argv, now + quota_wait(text, at, now, retry), _excerpt(text),
+                              getattr(self.cfg, "name", None), self.chain_role or self.role)
+
+    def _wait_for_quota(self, login=False):
+        """The last command said quota or login (or every one after it is parked): hand the row to
+        the caller; when every command of the chain is parked, wait as _wait_parked; else sleep
+        until the reset (or the earliest end of a cooling command of the chain) with no slot held,
+        then start the whole chain again with a fresh clock (D-091)."""
+        self._release()
+        row = self._cost(None, None, False, True, outcome="needs login" if login else "quota")
+        now = time.time()
+        if self._all_parked(self.full_chain, now) is not None:
+            self._wait_parked(row, self.full_chain)
+            return
+        text, at = cli_error(self.log)
+        retry = getattr(self.cfg, "quota_retry_seconds", None) or 1800
+        until = now + quota_wait(text, at, now, retry)
+        own = cooldown.key(self.argv)
+        for argv in self.full_chain:
+            rec = cooldown.blocking(argv, now) if cooldown.key(argv) != own else None
+            if rec is not None and rec.get("state") != "needs_login":
+                until = min(until, cooldown.epoch(rec["until"]))
+        self.proc = None
+        self._live("quota", osx.stamp(), self.argv, until=until)
+        self.on_quota("wait", row=row, until=until, text=_excerpt(text))
+        self._sleep_and_restart(until)
+
+    def _sleep_and_restart(self, until):
+        """Sleep until `until` with no slot held, then start the whole chain again with a fresh
+        clock; the sleep is added to self.waited."""
+        self.sleeping = True     # from here on the row is the caller's: stop() returns None
+        began = time.time()
+        time.sleep(max(0.0, until - began))
+        self.waited += time.time() - began
+        self._restart()
+
+    def _restart(self):
+        """After a wait: hook "over", then the whole chain again with a fresh clock."""
         self.on_quota("over")
         self.chain = list(self.full_chain)
         self.popped = 0
@@ -391,10 +554,75 @@ def _log_tail(log):
         return "", time.time()
 
 
+_CODEX_EVENTS = ("thread.started", "turn.started", "turn.completed", "turn.failed")
+
+
+def cli_error(log):
+    """(what the CLI itself said went wrong, the log's mtime as _log_tail gives it).
+
+    A claude `--output-format json` log (its last JSON-object line with "type": "result" and an
+    "is_error" key) gives that object's "result" when is_error is true and "" when it is false. A
+    codex `exec --json` log (a JSON-object line of type thread.started, turn.started,
+    turn.completed or turn.failed) gives, in log order joined by newlines, the message of every
+    error event, the error.message of every turn.failed event and the item.message of every
+    item.completed event whose item is an error; agent messages never count. Any other log gives
+    its tail, as _log_tail; a missing log ("", now)."""
+    tail, at = _log_tail(log)
+    try:
+        with open(log, errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return tail, at
+    events = []
+    for line in lines:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(data, dict):
+            events.append(data)
+    results = [e for e in events if e.get("type") == "result" and "is_error" in e]
+    if results:
+        last = results[-1]
+        text = last.get("result") if last.get("is_error") is True else ""
+        return (text if isinstance(text, str) else ""), at
+    if not any(e.get("type") in _CODEX_EVENTS for e in events):
+        return tail, at
+    said = []
+    for e in events:
+        if e.get("type") == "error":
+            said.append(e.get("message"))
+        elif e.get("type") == "turn.failed" and isinstance(e.get("error"), dict):
+            said.append(e["error"].get("message"))
+        elif (e.get("type") == "item.completed" and isinstance(e.get("item"), dict)
+              and e["item"].get("type") == "error"):
+            said.append(e["item"].get("message"))
+    return "\n".join(m for m in said if isinstance(m, str)), at
+
+
 def _says_quota(log):
-    text, at = _log_tail(log)
+    text, at = cli_error(log)
     low = text.lower().replace("_", " ")
     return any(sign in low for sign in QUOTA_SIGNS) or quota_reset(text, at) is not None
+
+
+def _says_login(log, rc):
+    """A run with a non-zero exit code whose CLI error text holds a LOGIN_SIGNS phrase."""
+    if not rc:
+        return False
+    low = cli_error(log)[0].lower()
+    return any(sign in low for sign in LOGIN_SIGNS)
+
+
+def login_line(text, limit=200):
+    """The first line of `text` that holds a LOGIN_SIGNS phrase, at most `limit` characters."""
+    for line in text.splitlines():
+        if any(sign in line.lower() for sign in LOGIN_SIGNS):
+            return line.strip()[:limit]
+    return text.strip()[:limit]
 
 
 def _excerpt(text, limit=200):

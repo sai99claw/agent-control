@@ -7,7 +7,7 @@ it). `hard_block` is the project's existing top-level list.
 
 import os
 
-from . import osx
+from . import cooldown, osx
 from .gitx import Git
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # .../loop
@@ -216,7 +216,8 @@ class Config:
     def env(self, **extra):
         env = {k: v for k, v in os.environ.items() if k not in PARENT_SESSION}
         env.update(AC_HOME=self.home, AC_ROOT=self.root, PYTHONDONTWRITEBYTECODE="1",
-                   AC_REPORTS_DIR=os.path.join(self.worktree_root, "reports"))
+                   AC_REPORTS_DIR=os.path.join(self.worktree_root, "reports"),
+                   AC_COOLDOWN_FILE=cooldown.path())
         env.update({k: str(v) for k, v in extra.items() if v is not None})
         return env
 
