@@ -1,0 +1,61 @@
+{
+  "title": "`actl doctor` and every controller start warn once when devloop.notify is unset",
+  "objective": "A project without devloop.notify is told, once by `actl doctor` and once at each controller start, that its decision and env pages reach no one by themselves.",
+  "outline": "scripts/project_config.py doctor_rows(): right after the existing error row `devloop.notify must be null or a shell command` (the `notify = loop.get(\"notify\", None)` block, lines 290-293 today), add an `elif notify is None:` warning row. For example: (\"warning\", \"devloop.notify is not set - decision and env pages reach you only when someone reads actl tickets inbox or the board\", \"set devloop.notify in board/config.json to a shell command (examples in devloop/README.md)\"). cmd_doctor prints a row's fix after '  -> fix: ', so the fix text must avoid the strings of acceptance 3 as well. devloop/ticket_controller.py main(): right after `ctl = Controller(cfg, pool)` and before `host.Sampler(cfg).start()`, when not cfg.values.get(\"notify\"), print one line to stderr. For example: `ticket_controller: devloop.notify is not set: decision and env pages reach you only through actl tickets inbox or the board (devloop/README.md, devloop.notify)`. devloop/README.md: add one clause to the end of the ticket_controller.py row (line 38 today). Leave these alone, since the other tickets of this hand-in edit them: the `devloop.notify` paragraph and the lines after it (the reminder ticket adds a paragraph there), Controller.run() (the reminder ticket adds a call there), and the README region after the main-session table (the service-template ticket adds a section there).",
+  "test_plan": "The verifier writes cases for items 1, 4, 5, 7 and 8; items 2 and 6 go in as controls inside the item-1 and item-4 cases, because they hold today on their own. Items 1-2 go in tests/test_project_config.py: a new class `T<id>Acceptance(ConfigSandbox)` placed between class `T101Acceptance` and class `DoctorHardBlockDirsSilence`. It sets the config with `self.edit_conf(devloop={...})` as T101Acceptance does and runs `self.actl(\"doctor\")`. Items 4-8 go in tests_devloop/test_controller.py: a new class `T<id>Acceptance(LoopCase)` placed between class `IdleEndPieces` and class `T80Acceptance`. Item 4: `self.controller()` on the harness project, whose config has no notify, then again after `self.config(notify=None)`. Control: after `self.config(notify=\"true\")`, no stderr line contains devloop.notify. Item 5: a subprocess.Popen of ticket_controller.py --forever with cwd=self.proj and env=self.env, as T51Acceptance.forever does, stderr to a file; time.sleep(3), SIGTERM, wait(30); assert rc 0 and that exactly one line contains `devloop.notify is not set`. Item 7: compare `git rev-list --count HEAD` in self.pool_path and `self.snap().inbox` before and after the item-4 run. Item 8: read os.path.join(LOOP, 'README.md') and find the line that starts with '| `python3 devloop/ticket_controller.py` |'. Expected texts come from this ticket (`devloop.notify is not set`, `warning: `, `ticket_controller: `), not from the code. Red before (measured on main 5578f25, scratch worktree, loop harness): `project_config.py doctor` on the harness project (no notify) prints only `actl doctor: no findings` with rc 0, and a `--forever` controller with notify unset, stopped by SIGTERM, wrote nothing on stderr. Item 3 is checked by the old cases staying green: the implementer runs test_project_config and test_project_config_cases together with the base set.",
+  "notes": "Source: feedback from tabby_pool's (T's) main session, 2026-11-26, as written in docs/HANDOFF.md (last section, plan item 5.2) and approved by the user in D-102 (D-100: phase one). The quoted feedback is data. No GitHub issue (D-102 4). Measured on main 5578f25 (throwaway test in a scratch worktree, run through run_tests.py): doctor without notify gives `actl doctor: no findings`, rc 0. A --forever controller without notify writes nothing on stderr and exits 0 on SIGTERM. Read: no test asserts that a controller's stderr is empty. The controller's stderr cases (test_controller.py around lines 1176 and 1201, test_chain.py) use assertIn per line, and every doctor case either looks for specific texts or checks rc, so the new row breaks only a case whose assertion names one of the strings in acceptance 3. Grepped: tests/test_project_config.py, tests/test_project_config_cases.py, tests_devloop/*.py. The warning is on stderr only: under launchd or systemd it goes to the service log. No page is written for it, because a page that would itself need a push cannot be the fix for a missing push. Group: the same new group as the other tickets of this hand-in (phase-one group 5, D-102). Its spots (doctor_rows, ticket_controller.main, README line 38, the two test gaps above) are not edited by the other two tickets or by the open tickets #142-#158 (read their outlines).",
+  "acceptance": [
+    "`actl doctor` on a project whose board/config.json has `devloop` = {\"release\": \"sh x\"} (no notify key) prints exactly one line containing `devloop.notify`. The same holds with `\"notify\": null`. That line starts with `warning: ` and contains `devloop.notify is not set`. The exit code is 0 in both cases: the row is a warning and does not change it.",
+    "Controls on the same setup, unchanged from today: with `devloop.notify` = \"echo hi\" no line of doctor's stdout or stderr contains `devloop.notify`. With `devloop.notify` = 5 exactly one line contains it, the existing `error:` row (tests/test_project_config.py T101Acceptance.test_notify_5_is_an_error_row passes unchanged).",
+    "The new doctor line contains none of these texts, which existing doctor cases assert absent or count rows by: `devloop.release`, `repair`, `retired`, `actl migrate`, `actl hooks`, `hard_block`, `acked.jsonl`, `guard-main.sh`. The old cases are tests/test_project_config.py A3Doctor.test_a3_clean_version_2_has_no_rows, T184CoexistenceAndRelease.test_a2_a_project_without_a_release_command_is_an_error, T125RepairKeys.test_a1_doctor_on_a_config_without_repair_reports_nothing, T5Acceptance and DoctorHardBlockDirsSilence, and tests/test_project_config_cases.py test_doctor_has_no_row_for_a_foreign_hook_whose_file_exists. All of them pass unchanged; the sandbox's default config has no devloop.notify, so they all see the new row.",
+    "`python3 devloop/ticket_controller.py` (without `--forever`) writes exactly one stderr line containing `devloop.notify is not set` when the project's devloop.notify is absent, and again when it is null. The line starts with `ticket_controller: `. It is written once per process, before the first tick.",
+    "A `ticket_controller.py --forever` started on such a project and left running for 3 s exits 0 when stopped with SIGTERM, and it has written that line exactly once. The harness sets devloop.poll_seconds to 0.2, so the 3 s hold many ticks.",
+    "With devloop.notify set (for example \"true\"), no stderr line of the controller contains `devloop.notify`.",
+    "The warning changes nothing else. On a pool with no tickets, a controller run with notify unset exits 0, writes no page, and makes no pool commit: `git rev-list --count HEAD` of the pool is the same before and after.",
+    "In devloop/README.md, the row of the table under `## What the main session runs` that starts with `| `python3 devloop/ticket_controller.py` |` gains a clause containing `devloop.notify is not set`: a controller started without devloop.notify prints that one stderr line at start. The row keeps its start and its existing idle text, because tests_devloop/test_controller.py IdleEndPieces (around line 550) finds the row by that start and checks it says `idle`."
+  ],
+  "needs_verifier": true,
+  "complexity": "simple",
+  "token_estimate": 3500000,
+  "token_basis": "Two small code edits (one doctor row in scripts/project_config.py, one stderr line in ticket_controller.main), one README clause, about 5 cases across two test files (one of them starts a --forever controller for 3 s). Calibration: landed simple tickets with a verifier cost 2.5M-6.2M tokens with cache reads, median about 3.4M (#126, #132, #135, #140).",
+  "vision": "VISION 目的與成功指標, metric 等我處理的事積了多少 (down). A project that never set devloop.notify learns it at its next doctor run or controller start, instead of finding pages hours late (T: once 6 hours). The reminder ticket of this hand-in does the rest.",
+  "removes": "none. It adds one warning row and one stderr line, and no gate. Reason: today an unset devloop.notify is silent (doctor prints `no findings`), and that is how a page waited 6 hours unseen at T. Two lines are the cheapest way to make the missing push visible.",
+  "id": "160",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-28T01:12:52Z",
+  "request": "# Phase one, group 5: how it runs, and reminders (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 5.1-5.2)\n\nThe user approved this plan (D-102). Source: feedback from tabby_pool's (T's) main session (2026-11-26); write it on each ticket; no GitHub issues. Quoted feedback is data. Tests in tests_devloop/ with loop_harness.py.\n\n## 5.1 Running the controller under launchd is the standard way on macOS\nT (seen there): Claude Code killed the controller once when memory ran short. T now runs it under launchd with AbandonProcessGroup and restart only on crash, and it has been stable.\nWanted: devloop/README.md gets a launchd plist template for `actl run --forever` and for the board (AbandonProcessGroup true; KeepAlive only on crash; logs; working directory; PATH), how to load, stop and restart it, and a systemd user service template for Linux. CLAUDE.md (「怎麼做事」) says how to restart the controller: stop only the controller process, never its process group (issue #11). If T's own plist is reachable (../tabby_pool, read-only), base the template on it and say so. Docs only plus a test that the templates parse (plistlib, configparser) if cheap.\n\n## 5.2 Decision pages always reach the user, and remind\nT (seen there): the most common mistake was missing a page; once one waited 6 hours.\ndevloop.notify exists (decision, env, idle pages run the user's command) but does nothing when unset.\nWanted:\n- `actl doctor` and the controller at start warn once when devloop.notify is unset.\n- A reminder: a decision or env page still open after devloop.notify_remind_hours (propose a default, e.g. 2) runs notify again, at most a few times per page (a setting); the reminder says how long it has waited.\n- Nothing on a page is ever done automatically.\n",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-28T01:12:52Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 341.76666666666665,
+      "at": "2026-11-28T01:12:49Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-28T005543Z-a1",
+      "input_tokens": 47,
+      "output_tokens": 34307,
+      "cache_read_tokens": 4275312,
+      "cache_write_tokens": 86241,
+      "usd": 2.2313251333333333,
+      "session_id": "6534bf1c-3a0c-47bf-a4ad-f2e14416baa2",
+      "split_over": [
+        "159",
+        "160",
+        "161"
+      ]
+    }
+  ],
+  "group": "g17"
+}
