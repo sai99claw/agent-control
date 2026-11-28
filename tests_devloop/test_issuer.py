@@ -794,7 +794,9 @@ class T157Acceptance(LoopCase):
         self.plan(worker={"1": ["sleep", "ok"]}, creator={"1": ["revised_kept_cases"]})
         t, delay, seen = self.run_with_revision(1, "worker", 1)
         self.assert_free_within(t, delay, 1)
-        self.assertEqual(t["feedback"][0], "round 1: " + self.REVISED_MID_ROUND)
+        # the merge clears 'feedback' on landing: read it from the ticket as first seen with the event
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + self.REVISED_MID_ROUND)
         # the stopped worker's row is written with the round's feedback
         rows = [(r.get("role"), r.get("round"), r.get("outcome")) for r in seen.get("cost") or []]
         self.assertIn(("worker", 1, "interrupted"), rows)
@@ -831,9 +833,11 @@ class T157Acceptance(LoopCase):
         import ticket_issuer
         self.add(1)
         self.plan(worker={"1": ["sleep", "ok"]}, creator={"1": ["revised"]})
-        t, delay, _ = self.run_with_revision(1, "worker", 1)
+        t, delay, seen = self.run_with_revision(1, "worker", 1)
         self.assert_free_within(t, delay, 1)
-        self.assertEqual(t["feedback"][0], "round 1: " + ticket_issuer.THROWN_OUT)
+        # the merge clears 'feedback' on landing: read it from the ticket as first seen with the event
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + ticket_issuer.THROWN_OUT)
 
 
 class T137Acceptance(LoopCase):
