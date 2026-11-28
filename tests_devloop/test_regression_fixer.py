@@ -2768,6 +2768,7 @@ class FixAgentRoundUnits(LoopCase):
     def test_start_fixer_stores_the_report_and_drops_retry_and_pause(self):
         self.put("g1", state="pr", job=None, fix_round=0, fix_retry=True,
                  paused={"reason": "fixer", "at": "t", "text": ""})
+        import ticket_controller
         ctl = self.ctl()
         with mock.patch.object(ticket_controller.osx, "spawn", return_value=mock.Mock(pid=4242)):
             ctl.start_fixer("g1", "/r.json", 1)
