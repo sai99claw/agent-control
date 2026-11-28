@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a criterion depends on a config default or fallback, say which configuration triggers it (key left out, null, or empty). Config merges defaults under the user's values, so 'unset' is ambiguous: a left-out key often takes the default, not the fallback.",
+  "source": "#156 revise (opener)",
+  "at": "2026-11-28T01:46:14Z"
+}
