@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "On the devloop machine PID 1 reaps orphaned zombies only every ~2 s (measured 1.0-2.0 s): a test that checks with osx.alive that a grandchild it did not start has ended waits on that reaper, so its bound needs that much margin.",
+  "source": "request (opener)",
+  "at": "2026-11-28T11:39:43Z"
+}

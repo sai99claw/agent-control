@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "creator",
+  "text": "When a flaky case says a process that was told to stop is still running, read the code between where that process starts and where the guard that stops it begins: any statement there (a record write, a log line) is a window where an exception leaks the process, and holding that statement open in a fake reproduces the flake deterministically.",
+  "source": "request (opener)",
+  "at": "2026-11-28T11:39:43Z"
+}
