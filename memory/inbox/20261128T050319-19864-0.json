@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "In ticket_issuer, a Pending put in self.pending but not in started_agents is charged to issuer_timeout_seconds (started_agents' time is excluded) and is still stopped and costed by interrupted_costs(); check both lists when a ticket asks for 'charged to the deadline' plus 'stopped on interrupt'.",
+  "source": "#158 r1 reviewer",
+  "at": "2026-11-28T05:03:18Z"
+}
