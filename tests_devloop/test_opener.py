@@ -931,6 +931,58 @@ class LastFullSecondsUnit(unittest.TestCase):
         self.assertIn("took 30 seconds.", text)
 
 
+class HardBlockCheckUnit(unittest.TestCase):
+    """hard_block_section / check_new with hard_block patterns (ticket #154)."""
+
+    class Cfg:
+        required_fields = {}
+        hard_paths = ["docs/X.md"]
+        hard_patterns = ["zz_forbidden", "(unclosed"]
+
+    class Snap:
+        tickets = {}
+        dag = {}
+        groups = {}
+
+    def check(self, **over):
+        import ticket_creator
+        t = {"key": "new-1", "title": "o", "objective": "o", "acceptance": ["a"], "needs_verifier": True,
+             "complexity": "simple", "token_estimate": 1000}
+        t.update(over)
+        with mock.patch.object(ticket_creator, "group_problems", return_value=[]):
+            got = ticket_creator.check_new({"tickets": [t], "dag": {"new-1": {}}}, self.Snap(), self.Cfg())
+        return [g for g in got if "hard_block" in g]
+
+    def test_matches_per_field(self):
+        got = self.check(acceptance=["a", "uses zz_forbidden"], outline="do zz_forbidden")
+        self.assertEqual(len(got), 2)
+        self.assertIn('tickets[0]: "acceptance[1]" matches hard_block pattern `zz_forbidden`: a change '
+                      'that does this stops before merge for the user; avoid it, or say in '
+                      '"hard_block_approval" why this ticket needs the user\'s approval at merge', got)
+        self.assertTrue(any('"outline" matches' in g for g in got))
+
+    def test_notes_title_and_bad_pattern_not_refused(self):
+        self.assertEqual(self.check(notes="zz_forbidden", title="zz_forbidden (unclosed"), [])
+
+    def test_approval(self):
+        self.assertEqual(self.check(outline="zz_forbidden", hard_block_approval="because"), [])
+        msg = ('tickets[0]: "hard_block_approval" must be a sentence saying why the ticket needs the '
+               "user's approval at merge, or left out")
+        self.assertEqual(self.check(hard_block_approval=""), [msg])
+        self.assertEqual(self.check(hard_block_approval=5), [msg])
+
+    def test_section(self):
+        import ticket_creator
+        text = ticket_creator.hard_block_section(self.Cfg())
+        self.assertIn("`docs/X.md`", text)
+        self.assertIn("`zz_forbidden`", text)
+
+        class Empty:
+            hard_paths = hard_patterns = []
+        self.assertEqual(ticket_creator.hard_block_section(Empty()).split("\n")[-1],
+                         "This project has no hard_block.")
+
+
 class ReviseDagUnit(LoopCase):
     """#127 (issue #9): a revised hand-in's 'dag' part (ticket_creator.with_dag, core.dagedit.replace);
     the implementer's unit cases."""

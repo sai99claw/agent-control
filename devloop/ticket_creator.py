@@ -56,7 +56,7 @@ from core.pool import Snapshot, close_pages, event, frozen_reason, leave_group, 
 PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 TEXT_FIELDS = ("title", "objective", "outline", "test_plan", "notes")
 EDITABLE = TEXT_FIELDS + ("acceptance", "needs_verifier", "complexity", "effort", "token_estimate",
-                          "token_basis")
+                          "token_basis", "hard_block_approval")
 
 
 def editable(cfg):
@@ -131,6 +131,21 @@ def required_section(cfg):
         "- `%s`: %s" % (k, v) for k, v in sorted(fields.items()))
 
 
+def hard_block_section(cfg):
+    head = "## Merge stop (hard_block)\n\n"
+    entries = list(cfg.hard_paths) + list(cfg.hard_patterns)
+    if not entries:
+        return head + "This project has no hard_block."
+    return (head + "A ticket whose own change touches one of these stops before merging and waits for the "
+            "user's ruling. It is checked on the files the ticket branch changes (paths: the file is an "
+            "entry or lies under one) and on every line the branch adds, in code, tests, comments and docs "
+            "alike (patterns: regular expressions). Write tickets whose change avoids them. When a ticket "
+            "must match one, say why in its `hard_block_approval` field (one sentence); a ticket whose "
+            "outline, test_plan or acceptance matches a pattern without that field is refused. Name the "
+            "words the implementer must avoid in `notes`, not in outline, test_plan or acceptance.\n\n"
+            + "\n".join("- `%s`" % e for e in entries))
+
+
 def last_full_seconds(cfg):
     """Seconds of the newest regression full run that recorded a number, or None."""
     found = []
@@ -157,6 +172,33 @@ def limits_section(cfg):
             else "No full run of this project is recorded yet.")
     return ("## Time limits\n\nOne agent call is limited to %d seconds (devloop.agent_timeout_seconds).\n\n%s"
             % (cfg.agent_timeout_seconds, last))
+
+
+def _hard_block_problems(t, where, cfg):
+    appr = t.get("hard_block_approval")
+    if "hard_block_approval" in t and (not isinstance(appr, str) or not appr.strip()):
+        return ["%s: \"hard_block_approval\" must be a sentence saying why the ticket needs the user's "
+                "approval at merge, or left out" % where]
+    if appr:
+        return []
+    texts = [("outline", t.get("outline")), ("test_plan", t.get("test_plan"))]
+    acc = t.get("acceptance")
+    if isinstance(acc, list):
+        texts += [("acceptance[%d]" % k, a) for k, a in enumerate(acc)]
+    out = []
+    for field, text in texts:
+        if not isinstance(text, str):
+            continue
+        for pat in cfg.hard_patterns:
+            try:
+                hit = re.search(pat, text)
+            except re.error:
+                continue
+            if hit:
+                out.append("%s: \"%s\" matches hard_block pattern `%s`: a change that does this stops "
+                           "before merge for the user; avoid it, or say in \"hard_block_approval\" why "
+                           "this ticket needs the user's approval at merge" % (where, field, pat))
+    return out
 
 
 def check_new(result, snap, cfg=None):
@@ -194,6 +236,8 @@ def check_new(result, snap, cfg=None):
         for f in sorted((cfg.required_fields if cfg else None) or {}):
             if not isinstance(t.get(f), str) or not t.get(f).strip():
                 out.append("%s: \"%s\" is required by this project" % (where, f))
+        if cfg is not None:
+            out.extend(_hard_block_problems(t, where, cfg))
         if key and key not in dag:
             out.append("dag has no entry for %s" % key)
     if out:
@@ -395,6 +439,7 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
             memory.project_path(cfg)),
         "## Reference ticket\n\n```json\n%s\n```" % example(),
         required_section(cfg),
+        hard_block_section(cfg),
         limits_section(cfg),
         "## Tickets still open\n\n```json\n%s\n```" % json.dumps(summary, indent=2, ensure_ascii=False),
         "## Current DAG\n\n```json\n%s\n```" % json.dumps(live_dag(snap), indent=2, ensure_ascii=False),
@@ -448,7 +493,9 @@ def _open_tickets(cfg, pool, request, via, by, origin=None):
             continue
         titles = {i: pool.snapshot().tickets[i].get("title") for i in ids}
         pool.report("created", ",".join(ids), "opened " + "; ".join(
-            "#%s %s" % (i, titles[i]) for i in ids))
+            "#%s %s" % (i, titles[i]) for i in ids) + "".join(
+                "\n#%s stops before merge for your approval (hard_block): %s" % (i, appr[i])
+                for i in ids if (appr := pool.snapshot().tickets[i].get("hard_block_approval"))))
         print("opened: " + " ".join("#" + i for i in ids))
         return 0
     pool.report("decision", "request", "the opener could not produce valid tickets:\n- %s" % (
