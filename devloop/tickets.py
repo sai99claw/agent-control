@@ -294,6 +294,12 @@ def cmd_release(pool, cfg, args):
     g, before = snap.groups.get(gid), set(snap.inbox)
     if not g:
         raise osx.OSFailure("no group %s" % gid)
+    job = g.get("job") or {}
+    if job.get("kind") == "release" and not osx.stamp_dead(job.get("stamp"), grace_seconds=6 * 3600):
+        stamp = job.get("stamp") or {}
+        print("group %s: its release is still running (pid %s, started %s); wait for its page" % (
+            gid, stamp.get("pid"), stamp.get("started")), file=sys.stderr)
+        return 2
     if g.get("state") != "landed" or not g.get("landed_sha"):
         raise osx.OSFailure("group %s is %s, not landed; only a landed group is released" % (gid, g.get("state")))
     if g.get("release") == "ok" and not args.again:
@@ -307,6 +313,7 @@ def cmd_release(pool, cfg, args):
         grp = tx.data.groups[gid]
         grp["release"] = "ok" if ok else "failed"
         grp["release_log"] = rel_log
+        grp.pop("job", None)
         event(grp, "release re-run: %s" % ("ok" if ok else "failed"), **({"by": args.by} if args.by else {}))
         tx.put_group(grp)
         ack_in(tx, args.page, args.by)

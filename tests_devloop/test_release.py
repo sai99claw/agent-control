@@ -215,18 +215,17 @@ class ReleaseRerun(LoopCase):
         self.assertEqual(self.snap().groups["g1"]["release"], "ok")
 
     def test_controller_release_is_the_shared_function(self):
-        import ticket_controller
+        import release_job
         from core import release
-        from core.config import Config
         calls = []
-        orig = release.run
-        release.run = lambda cfg, g, sha: calls.append((g["id"], sha)) or (True, "x")
-        try:
-            ctl = ticket_controller.Controller(Config(self.proj), self.pool)
-            self.assertEqual(ctl.release({"id": "g5", "members": []}, "abc"), (True, "x"))
-        finally:
-            release.run = orig
-        self.assertEqual(calls, [("g5", "abc")])
+        out = os.path.join(self.tmp, "release-job-out.json")
+        with mock.patch.dict(os.environ, {"AC_ROOT": self.proj}), \
+                mock.patch.object(release, "run", lambda cfg, g, sha: calls.append((g, sha)) or (True, "x")):
+            self.assertEqual(release_job.main(["--group", "g5", "--sha", "abc", "--tickets", "1,2", "--out", out]), 0)
+        self.assertEqual(calls, [({"id": "g5", "members": ["1", "2"]}, "abc")])
+        with open(out) as fh:
+            self.assertEqual({k: v for k, v in json.load(fh).items() if k != "at"},
+                             {"ok": True, "text": "x", "sha": "abc"})
 
     def test_help_docstring_and_readme_list_the_command(self):
         def read(*parts):
@@ -240,6 +239,155 @@ class ReleaseRerun(LoopCase):
         readme = read("devloop", "README.md").splitlines()
         cancel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel")][0]
         self.assertIn("tickets.py release", readme[cancel + 1])
+
+
+class ReleaseJobUnit(LoopCase):
+    """Ticket #142 pieces: start_release, after_release, release_lost and core.release.run's stop."""
+    EVENT = "release rc 1, run once more"
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[key]
+        self.sha = git(self.proj, "rev-parse", "main").strip()
+        self.add(1, state="landed", group="g1", landed_sha=self.sha)
+        self.log = os.path.join(self.tmp, "wt", "runs", "release", "g1.log")
+        self.pool.update(lambda tx: tx.put_group({
+            "id": "g1", "state": "landed", "landed_sha": self.sha, "branch": "int/g1", "members": ["1"],
+            "release": "pending", "release_log": self.log, "job": None, "fix_round": 0}), "test: g1 landed")
+
+    def ctl(self):
+        import ticket_controller
+        from core.config import Config
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        return c
+
+    def g1(self):
+        return self.snap().groups["g1"]
+
+    def g1_pages(self, kind):
+        return [r for r in self.snap().inbox.values() if r["kind"] == kind and r["ref"] == "g1"]
+
+    def out(self, report):
+        path = os.path.join(self.tmp, "out-%d.json" % len(os.listdir(self.tmp)))
+        with open(path, "w") as fh:
+            json.dump(report, fh)
+        return path
+
+    def test_start_release_records_the_job_and_acks_no_page(self):
+        import ticket_controller
+        self.pool.update(lambda tx: tx.write("inbox/p.json", {"kind": "decision", "ref": "g1", "text": "t",
+                                                              "at": osx.now(), "acked": False}), "test: page")
+        c = self.ctl()
+        with mock.patch.object(ticket_controller.osx, "spawn", return_value=mock.Mock(pid=4242)) as spawn:
+            c.start_release("g1", self.sha, ["1"])
+        argv = spawn.call_args[0][0]
+        self.assertTrue(argv[1].endswith("release_job.py"), argv)
+        folder = os.path.join(self.tmp, "wt", "runs", "release-job", "g1")
+        job = self.g1()["job"]
+        self.assertEqual(sorted(job), ["kind", "out", "stamp"])
+        self.assertEqual((job["kind"], job["stamp"]["pid"]), ("release", 4242))
+        self.assertEqual(os.path.dirname(os.path.realpath(job["out"])), os.path.realpath(folder))
+        self.assertRegex(os.path.basename(job["out"]), r"^result-\d+(-\d+)?\.json$")
+        self.assertEqual(argv[2:], ["--group", "g1", "--sha", self.sha, "--tickets", "1", "--out", job["out"]])
+        self.assertEqual(os.path.dirname(os.path.realpath(spawn.call_args[1]["log_path"])), os.path.realpath(folder))
+        self.assertFalse(self.snap().inbox["p"]["acked"])
+        self.assertEqual(self.g1()["release"], "pending")
+        with mock.patch.object(ticket_controller.osx, "spawn", return_value=mock.Mock(pid=4243)):
+            c.start_release("g1", self.sha, ["1"], rerun={"fix_tickets": [], "fix_open": ["9"], "line": "l"})
+        g = self.g1()
+        self.assertTrue(g["job"]["rerun"])
+        self.assertEqual(g["release_rerun"]["fix_open"], ["9"])
+
+    def test_ok_result_releases_with_the_landed_page(self):
+        self.ctl().after_release("g1", {"kind": "release", "out": self.out({"ok": True, "text": "x", "sha": self.sha})}, 0)
+        g = self.g1()
+        self.assertEqual((g["release"], g["job"]), ("ok", None))
+        pages = self.g1_pages("landed")
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0]["text"], "group g1 landed and released: #1 (%s); release log: %s" % (self.sha[:12], self.log))
+        self.assertFalse([e for e in g["history"] if e["event"] == self.EVENT])
+
+    def test_other_failure_and_a_signal_are_failed_with_the_release_page(self):
+        for report in ({"ok": False, "text": "rc 7\nboom", "sha": self.sha},
+                       {"ok": False, "signal": "SIGTERM", "text": "stopped by SIGTERM; the release command was stopped"}):
+            before = len(self.g1_pages("decision"))
+            self.ctl().after_release("g1", {"kind": "release", "out": self.out(report)}, 1)
+            self.assertEqual(self.g1()["release"], "failed")
+            pages = sorted(self.g1_pages("decision"), key=lambda r: r["at"])
+            self.assertEqual(len(pages), before + 1)
+            self.assertIn("but the release failed - not retried", pages[-1]["text"])
+            self.assertIn(report["text"].split("\n")[0], pages[-1]["text"].split("\n"))
+            self.assertEqual([o["action"] for o in pages[-1]["options"]], ["ack", "release"])
+            time.sleep(1.1)  # page names are unique to the second
+
+    def assert_lost(self):
+        g = self.g1()
+        self.assertEqual((g["release"], g.get("job")), ("failed", None))
+        pages = self.g1_pages("decision")
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0]["text"].split("\n")[0],
+                         "group g1 is in main (%s) but its release job ended without a result - the release "
+                         "is not run again (D-080); release log: %s" % (self.sha[:12], self.log))
+        self.assertEqual([o["action"] for o in pages[0]["options"]], ["ack", "release"])
+
+    def test_no_result_is_lost(self):
+        self.ctl().after_release("g1", {"kind": "release", "out": os.path.join(self.tmp, "none.json")}, None)
+        self.assert_lost()
+
+    def test_pending_without_a_job_is_lost_at_finish_jobs(self):
+        c = self.ctl()
+        c.finish_jobs(self.snap())
+        self.assert_lost()
+        c.finish_jobs(self.snap())
+        self.assertEqual(len(self.g1_pages("decision")), 1)
+
+    def test_rc1_first_run_starts_one_rerun_and_the_rerun_writes_the_event_and_page(self):
+        self.add(9, state="stuck", stuck={"reason": "decision", "text": "x"},
+                 origin={"kind": "release", "group": "g0", "sha": "0" * 40})
+        c = self.ctl()
+        with mock.patch.object(c, "start_release") as start:
+            c.after_release("g1", {"kind": "release", "out": self.out({"ok": False, "text": "rc 1\nx"})}, 1)
+        start.assert_called_once_with("g1", self.sha, ["1"], rerun={
+            "fix_tickets": [], "fix_open": ["9"], "line": "fix ticket already open: #9"})
+        self.assertEqual(self.g1()["release"], "pending")
+        self.assertEqual(self.snap().inbox, {})
+        rerun = start.call_args[1]["rerun"]
+        self.pool.update(lambda tx: tx.put_group(dict(tx.data.groups["g1"], release_rerun=rerun)), "test: rerun ctx")
+        c.after_release("g1", {"kind": "release", "rerun": True,
+                               "out": self.out({"ok": True, "text": "x", "sha": self.sha})}, 0)
+        g = self.g1()
+        self.assertEqual((g["release"], g["job"]), ("ok", None))
+        self.assertNotIn("release_rerun", g)
+        evs = [e for e in g["history"] if e["event"] == self.EVENT]
+        self.assertEqual(len(evs), 1, g["history"])
+        self.assertEqual((evs[0]["fix_open"], evs[0]["rerun"]), (["9"], "ok"))
+        lines = self.g1_pages("landed")[0]["text"].split("\n")
+        self.assertIn("the first release run failed with rc 1 and passed when run once more", lines)
+        self.assertIn("fix ticket already open: #9", lines)
+
+    def test_a_rerun_that_exits_1_again_is_the_failed_twice_page(self):
+        ctx = {"fix_tickets": [], "fix_open": ["9"], "line": "fix ticket already open: #9"}
+        self.pool.update(lambda tx: tx.put_group(dict(tx.data.groups["g1"], release_rerun=ctx)), "test: rerun ctx")
+        c = self.ctl()
+        with mock.patch.object(c, "start_release") as start:
+            c.after_release("g1", {"kind": "release", "rerun": True, "out": self.out({"ok": False, "text": "rc 1\nx"})}, 1)
+        start.assert_not_called()
+        self.assertEqual(self.g1()["release"], "failed")
+        text = self.g1_pages("decision")[0]["text"]
+        self.assertIn("failed twice (rc 1, then rc 1 when run once more)", text)
+
+    def test_core_release_run_stops_the_command_when_its_wait_is_interrupted(self):
+        from core import release
+        from core.config import Config
+        self.config(release="sleep 30")
+        with mock.patch.object(release.osx, "wait", side_effect=KeyboardInterrupt), \
+                mock.patch.object(release.osx, "kill_tree") as kill:
+            with self.assertRaises(KeyboardInterrupt):
+                release.run(Config(self.proj), {"id": "g1", "members": ["1"]}, self.sha)
+        self.assertEqual(kill.call_count, 1)
+        osx.kill_tree(kill.call_args[0][0])   # the real stop of the command the mock let run
 
 
 class T21Acceptance(LoopCase):
@@ -589,6 +737,275 @@ class T112Acceptance(LoopCase):
         self.assertEqual(ev.get("fix_tickets"), [], ev)
         page, lines = self.decision_lines()
         self.assertIn("fix ticket already open: #9", lines, page["text"])
+
+
+class T142Acceptance(LoopCase):
+    """Ticket #142: landed is written before the release, and the release runs as a background job."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[key]
+        self.marker = os.path.join(self.tmp, "release-ran")
+
+    # ------------------------------------------------------------ helpers
+
+    def wt(self, *parts):
+        return os.path.join(self.tmp, "wt", *parts)
+
+    def group_file(self):
+        return os.path.join(self.pool_path, "groups", "g1.json")
+
+    def read_group_file(self):
+        try:
+            with open(self.group_file()) as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return {}
+
+    def g1_pages(self, kind):
+        return [r for r in self.snap().inbox.values() if r["kind"] == kind and r["ref"] == "g1"]
+
+    def wait_for(self, cond, seconds, what):
+        end = time.time() + seconds
+        while time.time() < end:
+            if cond():
+                return
+            time.sleep(0.05)
+        self.fail("not within %s s: %s" % (seconds, what))
+
+    def dead_stamp(self):
+        p = subprocess.Popen(["true"])
+        p.wait()
+        return {"pid": p.pid, "host": osx.host(), "boot": osx.boot_id(), "started": osx.now()}
+
+    def live_stamp(self, seconds):
+        """A pid that is alive, not a child of this process (reparented, so reaped when it ends)."""
+        out = subprocess.run(["sh", "-c", "sleep %d >/dev/null 2>&1 & echo $!" % seconds],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        pid = int(out)
+        self.addCleanup(lambda: osx.alive(pid) and osx.kill_tree(pid, grace=1))
+        self.assertTrue(osx.alive(pid))
+        return {"pid": pid, "host": osx.host(), "boot": osx.boot_id(), "started": osx.now()}
+
+    def landed_fixture(self, release="pending", job=None):
+        """Ticket 1 landed in g1 at main's sha; g1 landed with `release` and `job` (none when None)."""
+        self.config(release="touch %s" % self.marker)
+        sha = git(self.proj, "rev-parse", "main")
+        git(self.proj, "branch", "int/g1", sha)
+        self.add(1, state="landed", group="g1", landed_sha=sha)
+        log = os.path.join(os.path.abspath(self.wt("runs", "release")), "g1.log")
+        g = {"id": "g1", "state": "landed", "landed_sha": sha, "branch": "int/g1", "members": ["1"],
+             "release": release, "release_log": log}
+        if job is not None:
+            g["job"] = job
+        self.pool.update(lambda tx: tx.put_group(g), "test: landed g1")
+        return sha, log
+
+    def release_job_out(self, name="result-1.json"):
+        folder = self.wt("runs", "release-job", "g1")
+        os.makedirs(folder, exist_ok=True)
+        return os.path.join(folder, name)
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_release_command_sees_landed_and_release_pending(self):
+        seen = os.path.join(self.tmp, "seen.json")
+        self.config(release="cp %s %s" % (self.group_file(), seen))
+        self.add(1)
+        res = self.controller()
+        self.assertTrue(os.path.exists(seen), res.stdout + res.stderr)
+        with open(seen) as fh:
+            g = json.load(fh)
+        self.assertEqual(g.get("state"), "landed", g)
+        self.assertEqual(g.get("release"), "pending", g)
+        self.assertEqual(g.get("landed_sha"), git(self.proj, "rev-parse", "main"), g)
+        self.assertTrue(g.get("release_log"), g)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_release_runs_in_release_job_py_with_its_out_under_release_job(self):
+        self.config(release="touch %s; sleep 3" % self.marker)
+        self.add(1)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py")], cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        self.wait_for(lambda: os.path.exists(self.marker) or proc.poll() is not None, 120,
+                      "the release command started")
+        self.assertTrue(os.path.exists(self.marker), "the controller ended before the release ran")
+        job = self.read_group_file().get("job") or {}
+        self.assertEqual(job.get("kind"), "release", self.read_group_file())
+        pid = (job.get("stamp") or {}).get("pid")
+        self.assertTrue(osx.alive(pid), job)
+        with open("/proc/%d/cmdline" % int(pid), "rb") as fh:
+            self.assertIn(b"release_job.py", fh.read(), job)
+        out = job.get("out") or ""
+        self.assertEqual(os.path.dirname(os.path.abspath(out)), os.path.abspath(self.wt("runs", "release-job", "g1")), job)
+        self.assertRegex(os.path.basename(out), r"^result-\d+(-\d+)?\.json$")
+        _, err = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 0, err)
+        results = glob.glob(self.wt("runs", "release-job", "g1", "result-*.json"))
+        self.assertEqual(len(results), 1, results)
+        with open(results[0]) as fh:
+            data = json.load(fh)
+        self.assertIs(data.get("ok"), True, data)
+        self.assertEqual(data.get("sha"), git(self.proj, "rev-parse", "main"), data)
+        self.assertIn("text", data)
+        self.assertIn("at", data)
+        rel_dir = self.wt("runs", "release", "g1")
+        self.assertEqual(os.listdir(rel_dir) if os.path.isdir(rel_dir) else [], [],
+                         "the job wrote into the release's own DEVLOOP_RELEASE_DIR")
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_dependent_ticket_starts_while_the_release_runs(self):
+        intervals = os.path.join(self.tmp, "intervals.txt")
+        times = os.path.join(self.tmp, "release-times.txt")
+        self.env["FAKE_INTERVALS"] = intervals
+        now = "python3 -c 'import time; print(time.time())' >> %s" % times
+        self.config(release='if [ "$DEVLOOP_GROUP" = g1 ]; then %s; sleep 8; %s; fi' % (now, now))
+        self.add(1)
+        self.add(2, deps=["1"], verify="alone")
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        with open(times) as fh:
+            stamps = [float(x) for x in fh.read().split()]
+        self.assertEqual(len(stamps), 2, stamps)
+        with open(intervals) as fh:
+            starts = [float(p[3]) for p in (ln.split() for ln in fh) if p[:3] == ["agent", "worker", "2"]]
+        self.assertTrue(starts, "worker 2 never ran")
+        self.assertLess(min(starts), stamps[1],
+                        "worker 2 started %.1f s after g1's release ended" % (min(starts) - stamps[1]))
+
+    # ------------------------------------------------------------ item 6
+
+    def assert_ended_without_result(self, sha, log):
+        res = self.controller(timeout=120)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g.get("release"), "failed", g)
+        pages_ = self.g1_pages("decision")
+        self.assertEqual(len(pages_), 1, pages_)
+        first = pages_[0]["text"].split("\n")[0]
+        self.assertEqual(first, "group g1 is in main (%s) but its release job ended without a result - "
+                         "the release is not run again (D-080); release log: %s" % (sha[:12], log))
+        self.assertEqual([o["action"] for o in pages_[0].get("options") or []], ["ack", "release"])
+        self.assertFalse(os.path.exists(self.marker), "the release command ran again")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def test_item6_a_release_job_gone_without_result_is_failed_with_one_page(self):
+        missing = os.path.join(self.wt("runs", "release-job", "g1"), "result-1.json")
+        sha, log = self.landed_fixture(job={"kind": "release", "stamp": self.dead_stamp(), "out": missing})
+        self.assertFalse(os.path.exists(missing))
+        self.assert_ended_without_result(sha, log)
+
+    def test_item6_a_pending_release_without_job_is_failed_with_one_page(self):
+        sha, log = self.landed_fixture()
+        self.assert_ended_without_result(sha, log)
+
+    # ------------------------------------------------------------ item 7
+
+    def test_item7_an_adopted_release_job_is_waited_for_then_collected(self):
+        stamp = self.live_stamp(3)
+        sha = git(self.proj, "rev-parse", "main")
+        out = self.release_job_out()
+        osx.write_json(out, {"ok": True, "text": "x", "sha": sha, "at": osx.now()})
+        self.landed_fixture(job={"kind": "release", "stamp": stamp, "out": out})
+        t0 = time.time()
+        res = self.controller(timeout=120)
+        took = time.time() - t0
+        self.assertFalse(osx.alive(stamp["pid"]), "the controller ended while the adopted job lived")
+        self.assertGreaterEqual(took, 2.0)
+        self.assertEqual(self.snap().groups["g1"].get("release"), "ok", self.snap().groups["g1"])
+        landed = self.g1_pages("landed")
+        self.assertEqual(len(landed), 1, landed)
+        first = landed[0]["text"].split("\n")[0]
+        self.assertTrue(first.startswith("group g1 landed and released: "), first)
+        self.assertIn("(%s)" % sha[:12], first)
+        self.assertEqual(self.g1_pages("decision"), [])
+        self.assertFalse(os.path.exists(self.marker), "the release command ran")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    # ------------------------------------------------------------ item 8
+
+    def test_item8_tickets_release_refuses_while_the_release_job_lives(self):
+        stamp = self.live_stamp(20)
+        out = self.release_job_out()
+        self.landed_fixture(job={"kind": "release", "stamp": stamp, "out": out})
+        with open(self.group_file(), "rb") as fh:
+            before = fh.read()
+        try:
+            res = self.run_py("tickets.py", "release", "g1", timeout=10)
+        except subprocess.TimeoutExpired:
+            self.fail("tickets.py release g1 did not end within 10 s")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertEqual(res.stderr.strip().splitlines(),
+                         ["group g1: its release is still running (pid %s, started %s); wait for its page"
+                          % (stamp["pid"], stamp["started"])])
+        with open(self.group_file(), "rb") as fh:
+            self.assertEqual(fh.read(), before)
+        self.assertFalse(os.path.exists(self.marker), "the release command ran")
+
+    def test_item8_with_a_dead_release_job_tickets_release_runs_and_drops_the_job(self):
+        out = self.release_job_out()
+        self.landed_fixture(release="failed", job={"kind": "release", "stamp": self.dead_stamp(), "out": out})
+        res = self.run_py("tickets.py", "release", "g1", timeout=60)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertTrue(os.path.exists(self.marker), "the release command did not run")
+        g = self.snap().groups["g1"]
+        self.assertEqual(g.get("release"), "ok", g)
+        self.assertNotIn("job", g)
+
+    # ------------------------------------------------------------ item 9
+
+    def test_item9_sigterm_stops_the_release_command_and_writes_the_signal(self):
+        script = os.path.join(LOOP, "release_job.py")
+        self.assertTrue(os.path.exists(script), "no devloop/release_job.py")
+        pidf = os.path.join(self.tmp, "release-pid")
+        sha, _ = self.landed_fixture()
+        self.config(release="sleep 60 & echo $! > %s.tmp; mv %s.tmp %s; wait" % (pidf, pidf, pidf))
+        out = self.release_job_out()
+        proc = subprocess.Popen(["python3", script, "--group", "g1", "--sha", sha, "--tickets", "1", "--out", out],
+                                cwd=self.proj, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        self.wait_for(lambda: os.path.exists(pidf) or proc.poll() is not None, 30, "the release command started")
+        self.assertTrue(os.path.exists(pidf), "release_job.py ended before the release started")
+        with open(pidf) as fh:
+            rel_pid = int(fh.read().strip())
+        self.addCleanup(lambda: osx.alive(rel_pid) and osx.kill_tree(rel_pid, grace=1))
+        self.assertTrue(osx.alive(rel_pid))
+        proc.send_signal(signal.SIGTERM)
+        try:
+            rc = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.fail("release_job.py did not exit within 5 s of SIGTERM")
+        self.assertEqual(rc, 2, proc.stdout.read())
+        self.wait_for(lambda: not osx.alive(rel_pid), 5, "the release command's process was stopped")
+        with open(out) as fh:
+            data = json.load(fh)
+        self.assertIs(data.get("ok"), False, data)
+        self.assertEqual(data.get("signal"), "SIGTERM", data)
+        self.assertEqual(data.get("text"), "stopped by SIGTERM; the release command was stopped", data)
+        self.assertEqual(data.get("sha"), sha, data)
+
+    # ------------------------------------------------------------ item 10
+
+    def test_item10_board_shows_pending_as_release_in_progress(self):
+        import board
+        from core.config import Config
+        self.landed_fixture()
+        page = board.render(Config(self.proj), self.snap(), query={"tab": "tickets", "done": "1"})
+        at = page.find("<td>g1</td>")
+        self.assertGreaterEqual(at, 0, "no group row for g1")
+        row = page[page.rfind("<tr", 0, at):page.find("</tr>", at)]
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+        self.assertEqual(cells[-1], "發版中", row)
+        detail = board.render_group_detail(self.snap(), "g1")
+        self.assertIn("<dt>發版</dt><dd>發版中</dd>", detail)
 
 
 class ReleaseTimeoutSetting(LoopCase):

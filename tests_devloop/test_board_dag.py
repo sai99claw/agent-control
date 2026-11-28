@@ -463,7 +463,7 @@ class BoardLiveTab(LoopCase):
 class LiveQueueUnits(BoardLiveTab):
     """#67's helpers: live_queue numbering, live_ticket_rows and live_decision_rows."""
 
-    def test_queue_numbers_by_since_and_names_the_exclusive_regression(self):
+    def test_queue_numbers_by_since_and_does_not_name_the_exclusive_regression(self):
         import board
         for name, since in (("agent-b", "2026-11-06T10:00:05Z"), ("agent-c", "2026-11-06T10:00:00Z"),
                             ("agent-a", "2026-11-06T10:00:00Z")):
@@ -478,9 +478,10 @@ class LiveQueueUnits(BoardLiveTab):
                  branch="b", sha="a" * 40, exclusive=True, stage="full", since="2026-11-06T09:30:00Z")
         rows = [r for r in self.rows() if "data-queue" in r["attrs"]]
         self.assertEqual(len(rows), 3)
-        for r in rows:
-            self.assertEqual(r["attrs"]["data-yield"], "g7")
-            self.assertTrue(r["text"].endswith(",讓位給 g7 的獨占 regression"), r["text"])
+        for r in rows:      # #143: agents no longer wait for an exclusive regression
+            self.assertNotIn("data-yield", r["attrs"])
+            self.assertNotIn("讓位", r["text"])
+            self.assertTrue(r["text"].endswith("個在等)"), r["text"])
         self.assertTrue(board.live_clock)
 
     def test_ticket_rows_name_unsatisfied_dependencies(self):
@@ -727,7 +728,7 @@ class T83Acceptance(BoardLiveTab):
             ("worker 第 2/3 輪 · m-w · 14 分 · 等機器名額:第 2 個(共 2 個在等)", "slot", "2/2"),
             ("驗證者寫案例 第 2/3 輪 · m-v · 13 分 · 等機器名額:第 1 個(共 2 個在等)", "slot", "1/2")])
 
-    def test_slot_wait_gives_way_to_exclusive_regression(self):
+    def test_slot_wait_does_not_give_way_to_exclusive_regression(self):
         self.fixture()
         self.put("regression-int-g7", kind="regression", stamp=self.alive(self.pool_stamp(self.S - 600)),
                  group="g7", branch="int/g7", sha="a" * 40, exclusive=True, stage="full",
@@ -735,8 +736,9 @@ class T83Acceptance(BoardLiveTab):
         self.agent("agent-v", state="slot", since=self.S + 100)
         lines = self.live(self.node(self.page()))
         self.assertEqual([("".join(el.itertext()), el.get("data-wait"), el.get("data-queue")) for el in lines], [
-            ("驗證者寫案例 第 2/3 輪 · m-v · 14 分 · 等機器名額:第 1 個(共 1 個在等),讓位給 g7 的獨占 regression",
+            ("驗證者寫案例 第 2/3 輪 · m-v · 14 分 · 等機器名額:第 1 個(共 1 個在等)",
              "slot", "1/1")])
+        self.assertNotIn("data-yield", self.page())
 
     def test_quota_wait(self):
         import board

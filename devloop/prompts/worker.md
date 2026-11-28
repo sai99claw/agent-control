@@ -29,6 +29,7 @@ Code index (generated from the code; read it before searching, never edit it): {
 2. If the verifier's branch `{cases_branch}` exists, merge it into your branch
    (`git merge {cases_branch}`) and make its cases pass. Cases to run: {cases_run}
    Run them with: {test_cmd}
+   Run tests only with that command, never with another test runner or the project's own test scripts. When it prints machine busy it ran nothing: do not wait for it or retry it in a loop; go on, and name in your hand-in the checks that were not measured (machine busy).
    Run only those cases, your own unit tests and the base set - not the full suite (the
    regression does that). Base set (about a minute): {base_cmd}
 3. Commit your change. Anything left uncommitted counts as not handed in. Commit source and

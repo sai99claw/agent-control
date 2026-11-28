@@ -233,6 +233,7 @@ class ReleaseKeptOutput(unittest.TestCase):
             return {k: str(v) for k, v in extra.items() if v is not None}
 
         values = {}
+        machine_slots = None
 
     def test_log_path_is_absolute_under_runs_release(self):
         from core import release
@@ -1021,7 +1022,12 @@ class T65Acceptance(LoopCase):
         self.config(machine_slots=1, regression_exclusive=True)
         self.hold_tests(preflight=4)
         self.int_branch()
-        slot = self.hold_slot()
+        from core import slots
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ.pop("DEVLOOP_MACHINE", None)
+        slot = slots.take_test_run(self.cfg(), None)    # #143: a test run in flight holds it off
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
         proc, _, _ = self.regression()
         hit = self.wait_for(self.is_reg(proc.pid), proc=proc)
         self.assertIsNotNone(hit, self.live())
@@ -1733,7 +1739,7 @@ class T66Acceptance(LoopCase):
             tx.put_group({"id": "g3", "branch": "int/g3", "state": "testing", "members": [], "fix_round": 2})
         self.pool.update(groups, "groups")
         # ruling g15 / #67 items 1-2: g1 waits first of one in the queue and gives way to g2's exclusive run
-        cases = [("g1", "slot", "第一次", "等機器名額:第 1 個(共 1 個在等),讓位給 g2 的獨占 regression", "slot"),
+        cases = [("g1", "slot", "第一次", "等機器名額:第 1 個(共 1 個在等)", "slot"),     # #143: no give-way suffix
                  ("g2", "machine", "第一次", "等整台機器", "slot"),
                  ("g3", "preflight", "修第 2 輪後", "preflight", "running"),
                  ("g9", "full", "未知", "full", "running")]
@@ -1959,6 +1965,115 @@ class T66Acceptance(LoopCase):
         self.assertEqual([r for r in self.by_pid(rows, proc.pid) if r["attrs"].get("data-state") == "running"], [])
 
 
+class T146Acceptance(LoopCase):
+    """Acceptance of #146: while the controller holds back new work because memory is short (the
+    live record hold-memory), the 進行中 tab shows one row saying so with the numbers. Expected
+    texts are the ticket's own; times come from time.localtime of the chosen epochs."""
+
+    FMT = T66Acceptance.FMT
+    VOID = T66Acceptance.VOID
+    HOLD_TEXT = "記憶體不足:可用 0.5 GiB,低於 devloop.min_free_memory_gib 1 GiB;不派新的 agent,也不開新的 regression"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in list(os.environ):
+            if key.startswith("DEVLOOP_"):
+                del os.environ[key]
+        for key in list(self.env):
+            if key.startswith("DEVLOOP_"):
+                del self.env[key]
+        os.environ["AC_ROOT"] = self.proj
+        self.NOW = int(time.time())
+
+    cfg = T64Acceptance.cfg
+    ts = T66Acceptance.ts
+    clock = T66Acceptance.clock
+    stamp = T66Acceptance.stamp
+    put = T66Acceptance.put
+    agent = T66Acceptance.agent
+    page = T66Acceptance.page
+    parse = T66Acceptance.parse
+    cell = T66Acceptance.cell
+
+    # ------------------------------------------------------------ helpers
+
+    def hold(self, alive=True):
+        """The record new-4 writes: 512 MiB available, threshold 1 GiB, setting 1, since now - 120 s;
+        its stamp started 30 s ago (so a start taken from the stamp differs from one taken from since)."""
+        from core import inflight
+        rec = self.put("hold-memory", "hold", self.NOW - 30, alive, reason="memory", available=536870912,
+                       threshold=1073741824, setting=1, since=self.ts(self.NOW - 120))
+        self.assertEqual(inflight.status(rec), "running" if alive else "ended", "the hold fixture's stamp")
+        return rec
+
+    def rows(self, page=None):
+        out = self.parse(self.page() if page is None else page)
+        self.assertEqual(out["tabs"], 1, "exactly one id=tab-live element")
+        return out["rows"]
+
+    def whys(self, page=None):
+        """[(attrs, text)] of every p.why inside id=tab-live (T68's reader, called, not inherited)."""
+        return T68Acceptance.whys(self, page)
+
+    # ------------------------------------------------------------ item 1: the live hold row
+
+    def test_item1_live_hold_gives_one_first_row(self):
+        ag = self.agent("agent-w", os.getpid(), self.NOW - 300, ticket=None, run_dir="/r/w")
+        self.hold(alive=True)
+        rows = self.rows()
+        holds = [r for r in rows if r["attrs"].get("data-kind") == "hold"]
+        self.assertEqual(len(holds), 1, "exactly one hold row: %r" % [r["attrs"] for r in rows])
+        self.assertIs(rows[0], holds[0], "the hold row comes before every other row: %r" % [r["attrs"] for r in rows])
+        self.assertGreater(len(rows), 1, "the running agent still has its row")
+        self.assertIn(str(ag["stamp"]["pid"]), [r["attrs"].get("data-pid") for r in rows[1:]])
+        row = holds[0]
+        self.assertEqual(row["attrs"].get("data-state"), "memory", row["attrs"])
+        self.assertEqual(self.cell(row, "state"), self.HOLD_TEXT)
+        self.assertEqual(self.cell(row, "what"), "controller")
+        self.assertEqual(self.cell(row, "start"), self.clock(self.NOW - 120), "start taken from since")
+        self.assertEqual(self.cell(row, "elapsed"), "2 分", "elapsed taken from since")
+        self.assertIn(row["attrs"].get("data-pid"), (None, ""), "no pid value: %r" % row["attrs"])
+        self.assertEqual(self.cell(row, "detail"), "", "no run dir, no log")
+        self.assertEqual(row["pres"], {}, "no log tail")
+
+    # ------------------------------------------------------------ item 2: a dead hold has no row
+
+    def test_item2_dead_hold_gives_no_row(self):
+        self.agent("agent-w", os.getpid(), self.NOW - 300, ticket=None, run_dir="/r/w")
+        self.hold(alive=False)
+        rows = self.rows()
+        self.assertEqual([r["attrs"] for r in rows if r["attrs"].get("data-kind") == "hold"], [],
+                         "a dead hold record has no row")
+        self.assertEqual([r["attrs"] for r in rows if r["attrs"].get("data-state") == "ended"
+                          or r["cells"].get("state", "").strip() == "結束了,沒有交件"], [],
+                         "a dead hold record has no 結束了 row")
+        self.assertEqual(len(rows), 1, "only the running agent's row: %r" % [r["attrs"] for r in rows])
+
+    # ------------------------------------------------------------ item 3: the p.why sentence
+
+    def test_item3_live_hold_alone_shows_row_and_no_why(self):
+        self.hold(alive=True)
+        page = self.page()
+        rows = self.rows(page)
+        self.assertEqual([(r["attrs"].get("data-kind"), r["attrs"].get("data-state")) for r in rows],
+                         [("hold", "memory")], "the tab shows the hold row")
+        self.assertEqual(self.cell(rows[0], "state"), self.HOLD_TEXT)
+        self.assertEqual(self.whys(page), [], "a live hold record counts as running: no p.why")
+
+    def test_item3_dead_hold_alone_is_as_if_absent(self):
+        absent = self.page()
+        want_whys, want_rows = self.whys(absent), self.rows(absent)
+        self.assertEqual(len(want_whys), 1, "the fixture without the record has a p.why: %r" % (want_whys,))
+        self.hold(alive=False)
+        page = self.page()
+        self.assertEqual(self.whys(page), want_whys, "the same p.why sentence as without the record")
+        self.assertEqual([r["attrs"] for r in self.rows(page)], [r["attrs"] for r in want_rows],
+                         "the same rows as without the record")
+
+
 class T67Acceptance(LoopCase):
     """Acceptance of #67: on the 進行中 tab every slot wait shows its queue position (and whom it gives
     way to), and every ready ticket and every decision waiting for the user has a row. Expected texts
@@ -2085,7 +2200,8 @@ class T67Acceptance(LoopCase):
 
     # ------------------------------------------------------------ item 2: giving way
 
-    def test_item2_queued_rows_yield_to_running_exclusive_regression(self):
+    def test_item2_queued_rows_do_not_yield_to_running_exclusive_regression(self):
+        """Reversed by #143: agents no longer wait for an exclusive regression, so no row gives way."""
         self.need()
         recs = self.slot_fixture()
         n = self.NOW
@@ -2095,15 +2211,11 @@ class T67Acceptance(LoopCase):
         rows = self.rows()
         queued = self.queued(rows)
         self.assertEqual(len(queued), 3, [r["attrs"] for r in rows])
-        self.assertTrue([r for r in rows if "data-yield" in r["attrs"]],
-                        "no row carries data-yield: %r" % [r["attrs"] for r in rows])
+        self.assertEqual([r["attrs"] for r in rows if "data-yield" in r["attrs"]], [])
         for row in queued:
             k, total = (int(x) for x in row["attrs"]["data-queue"].split("/"))
-            self.assertEqual(row["attrs"].get("data-yield"), "g7", row["attrs"])
-            self.assertTrue(self.cell(row, "state").endswith(",讓位給 g7 的獨占 regression"), row["cells"])
-            self.assertEqual(self.cell(row, "state"), self.queue_text(k, total) + ",讓位給 g7 的獨占 regression")
-        self.assertEqual([r["attrs"] for r in rows if "data-yield" in r["attrs"] and "data-queue" not in r["attrs"]],
-                         [], "only queued rows give way")
+            self.assertNotIn("讓位", self.cell(row, "state"), row["cells"])
+            self.assertEqual(self.cell(row, "state"), self.queue_text(k, total))
         self.assertEqual(self.one(rows, recs["agent-a"]["stamp"]["pid"])["attrs"].get("data-queue"), "1/3")
         # the same record, no longer exclusive: nobody gives way
         excl["exclusive"] = False
@@ -2224,6 +2336,37 @@ class T67Acceptance(LoopCase):
             self.assertEqual(self.cell(row, "elapsed"), "", a)
             self.assertEqual(a.get("data-slots"), slots_attr, a)
             self.assertEqual(self.cell(row, "slots"), "名額 " + slots_attr, a)
+
+
+class HoldRowUnit(unittest.TestCase):
+    """board.live_hold_rows: the GiB text of a live hold-memory record; a dead or odd record gives no row."""
+
+    def rows(self, rec):
+        import board
+        from core import inflight
+        with mock.patch.object(inflight, "records", return_value=[("hold-memory", rec)]):
+            return board.live_hold_rows(None)
+
+    def rec(self, **fields):
+        rec = {"kind": "hold", "reason": "memory", "available": 536870912, "threshold": 2 ** 30, "setting": 1,
+               "since": "2026-01-01T00:00:00Z",
+               "stamp": {"pid": os.getpid(), "host": osx.host(), "boot": osx.boot_id(),
+                         "started": "2026-01-01T00:00:00Z"}}
+        rec.update(fields)
+        return rec
+
+    def test_text_formats_gib_and_setting(self):
+        row = self.rows(self.rec())[0]
+        self.assertEqual(row["text"], "記憶體不足:可用 0.5 GiB,低於 devloop.min_free_memory_gib 1 GiB;"
+                                      "不派新的 agent,也不開新的 regression")
+        self.assertEqual((row["kind"], row["state"], row["what"]), ("hold", "memory", "controller"))
+        row = self.rows(self.rec(available=3 * 2 ** 30 + 2 ** 29, setting=1.5))[0]
+        self.assertIn("可用 3.5 GiB,低於 devloop.min_free_memory_gib 1.5 GiB;", row["text"])
+
+    def test_dead_stamp_gives_no_row(self):
+        stamp = self.rec()["stamp"]
+        stamp["boot"] = "other-boot"
+        self.assertEqual(self.rows(self.rec(stamp=stamp)), [])
 
 
 class T68Acceptance(LoopCase):

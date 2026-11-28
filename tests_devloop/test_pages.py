@@ -795,11 +795,14 @@ class T123Acceptance(LoopCase):
         self.page("px", "2")
         return sha
 
-    def land(self):
+    def land(self, collect=False):
         import ticket_controller
         from core.config import Config
         ctl = ticket_controller.Controller(Config(self.proj), self.pool)
         ctl.land(self.pool.snapshot().groups["g1"])
+        if collect:                         # the release runs as a job: wait for it and collect it
+            ctl.children["release:g1"].wait(timeout=60)
+            ctl.finish_jobs(self.pool.snapshot())
 
     def test_item10_landing_supersedes_group_and_ticket_pages(self):
         self.verified_g1()
@@ -819,7 +822,7 @@ class T123Acceptance(LoopCase):
         self.verified_g1()
         before = set(self.inbox())
         t0 = osx.now()
-        self.land()
+        self.land(collect=True)
         t1 = osx.now()
         snap = self.snap()
         self.assertEqual(snap.groups["g1"]["state"], "landed")
@@ -1679,7 +1682,10 @@ class PagesCloseUnit(LoopCase):
     def test_landing_leaves_its_release_failed_page_unread(self):
         self.config(release="exit 2")
         self.land_case()
-        self.ctl().land(self.snap().groups["g1"])
+        ctl = self.ctl()
+        ctl.land(self.snap().groups["g1"])
+        ctl.children["release:g1"].wait(timeout=60)
+        ctl.finish_jobs(self.pool.snapshot())
         self.assertEqual(self.snap().groups["g1"]["release"], "failed")
         fresh = [n for n, r in self.snap().inbox.items()
                  if r.get("kind") == "decision" and n not in ("pg", "pt")]

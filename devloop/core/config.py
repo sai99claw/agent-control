@@ -68,6 +68,8 @@ DEFAULTS = {
                                      # the controller merges main in and lands without a second regression
     "host_sample_seconds": 60,       # #44: the controller samples the machine into <worktrees>/runs/host/
                                      # <hostname>.jsonl every N seconds; null = off
+    "min_free_memory_gib": 1,        # #145: below this much available memory (GiB) the controller starts
+                                     # no new agent or regression; null = off
     "prices": None,                  # model name -> {"input", "cached_input", "output"} US dollars per
                                      # million tokens, for codex cost rows; null/{} = dollars unknown
     "agents": DEFAULT_AGENTS,
@@ -130,6 +132,10 @@ class Config:
         if every is not None and (isinstance(every, bool) or not isinstance(every, int) or every < 1):
             raise osx.OSFailure("board/config.json devloop.host_sample_seconds must be null or a whole "
                                 "number >= 1, not %r" % (every,))
+        gib = self.values.get("min_free_memory_gib")
+        if gib is not None and (isinstance(gib, bool) or not isinstance(gib, (int, float)) or not gib > 0):
+            raise osx.OSFailure("board/config.json devloop.min_free_memory_gib must be null or a number "
+                                "> 0 (GiB), not %r" % (gib,))
         exclusive = self.values.get("regression_exclusive")
         if not isinstance(exclusive, bool):
             raise osx.OSFailure("board/config.json devloop.regression_exclusive must be true or false, "
