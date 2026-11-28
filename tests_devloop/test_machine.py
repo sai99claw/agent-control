@@ -48,7 +48,15 @@ def run_worker_in_process(case, timeout):
 
 
 class ExclusiveRegression(LoopCase):
-    """devloop.regression_exclusive: the implementer's tests (        os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
+    """devloop.regression_exclusive: the implementer's tests (gate and whole-machine take in core/slots.py)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
         os.environ.pop("DEVLOOP_MACHINE", None)  # nor under the holder of the machine
         os.environ["AC_ROOT"] = self.proj
         self.slot_dir = os.path.join(self.tmp, "wt", "slots")
