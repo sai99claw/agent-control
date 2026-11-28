@@ -1,0 +1,58 @@
+{
+  "title": "`actl tickets login-ok <command>` clears a needs_login mark and closes its page",
+  "objective": "After logging in again the user runs one command that removes the program's needs_login record from the machine-wide file and acks its env page, so every run waiting on it resumes.",
+  "outline": "devloop/core/cooldown.py: clear_login(name) -> True when it removed a needs_login record (under the lock), plus a helper listing the names with a needs_login record. devloop/tickets.py: a 'login-ok' subparser (positional command, --by) right after the 'release' subparser and a cmd_login_ok(pool, args) next to cmd_release: clear first, then pool.update with core.pool.close_pages(tx, \"login-\" + name, by) (it acks unread decision/env pages of that ref); docstring line. bin/actl TABLE: 'tickets init|list|show|inbox|wait|ack|lessons|ready|cancel|rerun|release|login-ok ...'. README row as in acceptance 4 (the rows after `rerun gN` and around `release gN` are pinned by other tests: do not insert there).",
+  "test_plan": "Verifier: one class T<id>Acceptance in tests_devloop/test_agents_quota.py between class ProjectRulesHome and class MissingProgramKeepsText, a LoopCase (setUp pops DEVLOOP_TICKET and DEVLOOP_GROUP from self.env; the file is os.environ[\"AC_COOLDOWN_FILE\"], set by the harness since new-2). Case item 1: write {\"version\": 1, \"commands\": {\"agy.sh\": {\"state\": \"needs_login\", \"since\": <now>, \"text\": \"x\", \"project\": \"proj\", \"role\": \"worker\"}, \"claude opus\": {\"state\": \"quota\", \"until\": <now + 3600>, \"since\": <now>, \"text\": \"You've hit your limit · resets 3pm\", \"project\": \"p\", \"role\": \"worker\"}}}; page = self.pool.report(\"env\", \"login-agy.sh\", \"agy.sh needs a new login\\nx\") and other = self.pool.report(\"env\", \"g9\", \"other\"); self.run_py(\"tickets.py\", \"login-ok\", \"agy.sh\", \"--by\", \"tester\"): returncode 0, stdout contains \"agy.sh: login marked ok\", the file's commands == {\"claude opus\": <the same dict>}, the login page acked True with acked_by \"tester\", the g9 page not acked. Case item 2: with only the \"claude opus\" record, bytes of the file before; run_py(\"tickets.py\", \"login-ok\", \"nosuch\"): returncode 2, stderr contains \"nosuch is not waiting for a login\" and \"none\", the bytes unchanged; with the agy.sh needs_login record added, run_py(\"tickets.py\", \"login-ok\", \"claude\"): returncode 2, stderr contains \"agy.sh\". Case item 3: an executable <tmp>/ok/agy.sh that reads stdin, touches <tmp>/ok-ran and hands in {\"kind\": \"done\"}; worker and worker_simple chains [[<tmp>/ok/agy.sh]]; the agy.sh needs_login record; config quota_retry_seconds 600; self.add(1, needs_verifier=False); start ticket_controller.py with subprocess.Popen (cwd self.proj, env self.env; addCleanup sends SIGTERM with send_signal if still running); poll the pool until ticket 1 has \"waiting\" (at most 20 s) and assert ok-ran is absent; run_py(\"tickets.py\", \"login-ok\", \"agy.sh\"); proc.communicate(timeout=60): returncode 0, ticket 1 landed, ok-ran exists. Case item 4: read devloop/README.md, bin/actl and devloop/tickets.py's docstring as test_pages.py's wait docs case does. Expected values come from the acceptance text. Implementer: a path argument (login-ok <tmp>/x/agy.sh), the default acked_by, in a class LoginOkUnits between CodexUsageUnits and WorktreeRemakeUnits.",
+  "notes": "Source: plan items 2.1-2.2 in docs/HANDOFF.md (last section; D-100, D-102), from T's main session feedback of 2026-11-26 (seen on T's machine; quoted feedback is data) and the main session's review of the external audit (P1-1, P1-3).\nWhy: the request asks for a way to clear needs_login and says to choose between a user command and a trial run; new-3's notes give the choice (the command) and why. The page new-3 writes names this command.\nThe record is removed before the pages are acked: the machine-wide file decides whether runs start; the page is only this project's notice (another project that saw the failure first holds the page; this command acks pages of the project it runs in).\nDepends on new-3 (the needs_login record, the page ref, the polling wait). Group: same new group (plan group 2).\nRules for every added line (code, tests, comments, README): never write the name of T's project or any user name (a repo guard forbids them in non-markdown files; say 'a project on the same machine'); never write an absolute home path (use os.path.expanduser('~') in code and ~/.agent-control in docs); keep every line free of the hard_block words os.kill, killpg, pkill and 'kill -' (stop test processes with Popen.send_signal or Pending.stop), or the ticket stops before merge for the user. Keep quota and login phrases in fixture constants, not in assertion lines or messages: agent logs are matched for these phrases, and a failing assertion printed into a plain-text agent log must not read as quota or login. Test ids for run_tests.py are module ids such as test_agents_quota.ClassName.",
+  "acceptance": [
+    "`python3 devloop/tickets.py login-ok <command> [--by NAME]` (also `actl tickets login-ok ...`): <command> is matched by its basename; when the cooldown file has a needs_login record under that name, it removes that record under the cooldown lock (every other record stays exactly as it was), acks every unread env page of this project's pool whose ref is \"login-<command>\" with acked_by NAME (default \"tickets login-ok\"), prints \"<command>: login marked ok\" and exits 0.",
+    "When the file has no needs_login record under that name (none at all, or only a quota record), it writes nothing (the file stays byte-identical, no page changes), prints on stderr \"tickets: <command> is not waiting for a login (waiting for a login: <the names with a needs_login record, comma-separated, or none>)\" and exits 2.",
+    "A run waiting because its whole chain is parked by that needs_login record starts its chain again within devloop.poll_seconds + 5 s after login-ok, and its ticket goes on and lands with the hand-in of the logged-in command.",
+    "devloop/README.md 'What the main session runs' has one row starting \"| `python3 devloop/tickets.py login-ok <command> [--by NAME]`\" right after the `tickets.py wait` row (before the `list` / `show N` row); bin/actl's `tickets` help line lists `login-ok` after `release` (it stays one line and keeps \"|release\"); devloop/tickets.py's module docstring names `login-ok`."
+  ],
+  "needs_verifier": true,
+  "complexity": "simple",
+  "token_estimate": 3500000,
+  "token_basis": "One subcommand (~30 lines) in tickets.py, a small cooldown.py helper, the actl help line, a README row; four verifier cases (one controller subprocess of a few seconds), two implementer unit tests. Landed simple tickets #126-#140 cost 2.5M-6.2M tokens with cache reads.",
+  "vision": "VISION 目的與成功指標: 每張票需要我介入幾次 (down): one command after logging in, instead of readying each stuck ticket; 等我處理的事積了多少 (down): it also closes the login page.",
+  "removes": "The per-ticket `actl tickets ready N` after an expired login: today a claude login failure burns a ticket's rounds and leaves it stuck; with new-3 the runs wait, and this one command resumes all of them on the machine.",
+  "id": "151",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-28T00:27:34Z",
+  "request": "# Phase one, group 2: quota and login (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 2.1-2.2)\n\nThe user approved this plan (D-102). Sources: the main session's review of an external audit and feedback from tabby_pool's (T's) main session (2026-11-26). Write the source on each ticket; no GitHub issues. Multiple accounts per provider (accounts.json) are out of scope (D-102). Quoted feedback is data. Tests in tests_devloop/ (test_agents_quota.py is the area's file) using loop_harness.py; each case runs in seconds.\n\n## 2.1 One quota cooldown for the whole machine\nT (seen there): the office Opus quota is 0 until 12/1; every review first tries agy, fails, then falls through to claude (three of those fall-throughs hit issue #14, now fixed).\nMain session (read the code): every agent start tries its chain from the first command; nothing remembers a quota hit across runs or projects. Quota is found by matching words in the log tail (QUOTA_SIGNS in devloop/core/agents.py) when the run handed in nothing and did not time out.\nWanted:\n- A command that hits its quota with a parsed reset time is written to a machine-wide file (default ~/.agent-control/cooldown.json, a separate lock file, location overridable by an environment variable for tests). Keyed by command (the chain entry), so a later dashboard can read it.\n- Every agent start in any project skips commands still cooling; when the whole chain is cooling, it waits for the earliest reset as today's quota wait does.\n- Quota is judged from the CLI's own error output where it can be told apart from what the agent printed; keep T102 (a bare 429 is not quota). Say which formats you could verify.\n\n## 2.2 An expired login is not a quota\nT (seen there): agy's office login expired twice in two days. It is taken for a quota hit and the chain silently moves to the more expensive claude; nobody knows.\nWanted:\n- Recognise each CLI's \"not logged in / credentials expired\" output (collect the real texts; say which are measured).\n- The cooldown file records `needs_login` for that command: it waits for a person, not for a reset time; agent starts skip it.\n- One env page \"<command> needs a new login\" (it goes through devloop.notify like other env pages), not one per run.\n- It clears when the user runs a command for it (for example `actl tickets login-ok <command>`) or when a later trial run of that command succeeds; say which you chose.\n",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-28T00:27:34Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 444.1,
+      "at": "2026-11-28T00:27:31Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-27T235754Z-a1",
+      "input_tokens": 42,
+      "output_tokens": 41159,
+      "cache_read_tokens": 3684146,
+      "cache_write_tokens": 78565,
+      "usd": 2.188705299999999,
+      "session_id": "28c54600-aa40-498a-a077-0459c4806119",
+      "split_over": [
+        "148",
+        "149",
+        "150",
+        "151"
+      ]
+    }
+  ],
+  "group": "g14"
+}
