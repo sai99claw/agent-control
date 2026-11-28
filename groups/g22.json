@@ -1,7 +1,7 @@
 {
   "id": "g22",
   "branch": "int/g22",
-  "state": "verified",
+  "state": "landed",
   "members": [
     "171"
   ],
@@ -32,9 +32,16 @@
     {
       "at": "2026-11-28T11:50:36Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-28T11:50:41Z",
+      "event": "landed"
     }
   ],
   "base": "f6067cdb06def20aa96ba01f8f7949058c974e56",
   "last_regression": "green",
-  "verified_sha": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501"
+  "verified_sha": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501",
+  "landed_sha": "1ba5de2d53cffcdc2f1d9677cd50295b80f90501",
+  "release": "pending",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g22.log"
 }
