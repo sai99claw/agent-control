@@ -7,18 +7,22 @@ Principles learned while doing this role. Rules for the job are in the prompt; t
 - When the ticket reads two ways, name both readings and raise a revise instead of silently picking one.
 - Do not route around a hard ticket by renaming, adding a second field or giving each caller its own shape; raise the revision instead (D-018).
 - Files the ticket does not name are still yours to change when the change needs them; the only hard stop is the project's hard_block.
-- When a ticket enumerates which old cases you may change and an unlisted case of the same shape goes red, raise a revise naming it instead of editing it (#49).
-- When a command's optional argument has a stated default, resolve it once and pass the resolved value to every helper; a helper with its own fallback for None silently records something else (#51).
+- A ticket's list of old cases you may change, or of old asserts it checked as still true, covers only what its author searched for literally; cases that depend on the same state indirectly are missed. Run every suite the ticket names before handing in, and when an unlisted case goes red, raise a revise naming it instead of editing it (#49, #123).
 
 ## Scope and size
 - Every changed line traces to the ticket. Do not reformat, rename or tidy code next to your change: tickets of the same group edit the same files, and every extra hunk is a merge conflict for them (#27, #48).
 - Remove only what your own change left unused; mention pre-existing dead code in the hand-in instead of deleting it.
 - Write the least code that meets the acceptance: no option, setting, abstraction or error path for a case that cannot happen unless the ticket asks for it. When the change comes out much larger than the outline suggests, simplify before handing in.
 
+## Implementation
+- When a command's optional argument has a stated default, resolve it once and pass the resolved value to every helper; a helper with its own fallback for None silently records something else (#51).
+- A stop-signal handler ignores further signals itself, before it raises; otherwise a second signal interrupts the cleanup that runs while the first is still unwinding (#124).
+
 ## Tests and assertions
 - Never loosen an existing assertion or rewrite an expected value to whatever the program prints now. A wrong oracle or fixture is the verifier's defect to fix, not yours.
 - When an acceptance case fails inside the verifier's own helper before any request reaches your code, prove the implementation passes with the helper fixed in a throwaway copy, restore it, and send that evidence through a revise instead of editing the case (#48).
 - When a revision throws out the verifier's cases, take the old cases' merge off your branch before handing in, so the rewritten cases merge cleanly instead of clashing with a stale copy of the same class (#48).
+- Put your own unit tests in an existing test file, not in the new file the verifier's test plan names: both sides creating the same file is an add/add merge conflict (#119).
 - Acceptance cases match literal markup and whitespace-stripped text: before changing an element a case might match, grep the merged cases for its literal; keep non-digit text between adjacent numbers; give a table its own caption rather than relying on the nearest preceding label (#41, #43, #45).
 - Before giving a shared fixture a default to turn a case green, check whether it switches off the layer under test and whether other cases rely on "unset means fallback" (#27, #70).
 - A guard that runs a whole script needs a brake a mutation cannot disable, and when it measures a document it measures that section, not the whole output (#29).
@@ -27,7 +31,7 @@ Principles learned while doing this role. Rules for the job are in the prompt; t
 - Proving two things run concurrently needs a two-way rendezvous (each sets its own marker and waits for the other's); a one-way marker only rules out one serial order (#51).
 - Destructive test actions touch only state the test owns; never tear down a shared fixture (#642).
 - When replacing a tautological assertion, run the same mutation against the old case too: old green, new red is the proof the rewrite has a target (#72). Do not copy a docstring's "mutation X goes red" claim without re-running it; if it does not go red, pick a mutation that does (#73).
-- Mutation checks, when you do them: commit the work first (a restore that resets to HEAD wipes uncommitted work, #3), prove the substitution applied (count replacements), run, record the red message, restore, verify the hash.
+- Mutation checks, when you do them: commit the work first (a restore that resets to HEAD wipes uncommitted work, #3), make sure no background test run is reading the same tree (anything that spawns the program picks up the mutated file while it is in place, #118), prove the substitution applied (count replacements), run, record the red message, restore, verify the hash.
 
 ## Red results
 - A red test in a file you did not touch is still your ticket until attribution says otherwise: behaviour changes go red in untouched test files. Before blaming your change, run the case on the base commit in a throwaway detached worktree; a red already there on base is a gap to report, not a fix to make (#38).
