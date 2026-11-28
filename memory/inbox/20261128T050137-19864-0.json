@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "When a callee must make its Pending stoppable through a caller's list that may already hold other running agents, append and remove it instead of replacing the list (cur[:] = [p]), or the other agents drop out of stop_agents().",
+  "source": "#158 r1 worker",
+  "at": "2026-11-28T05:01:37Z"
+}
