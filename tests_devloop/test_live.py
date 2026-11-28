@@ -1738,7 +1738,7 @@ class T66Acceptance(LoopCase):
             tx.put_group({"id": "g3", "branch": "int/g3", "state": "testing", "members": [], "fix_round": 2})
         self.pool.update(groups, "groups")
         # ruling g15 / #67 items 1-2: g1 waits first of one in the queue and gives way to g2's exclusive run
-        cases = [("g1", "slot", "第一次", "等機器名額:第 1 個(共 1 個在等),讓位給 g2 的獨占 regression", "slot"),
+        cases = [("g1", "slot", "第一次", "等機器名額:第 1 個(共 1 個在等)", "slot"),     # #143: no give-way suffix
                  ("g2", "machine", "第一次", "等整台機器", "slot"),
                  ("g3", "preflight", "修第 2 輪後", "preflight", "running"),
                  ("g9", "full", "未知", "full", "running")]
@@ -2090,7 +2090,8 @@ class T67Acceptance(LoopCase):
 
     # ------------------------------------------------------------ item 2: giving way
 
-    def test_item2_queued_rows_yield_to_running_exclusive_regression(self):
+    def test_item2_queued_rows_do_not_yield_to_running_exclusive_regression(self):
+        """Reversed by #143: agents no longer wait for an exclusive regression, so no row gives way."""
         self.need()
         recs = self.slot_fixture()
         n = self.NOW
@@ -2100,15 +2101,11 @@ class T67Acceptance(LoopCase):
         rows = self.rows()
         queued = self.queued(rows)
         self.assertEqual(len(queued), 3, [r["attrs"] for r in rows])
-        self.assertTrue([r for r in rows if "data-yield" in r["attrs"]],
-                        "no row carries data-yield: %r" % [r["attrs"] for r in rows])
+        self.assertEqual([r["attrs"] for r in rows if "data-yield" in r["attrs"]], [])
         for row in queued:
             k, total = (int(x) for x in row["attrs"]["data-queue"].split("/"))
-            self.assertEqual(row["attrs"].get("data-yield"), "g7", row["attrs"])
-            self.assertTrue(self.cell(row, "state").endswith(",讓位給 g7 的獨占 regression"), row["cells"])
-            self.assertEqual(self.cell(row, "state"), self.queue_text(k, total) + ",讓位給 g7 的獨占 regression")
-        self.assertEqual([r["attrs"] for r in rows if "data-yield" in r["attrs"] and "data-queue" not in r["attrs"]],
-                         [], "only queued rows give way")
+            self.assertNotIn("讓位", self.cell(row, "state"), row["cells"])
+            self.assertEqual(self.cell(row, "state"), self.queue_text(k, total))
         self.assertEqual(self.one(rows, recs["agent-a"]["stamp"]["pid"])["attrs"].get("data-queue"), "1/3")
         # the same record, no longer exclusive: nobody gives way
         excl["exclusive"] = False
