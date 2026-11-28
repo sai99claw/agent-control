@@ -57,7 +57,9 @@ No script polls another; each records its outcome in the pool and exits.
   in its starting point: landed, or merged into the same group; with a landed one, the group's
   branch must contain main or not exist yet. The controller makes the branch from main's current
   sha right before the first start (the group's `base`). Issuers branch from the integration
-  branch head, so a ticket sees the merged work of the tickets it depends on.
+  branch head, so a ticket sees the merged work of the tickets it depends on. Ready tickets are taken by their
+  group's place in the chain (`core/chain.order`; tickets of groups outside the chain last) and
+  then in DAG order inside a group.
 - A ready ticket with no open group (written before this change, or one that left its group) gets
   a group of its own at the end of the chain, in ticket order, once every dependency is landed,
   running, merged, or ready in an open group; a ticket whose dependency is stuck, cancelled or

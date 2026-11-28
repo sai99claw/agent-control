@@ -284,7 +284,7 @@ group through the hand-in's `dag` (`{"depends_on": [ids], "group": "gK"|"new"}`,
 in the same pool write and under the refusals of `actl dag` except 'mentions #M'. A ready ticket starts only in its own group
 while that group is open, once each dependency is landed or merged in the same group and, with a
 landed one, the group's branch contains main or does not exist yet; the controller makes the branch
-from main's current sha right before the first start and records that sha as the group's `base`.
+from main's current sha right before the first start and records that sha as the group's `base`. When more tickets can start than there are free slots, they are taken by their group's place in the chain (`core/chain.order`; tickets of groups outside the chain last) and then in DAG order inside a group.
 A stuck member holds its open group (D-097): while a ticket not cancelled depends on it directly,
 or another member is neither merged nor cancelled, the group waits for the decision on it - it is
 not closed, no member is moved out, and a ready ticket that depends on it can still start once it
