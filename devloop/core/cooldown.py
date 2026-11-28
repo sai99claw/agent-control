@@ -137,3 +137,19 @@ def record_login(argv, text, project, role):
                              "text": text[:200], "project": project, "role": role}
         return True
     return bool(_rewrite(program, change))
+
+
+def login_names():
+    """The sorted names with a needs_login record."""
+    return sorted(k for k, v in records().items() if v.get("state") == "needs_login")
+
+
+def clear_login(name):
+    """Remove the needs_login record of `name` under the lock. True when it removed one."""
+    def change(commands, now):
+        rec = commands.get(name)
+        if rec is None or rec.get("state") != "needs_login":
+            return False
+        del commands[name]
+        return True
+    return bool(_rewrite(name, change))

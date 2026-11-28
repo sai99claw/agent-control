@@ -2070,6 +2070,34 @@ class CodexUsageUnits(LoopCase):
 
 
 
+class LoginOkUnits(LoopCase):
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.cool = os.environ["AC_COOLDOWN_FILE"]
+        rec = {"state": "needs_login", "since": "2026-01-01T00:00:00Z", "text": "x", "project": "p", "role": "worker"}
+        with open(self.cool, "w") as fh:
+            json.dump({"version": 1, "commands": {"agy.sh": rec}}, fh)
+
+    def test_path_argument_matches_by_basename_and_default_acked_by(self):
+        page = self.pool.report("env", "login-agy.sh", "needs a new login")
+        res = self.run_py("tickets.py", "login-ok", os.path.join(self.tmp, "x", "agy.sh"))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        with open(self.cool) as fh:
+            self.assertEqual(json.load(fh)["commands"], {})
+        row = self.pool.snapshot().inbox[page]
+        self.assertTrue(row["acked"])
+        self.assertEqual(row["acked_by"], "tickets login-ok")
+
+    def test_clear_login_and_names(self):
+        from core import cooldown
+        self.assertEqual(cooldown.login_names(), ["agy.sh"])
+        self.assertFalse(cooldown.clear_login("other"))
+        self.assertTrue(cooldown.clear_login("agy.sh"))
+        self.assertEqual(cooldown.login_names(), [])
+
+
 class WorktreeRemakeUnits(LoopCase):
     """agents.start(before_spawn=...) and Issuer.remake_tree (implementer's tests of #133)."""
 

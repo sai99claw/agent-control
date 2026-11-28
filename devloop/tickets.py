@@ -14,6 +14,7 @@
     python3 devloop/tickets.py ack <page>|--all
     python3 devloop/tickets.py lessons --layer role --name worker --file OLD.md   # old notes -> lessons
     python3 devloop/tickets.py release g1 [--again] [--by NAME] [--page P]  # re-run a landed group's failed release
+    python3 devloop/tickets.py login-ok agy.sh [--by NAME]   # after a new login: clear its needs_login mark, ack its page
 
 Opening tickets is ticket_creator.py; moving them is ticket_controller.py.
 """
@@ -28,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import agents, chain, memory  # noqa: E402
 from core import dag as dagmod  # noqa: E402
-from core import osx, pages, release  # noqa: E402
+from core import cooldown, osx, pages, release  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import close_pages, event, frozen_reason, leave_group, shown_state  # noqa: E402
@@ -329,6 +330,20 @@ def cmd_release(pool, cfg, args):
     return 1
 
 
+def cmd_login_ok(pool, args):
+    """Clear the needs_login record of a program (the machine-wide file decides whether runs start),
+    then ack this project's env pages about it."""
+    name = os.path.basename(args.command)
+    by = args.by or "tickets login-ok"
+    if not cooldown.clear_login(name):
+        waiting = ", ".join(cooldown.login_names()) or "none"
+        print("tickets: %s is not waiting for a login (waiting for a login: %s)" % (name, waiting), file=sys.stderr)
+        return 2
+    pool.update(lambda tx: close_pages(tx, "login-" + name, by), "%s: login marked ok" % name)
+    print("%s: login marked ok" % name)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -372,6 +387,9 @@ def main(argv=None):
     p.add_argument("--again", action="store_true")
     p.add_argument("--by", default=None)
     p.add_argument("--page", default=None)
+    p = sub.add_parser("login-ok")
+    p.add_argument("command")
+    p.add_argument("--by", default=None)
     args = ap.parse_args(argv)
     try:
         cfg = Config()
@@ -397,6 +415,8 @@ def main(argv=None):
             return cmd_rerun_group(pool, args.id, args.why, args.by, args.page)
         if args.cmd == "release":
             return cmd_release(pool, cfg, args)
+        if args.cmd == "login-ok":
+            return cmd_login_ok(pool, args)
         if args.cmd == "wait":
             return cmd_wait(pool, args, cfg.poll_seconds)
         return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack, "lessons": cmd_lessons,
