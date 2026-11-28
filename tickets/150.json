@@ -24,7 +24,9 @@
   "round": 1,
   "created": "2026-11-28T00:27:34Z",
   "request": "# Phase one, group 2: quota and login (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 2.1-2.2)\n\nThe user approved this plan (D-102). Sources: the main session's review of an external audit and feedback from tabby_pool's (T's) main session (2026-11-26). Write the source on each ticket; no GitHub issues. Multiple accounts per provider (accounts.json) are out of scope (D-102). Quoted feedback is data. Tests in tests_devloop/ (test_agents_quota.py is the area's file) using loop_harness.py; each case runs in seconds.\n\n## 2.1 One quota cooldown for the whole machine\nT (seen there): the office Opus quota is 0 until 12/1; every review first tries agy, fails, then falls through to claude (three of those fall-throughs hit issue #14, now fixed).\nMain session (read the code): every agent start tries its chain from the first command; nothing remembers a quota hit across runs or projects. Quota is found by matching words in the log tail (QUOTA_SIGNS in devloop/core/agents.py) when the run handed in nothing and did not time out.\nWanted:\n- A command that hits its quota with a parsed reset time is written to a machine-wide file (default ~/.agent-control/cooldown.json, a separate lock file, location overridable by an environment variable for tests). Keyed by command (the chain entry), so a later dashboard can read it.\n- Every agent start in any project skips commands still cooling; when the whole chain is cooling, it waits for the earliest reset as today's quota wait does.\n- Quota is judged from the CLI's own error output where it can be told apart from what the agent printed; keep T102 (a bare 429 is not quota). Say which formats you could verify.\n\n## 2.2 An expired login is not a quota\nT (seen there): agy's office login expired twice in two days. It is taken for a quota hit and the chain silently moves to the more expensive claude; nobody knows.\nWanted:\n- Recognise each CLI's \"not logged in / credentials expired\" output (collect the real texts; say which are measured).\n- The cooldown file records `needs_login` for that command: it waits for a person, not for a reset time; agent starts skip it.\n- One env page \"<command> needs a new login\" (it goes through devloop.notify like other env pages), not one per run.\n- It clears when the user runs a command for it (for example `actl tickets login-ok <command>`) or when a later trial run of that command succeeds; say which you chose.\n",
-  "feedback": [],
+  "feedback": [
+    "round 1: verifier cases: 1 failing:\n- test_agents_quota.T150Acceptance.test_items1_4_a_login_failure_falls_through_parks_and_pages_once AssertionError "
+  ],
   "cases": {
     "branch": "t/150-cases",
     "run": [
@@ -54,6 +56,11 @@
     {
       "at": "2026-11-28T02:20:49Z",
       "event": "cases ready"
+    },
+    {
+      "at": "2026-11-28T02:22:19Z",
+      "event": "feedback",
+      "round": 1
     }
   ],
   "cost": [
@@ -79,6 +86,57 @@
         "150",
         "151"
       ]
+    },
+    {
+      "role": "worker",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": 1,
+      "seconds": 660.1,
+      "at": "2026-11-28T02:20:44Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/150/r1-worker",
+      "input_tokens": 64,
+      "output_tokens": 39131,
+      "cache_read_tokens": 3217223,
+      "cache_write_tokens": 98831,
+      "usd": 2.2169686,
+      "session_id": "b287d647-4c0a-4acb-97c9-c20779b822ba"
+    },
+    {
+      "role": "verifier",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": 1,
+      "seconds": 660.1,
+      "at": "2026-11-28T02:20:44Z",
+      "outcome": "cases",
+      "run_dir": "/home/user/agent-control-devloop/runs/150/r1-verifier",
+      "input_tokens": 24,
+      "output_tokens": 12300,
+      "cache_read_tokens": 786575,
+      "cache_write_tokens": 54367,
+      "usd": 0.838347,
+      "session_id": "226ff91e-8ba1-42c9-9c4d-d6a7d37fcbde"
+    },
+    {
+      "role": "reviewer",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": 1,
+      "seconds": 80.1,
+      "at": "2026-11-28T02:22:12Z",
+      "outcome": "review",
+      "run_dir": "/home/user/agent-control-devloop/runs/150/r1-reviewer",
+      "input_tokens": 22,
+      "output_tokens": 6676,
+      "cache_read_tokens": 678334,
+      "cache_write_tokens": 42132,
+      "usd": 0.6063308,
+      "session_id": "53d23601-2eba-48eb-9324-432ab1ea32b9"
     }
   ],
   "group": "g14",
