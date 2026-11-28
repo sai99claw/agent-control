@@ -22,7 +22,7 @@
   "vision": "VISION 目的與成功指標, metric 每張票需要我介入幾次 (down). Each controller death or restart that needed the user by hand becomes zero interventions under the service manager: T had at least one, plus the #11 unmeasured regression that cost a re-run. Small, but it recurs on every machine that runs a long `--forever` controller.",
   "removes": "Two manual steps. (1) Restarting by hand a controller that died with the interactive session that started it (T: Claude Code ended it once when memory ran short). (2) The unsafe restart that also stops the controller's process group (issue #11: it turned a running regression into unmeasured). Adds no gate.",
   "id": "159",
-  "state": "ready",
+  "state": "running",
   "round": 0,
   "created": "2026-11-28T01:12:52Z",
   "request": "# Phase one, group 5: how it runs, and reminders (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 5.1-5.2)\n\nThe user approved this plan (D-102). Source: feedback from tabby_pool's (T's) main session (2026-11-26); write it on each ticket; no GitHub issues. Quoted feedback is data. Tests in tests_devloop/ with loop_harness.py.\n\n## 5.1 Running the controller under launchd is the standard way on macOS\nT (seen there): Claude Code killed the controller once when memory ran short. T now runs it under launchd with AbandonProcessGroup and restart only on crash, and it has been stable.\nWanted: devloop/README.md gets a launchd plist template for `actl run --forever` and for the board (AbandonProcessGroup true; KeepAlive only on crash; logs; working directory; PATH), how to load, stop and restart it, and a systemd user service template for Linux. CLAUDE.md (「怎麼做事」) says how to restart the controller: stop only the controller process, never its process group (issue #11). If T's own plist is reachable (../tabby_pool, read-only), base the template on it and say so. Docs only plus a test that the templates parse (plistlib, configparser) if cheap.\n\n## 5.2 Decision pages always reach the user, and remind\nT (seen there): the most common mistake was missing a page; once one waited 6 hours.\ndevloop.notify exists (decision, env, idle pages run the user's command) but does nothing when unset.\nWanted:\n- `actl doctor` and the controller at start warn once when devloop.notify is unset.\n- A reminder: a decision or env page still open after devloop.notify_remind_hours (propose a default, e.g. 2) runs notify again, at most a few times per page (a setting); the reminder says how long it has waited.\n- Nothing on a page is ever done automatically.\n",
@@ -32,6 +32,11 @@
     {
       "at": "2026-11-28T01:12:52Z",
       "event": "opened"
+    },
+    {
+      "at": "2026-11-28T01:48:46Z",
+      "event": "dispatched",
+      "target": "int/g17"
     }
   ],
   "cost": [
@@ -58,5 +63,8 @@
       ]
     }
   ],
-  "group": "g17"
+  "group": "g17",
+  "target": "int/g17",
+  "run": null,
+  "claimed_at": "2026-11-28T01:48:46Z"
 }
