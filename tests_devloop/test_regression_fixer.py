@@ -486,6 +486,105 @@ class T69Acceptance(LoopCase):
         self.assert_one_event_naming(before, old)
 
 
+class T168Acceptance(LoopCase):
+    """Ticket #168: a fix round's start spawns auto_fixer with --round, then writes the group in
+    one pool commit; a failed spawn writes nothing; auto_fixer takes its round from --round.
+    Expected values from the acceptance text, not from the implementation."""
+
+    RED = {"status": "red", "summary": "1 failing", "failures": [{"id": "suite.red"}]}
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key, None)
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key, None)
+
+    def commits(self):
+        return int(git(self.pool_path, "rev-list", "--count", "HEAD"))
+
+    def ctl(self):
+        import ticket_controller
+        from core.config import Config
+        return ticket_controller, ticket_controller.Controller(Config(self.proj), self.pool)
+
+    def put_g1(self, **extra):
+        g = {"id": "g1", "branch": "int/g1", "state": "pr", "members": [], "fix_round": 0, "fix_retry": True}
+        g.update(extra)
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
+
+    def test_c1_spawn_with_round_then_one_commit(self):
+        self.put_g1(paused={"reason": "fixer", "at": "t", "text": ""})
+        self.pool.update(lambda tx: tx.write("inbox/p168.json", {
+            "kind": "decision", "ref": "g1", "text": "t", "at": osx.now(), "acked": False}), "test: page")
+        tc, ctl = self.ctl()
+        before = self.commits()
+        seen = []
+
+        def spawn(argv, *a, **kw):
+            seen.append((list(argv), self.commits()))
+            return mock.Mock(pid=4242)
+
+        with mock.patch.object(tc.osx, "spawn", side_effect=spawn):
+            ctl.start_fixer("g1", "/r.json", 1)
+        self.assertEqual(len(seen), 1, "auto_fixer spawned once")
+        argv, at_spawn = seen[0]
+        self.assertTrue(argv[1].endswith("auto_fixer.py"), argv)
+        self.assertEqual(argv[2:], ["--group", "g1", "--report", "/r.json", "--round", "1"])
+        self.assertEqual(at_spawn, before, "a pool commit was made before the spawn")
+        self.assertEqual(self.commits(), before + 1, "start_fixer makes exactly one pool commit")
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g["fix_report"]), ("fixing", 1, "/r.json"))
+        self.assertNotIn("fix_retry", g)
+        self.assertNotIn("paused", g)
+        job = g.get("job") or {}
+        self.assertEqual((job.get("kind"), job.get("out")), ("fixer", "/r.json"), g.get("job"))
+        stamp = job.get("stamp") or {}
+        self.assertEqual(stamp.get("pid"), 4242)
+        self.assertEqual(stamp.get("host"), osx.host())
+        self.assertEqual(stamp.get("boot"), osx.boot_id())
+        self.assertTrue(stamp.get("started"))
+        events = [h.get("event") for h in g.get("history") or []]
+        self.assertEqual(events[-2:], ["fix round 1", "fixer started"], events)
+        page = self.snap().inbox["p168"]
+        self.assertEqual(page.get("acked_by"), "superseded", page)
+
+    def test_c2_failed_spawn_writes_nothing(self):
+        self.put_g1()
+        tc, ctl = self.ctl()
+        before = self.commits()
+        with mock.patch.object(tc.osx, "spawn", side_effect=osx.OSFailure("cannot start auto_fixer.py")):
+            with self.assertRaises(osx.OSFailure):
+                ctl.start_fixer("g1", "/r.json", 1)
+        self.assertEqual(self.commits(), before, "a failed spawn made a pool commit")
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g.get("fix_retry")), ("pr", 0, True))
+        self.assertFalse(g.get("job"), g.get("job"))
+
+    def test_c3_auto_fixer_takes_round_from_flag(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]})
+        self.controller()
+        self.assertEqual(self.snap().groups["g1"].get("fix_round"), 1, "fixture: g1 at fix round 1")
+        report = os.path.join(self.tmp, "red-report.json")
+        with open(report, "w") as fh:
+            json.dump(self.RED, fh)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing", "fix"]})
+        res = self.run_py("auto_fixer.py", "--group", "g1", "--report", report, "--round", "2")
+        out = res.stdout + res.stderr
+        self.assertEqual(res.returncode, 0, out)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g.get("fix_agent_round"), 2, out)
+        events = [h.get("event") for h in g.get("history") or []]
+        self.assertIn("fixer agent started (round 2)", events)
+        self.assertTrue(os.path.isdir(os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r2")),
+                        "no run dir runs/fix/g1/r2")
+
+
 class FixerCasesChanged(LoopCase):
     """auto_fixer keeps the fixer's cases_changed on the group, one entry per case with its round."""
 
@@ -2768,15 +2867,15 @@ class FixAgentRoundUnits(LoopCase):
     def test_start_fixer_stores_the_report_and_drops_retry_and_pause(self):
         self.put("g1", state="pr", job=None, fix_round=0, fix_retry=True,
                  paused={"reason": "fixer", "at": "t", "text": ""})
+        import ticket_controller
         ctl = self.ctl()
-        jobs = []
-        ctl._start_job = lambda gid, kind, argv, out: jobs.append((gid, kind, out))
-        ctl.start_fixer("g1", "/r.json", 1)
+        with mock.patch.object(ticket_controller.osx, "spawn", return_value=mock.Mock(pid=4242)):
+            ctl.start_fixer("g1", "/r.json", 1)
         g = self.snap().groups["g1"]
         self.assertEqual((g["state"], g["fix_round"], g["fix_report"]), ("fixing", 1, "/r.json"))
         self.assertNotIn("fix_retry", g)
         self.assertNotIn("paused", g)
-        self.assertEqual(jobs, [("g1", "fixer", "/r.json")])
+        self.assertEqual(g["job"]["kind"], "fixer")
 
     def advance(self, **fields):
         self.add(1, state="merged", group="g1")   # #118: a group with no members left is cancelled

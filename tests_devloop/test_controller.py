@@ -868,6 +868,65 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+T167_HOLDER = (
+    "import fcntl, os, sys\n"
+    "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)\n"
+    "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+    "print(\"held\", flush=True)\n"
+    "sys.stdin.read()\n"
+)
+
+
+class T167Acceptance(unittest.TestCase):
+    """#167: the controller lock is a kernel flock on a lock file that stays (emptied) after release."""
+
+    def lock_path(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        return root, os.path.join(root, "controller.lock")
+
+    def test_b1_b2_a_flock_holder_refuses_even_on_an_empty_file_then_its_exit_lets_acquire_through(self):
+        _, path = self.lock_path()
+        open(path, "w").close()
+        proc = subprocess.Popen([sys.executable, "-c", T167_HOLDER, path],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+
+        def finish():
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            proc.wait(timeout=10)
+            proc.stdout.close()
+        self.addCleanup(finish)
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(path).acquire()
+        self.assertIn("already running", str(cm.exception))
+        self.assertIn(path, str(cm.exception))
+        self.assertTrue(os.path.exists(path), "a refused acquire must not delete the lock file")
+        self.assertEqual(os.path.getsize(path), 0, "a refused acquire must not write the lock file")
+        # B2: the holder ends (stdin closed) and is reaped; now acquire goes through.
+        proc.stdin.close()
+        proc.wait(timeout=10)
+        lock = osx.PidLock(path).acquire()
+        try:
+            self.assertEqual(osx.read_json(path)["pid"], os.getpid())
+        finally:
+            lock.release()
+
+    def test_b3_release_leaves_the_file_empty_so_no_controller_is_alive_and_a_second_release_is_harmless(self):
+        import board
+        from types import SimpleNamespace
+        root, path = self.lock_path()
+        lock = osx.PidLock(path).acquire()
+        lock.release()
+        self.assertTrue(os.path.exists(path), "release must leave the lock file in place")
+        self.assertEqual(os.path.getsize(path), 0, "release must clear the stamp")
+        self.assertFalse(board.controller_alive(SimpleNamespace(worktree_root=root)))
+        lock.release()
+
+
 class T159Acceptance(unittest.TestCase):
     """#159: devloop/README.md has launchd and systemd templates for the controller and the
     board, and CLAUDE.md names the restart that stops only the controller."""
@@ -1487,6 +1546,125 @@ class T29Acceptance(LoopCase):
         self.assertIn("docs/HANDOFF.md", text)
 
 
+PIDLOCK_CHILD = (
+    "import sys\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "from core import osx\n"
+    "lock = osx.PidLock(sys.argv[2]).acquire()\n"
+    "print('held', flush=True)\n"
+    "sys.stdin.read()\n"
+    "lock.release()\n"
+)
+
+
+class PidLockFlockUnits(unittest.TestCase):
+    """#167 B4-B7: the controller lock is a flock on a file that stays."""
+
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.dir = d
+        self.path = os.path.join(d, "controller.lock")
+
+    def _child(self):
+        proc = subprocess.Popen([sys.executable, "-c", PIDLOCK_CHILD, LOOP, self.path],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+
+        def end():
+            if proc.stdin and not proc.stdin.closed:
+                proc.stdin.close()
+            proc.wait(timeout=10)
+            proc.stdout.close()
+        self.addCleanup(end)
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        return proc, end
+
+    def _flock_free(self):
+        import fcntl
+        fd = os.open(self.path, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+        finally:
+            os.close(fd)
+
+    def test_live_child_holding_pidlock_refuses_parent(self):
+        proc, end = self._child()
+        self.assertEqual(osx.read_json(self.path)["pid"], proc.pid)
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(self.path).acquire()
+        self.assertIn("already running (pid %d" % proc.pid, str(cm.exception))
+        self.assertIn(self.path, str(cm.exception))
+        end()
+        self.assertEqual(os.path.getsize(self.path), 0)
+        lock = osx.PidLock(self.path).acquire()
+        self.addCleanup(lock.release)
+        self.assertEqual(osx.read_json(self.path)["pid"], os.getpid())
+
+    def test_stamp_written_in_place_and_fd_not_inheritable(self):
+        open(self.path, "w").close()
+        ino = os.stat(self.path).st_ino
+        lock = osx.PidLock(self.path).acquire()
+        self.addCleanup(lock.release)
+        self.assertEqual(os.stat(self.path).st_ino, ino)
+        self.assertFalse(os.get_inheritable(lock.fd))
+        self.assertFalse(self._flock_free())
+        lock.release()
+        self.assertTrue(self._flock_free())
+        self.assertEqual(os.stat(self.path).st_ino, ino)
+        self.assertEqual(os.path.getsize(self.path), 0)
+        self.assertIsNone(lock.fd)
+
+    def test_live_stamp_without_flock_refuses_and_lets_flock_go(self):
+        with open(self.path, "w") as fh:
+            json.dump(osx.stamp(), fh)
+        before = open(self.path).read()
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(self.path).acquire()
+        self.assertIn("already running (pid %d on " % os.getpid(), str(cm.exception))
+        self.assertIn("; lock %s" % self.path, str(cm.exception))
+        self.assertEqual(open(self.path).read(), before)
+        self.assertTrue(self._flock_free())
+
+    def test_dead_stamp_is_taken_over(self):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait(timeout=10)
+        st = dict(osx.stamp(), pid=proc.pid)
+        with open(self.path, "w") as fh:
+            json.dump(st, fh)
+        lock = osx.PidLock(self.path).acquire()
+        self.addCleanup(lock.release)
+        self.assertEqual(osx.read_json(self.path)["pid"], os.getpid())
+
+    def test_second_pidlock_in_same_process_is_refused(self):
+        lock = osx.PidLock(self.path).acquire()
+        self.addCleanup(lock.release)
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(self.path).acquire()
+        self.assertIn("already running", str(cm.exception))
+        self.assertEqual(osx.read_json(self.path)["pid"], os.getpid())
+
+    def test_other_oserror_names_the_path(self):
+        os.mkdir(self.path)
+        with self.assertRaises(osx.OSFailure) as cm:
+            osx.PidLock(self.path).acquire()
+        self.assertIn(self.path, str(cm.exception))
+
+    def test_controller_main_and_docs(self):
+        with open(os.path.join(LOOP, "ticket_controller.py")) as fh:
+            src = fh.read()
+        self.assertIn("osx.PidLock(os.path.join(cfg.worktree_root, \"controller.lock\")).acquire()", src)
+        self.assertIn("lock.release()", src)
+        self.assertIn("flock", osx.PidLock.__doc__)
+        self.assertIn("emptied", osx.PidLock.__doc__)
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        self.assertRegex(text, r"controller\.lock`\. The lock is an exclusive flock on that file"
+                               r"[^\n]*stays after the controller stops, emptied")
+
+
 class WorktreeSetup(LoopCase):
     """devloop.worktree_setup: the implementer's tests (core/worktrees.py and what it leaves)."""
 
@@ -1881,7 +2059,16 @@ class FollowMainUnits(LoopCase):
         self.commit_on("int/g1", {"shared.txt": "group\n"})
         self.commit_on("main", {"shared.txt": "main\n"})
         c = self.ctl()
-        c.advance_groups(self.snap())
+        # #168 C1: start_fixer writes the group in _start_job's one write after the spawn, so the
+        # real _start_job runs here with the spawn patched (as FixAgentRoundUnits does, #168 C5).
+        real = type(c)._start_job.__get__(c)
+
+        def start(gid, kind, argv, out, **kw):
+            c.started.append((gid, kind))
+            real(gid, kind, argv, out, **kw)
+        c._start_job = start
+        with mock.patch.object(osx, "spawn", return_value=mock.Mock(pid=4242)):
+            c.advance_groups(self.snap())
         self.assertEqual(c.started, [("g1", "fixer")])
         g = self.snap().groups["g1"]
         self.assertEqual((g["state"], g["fix_round"]), ("fixing", 1))

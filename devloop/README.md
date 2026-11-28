@@ -211,7 +211,7 @@ PATH: put first the folder of every agent command the project uses (`dirname "$(
 - `journalctl --user -u <unit> -f`
 - `loginctl enable-linger "$USER"` so it runs without a login session.
 
-**Exits.** A stop by SIGTERM ends the controller with `exit 0` and neither manager starts it again. Any other exit is restarted after 300 s. A controller that stopped itself on an error (exit 2 or 3) wrote a page first, so a cause that persists writes one such page per restart until it is fixed or the service is stopped. `ExitTimeOut` / `TimeoutStopSec` 600 give the current tick time to finish before the manager forces it. A manually started controller is stopped by sending SIGTERM to the pid in `<worktrees>/controller.lock`.
+**Exits.** A stop by SIGTERM ends the controller with `exit 0` and neither manager starts it again. Any other exit is restarted after 300 s. A controller that stopped itself on an error (exit 2 or 3) wrote a page first, so a cause that persists writes one such page per restart until it is fixed or the service is stopped. `ExitTimeOut` / `TimeoutStopSec` 600 give the current tick time to finish before the manager forces it. A manually started controller is stopped by sending SIGTERM to the pid in `<worktrees>/controller.lock`. The lock is an exclusive flock on that file, held for as long as the controller runs; the file stays after the controller stops, emptied (0 bytes), so an empty file means no controller.
 
 ## Project settings (`board/config.json`, key `devloop`)
 
@@ -513,8 +513,13 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 - The verifier names every acceptance case `T<id>Acceptance`: the mark must appear in each case's id as the test interface reports it in
   result.json (Python unittest: a class of that name; other runners: the test or file name); the
   worker writes unit tests for its own code and never uses that name. Before the cases are used,
-  the issuer runs them on the verifier's branch (old code + cases): every one must fail by its
-  assertion.
+  the issuer runs them on the verifier's branch (old code + cases): every one must have status exactly
+  `fail` (a `pass`, `error`, `skip` or `xfail` row sends them back to the verifier). After the change
+  they count only when the run is green and every row carrying the mark has status exactly `pass`
+  (none ran, or a skip / xfail, ends the round). From round 2 on (cases recorded when the round
+  started, no revision since), the classes and functions whose name holds the mark in the `.py`
+  files must be defined on the ticket branch exactly as on the cases branch (`case_definitions`,
+  compared by `ast.dump`); a worker that changes them gets the round back.
 - The worker runs the verifier's cases, its own unit tests and the base set (`devloop.base_tests`,
   default `tests.unittest.base`) before handing in; the full suite is the regression's.
 - devloop calls only `tests.preflight`, the optional `tests.quick`, `tests.run` and `tests.full` (it

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""auto_fixer --group gK --report regression.json : fix a red integration branch, on that branch.
+"""auto_fixer --group gK --report regression.json [--round N] : fix a red integration branch, on that branch.
 
 Started only by ticket_controller, once per fix round (the controller counts rounds and re-runs
 regression afterwards). Two kinds of red:
@@ -105,7 +105,7 @@ def mark_agent_round(pool, gid, rnd, start_sha=None):
     pool.update(change, "group %s: fixer agent started (round %d)" % (gid, rnd))
 
 
-def fix(cfg, pool, gid, report, live=None):
+def fix(cfg, pool, gid, report, live=None, rnd=None):
     live = [] if live is None else live
     snap = pool.snapshot()
     group = snap.groups.get(gid)
@@ -126,7 +126,8 @@ def fix(cfg, pool, gid, report, live=None):
     if main_moved:
         g.merge(main)                  # a clean merge goes in here; the agent still runs
 
-    rnd = int(group.get("fix_round") or 0)
+    if rnd is None:
+        rnd = int(group.get("fix_round") or 0)
     run_dir = cfg.runs_dir("fix", gid, "r%d" % rnd)
     members = []
     for ident in group.get("members") or []:
@@ -358,6 +359,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--group", required=True)
     ap.add_argument("--report", required=True, help="regression.py --out file")
+    ap.add_argument("--round", type=int, help="the fix round (default: the group's fix_round)")
     args = ap.parse_args(argv)
     def on_signal(signum, frame):
         raise agents.Interrupted("signal %d" % signum)
@@ -374,8 +376,8 @@ def main(argv=None):
         grp = pool.snapshot().groups.get(args.group) or {}
         inflight.put(cfg, fixer_name, {
             "kind": "fixer", "stamp": osx.stamp(), "group": args.group,
-            "round": grp.get("fix_round") or 0, "max_rounds": cfg.max_rounds, "result": None})
-        return fix(cfg, pool, args.group, report, live)
+            "round": args.round if args.round is not None else grp.get("fix_round") or 0, "max_rounds": cfg.max_rounds, "result": None})
+        return fix(cfg, pool, args.group, report, live, args.round)
     except agents.Interrupted:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)

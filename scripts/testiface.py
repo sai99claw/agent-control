@@ -45,7 +45,7 @@ reason on stderr · 3 `select` / `regression` had nothing to select (the command
 that is a smaller positive integer wins — verify-case passes `verify_case.timeout_seconds` that
 way, #163) is `unmeasured: timeout`;
 `select` rc 0 with empty stdout; `quick`/`run`/`full`/`regression` whose `result.json` is missing,
-invalid, `schema != 1`, has zero ids, ids other than the ones passed (`run`; a row id covers a
+invalid (a row status other than `pass` / `fail` / `error` / `skip` / `xfail`), `schema != 1`, has zero ids, ids other than the ones passed (`run`; a row id covers a
 passed id it equals or is nested under, as the adapter reports methods for a module id), a
 fail/error row under rc 0, no fail/error row under rc 1, rows under rc 0/1, or rc 86 with
 `environment_suspect: []`; `preflight` rc 86 without a JSON list of rows on stdout, or any other
@@ -233,7 +233,7 @@ def check_result(command, out, rc, passed):
     ids = data.get("ids")
     if not isinstance(ids, list) or not all(
             isinstance(row, dict) and isinstance(row.get("id"), str)
-            and row.get("status") in ("pass", "fail", "error", "skip") for row in ids):
+            and row.get("status") in ("pass", "fail", "error", "skip", "xfail") for row in ids):
         return None, "result.json ids are not a list of {id, status}"
     suspects = data.get("environment_suspect")
     if not isinstance(suspects, list) or not all(isinstance(row, dict) for row in suspects):

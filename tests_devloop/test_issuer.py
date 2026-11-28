@@ -1521,6 +1521,72 @@ class FreeRounds(LoopCase):
                          "conflict, 1 revision); last feedback:\nround 4: last")
 
 
+class CaseDefinitionsGate(LoopCase):
+    """When the round-2 comparison of the cases' definitions runs and when it does not (#166 A8).
+    The worker's round-1 commit adds a .py class named with the mark that the cases branch lacks,
+    so the comparison, when it runs, always differs."""
+
+    PY = {"tests/extra_t1.py": "class T1Acceptance:\n    pass\n"}
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.env["FAKE_WORKER_FILES"] = json.dumps(self.PY)
+
+    def run_one(self, extra=None, **plan):
+        self.add(1, **(extra or {}))
+        self.plan(**plan)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap().ticket("1")
+
+    def feedback(self, t):
+        return [h for h in t["history"] if h["event"] == "feedback"]
+
+    def test_round_two_with_recorded_cases_compares_them(self):
+        # control: the same set-up as the cases below, checked, sends the round back
+        self.config(max_rounds=2)
+        t = self.run_one(extra={"complexity": "complex"}, worker={"1": ["write_files", "ok"]},
+                         reviewer={"1": ["fail", "pass"]})
+        self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "rounds"))
+        self.assertIn("changes the verifier's acceptance cases", t["feedback"][-1])
+        self.assertIn("tests/extra_t1.py T1Acceptance", t["feedback"][-1])
+        self.assertNotIn("free", self.feedback(t)[-1])
+
+    def test_round_one_is_not_compared(self):
+        t = self.run_one(worker={"1": ["write_files"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+
+    def test_a_round_that_started_without_cases_is_not_compared(self):
+        # round 1's cases are refused (they already pass); round 2's verifier writes them anew
+        t = self.run_one(worker={"1": ["write_files", "ok"]}, verifier={"1": ["weak", "ok"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+
+    def test_a_round_with_a_revision_after_its_start_is_not_compared(self):
+        t = self.run_one(extra={"complexity": "complex"}, worker={"1": ["write_files", "revise"]},
+                         reviewer={"1": ["fail", "pass"]}, creator={"1": ["revised_estimate"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+        starts = [i for i, h in enumerate(t["history"]) if h["event"] == "round start"]
+        self.assertTrue(any(h["event"] == "revised" for h in t["history"][starts[-1]:]))
+
+    def test_a_ticket_without_verifier_is_not_compared(self):
+        t = self.run_one(extra={"complexity": "complex", "needs_verifier": False},
+                         worker={"1": ["write_files", "ok"]}, reviewer={"1": ["fail", "pass"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+
+
+class RevisedSinceRoundStart(unittest.TestCase):
+    def test_any_revised_event_after_the_last_round_start(self):
+        import ticket_issuer
+        f = ticket_issuer.revised_since_round_start
+        self.assertFalse(f({}))
+        self.assertFalse(f({"history": [{"event": "revised"}, {"event": "round start"}]}))
+        self.assertTrue(f({"history": [{"event": "round start"}, {"event": "revised"}]}))
+        self.assertTrue(f({"history": [{"event": "round start"}, {"event": "revised", "fields": []},
+                                       {"event": "feedback"}]}))
+
+
 class RevisedMidRound(LoopCase):
     """#157: a revision of the brief (or with cases_wrong) made while a round runs ends that round."""
 
@@ -2534,6 +2600,171 @@ class RedCheck(LoopCase):
 
     def test_the_unnamed_message_points_at_result_json(self):
         self._round_two("unnamed", "result.json")
+
+
+class T166Acceptance(LoopCase):
+    """#166: acceptance cases count only by their exact result; a worker's change to them is sent back."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+
+    # ------------------------------------------------------------ A3: red check, exactly fail
+    def _red_check_back(self, action, row):
+        self.add(1)
+        self.plan(verifier={"1": [action, "ok"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        t = self.snap().ticket("1")
+        fed = [h for h in t["history"] if h["event"] == "feedback"]
+        self.assertEqual((t["state"], t["round"], len(fed)), ("landed", 2, 1))
+        log = git(self.pool_path, "log", "--format=%H", "--grep", "#1: round 1 feedback")
+        self.assertTrue(log.strip(), "no round 1 feedback commit in the pool")
+        old = json.loads(git(self.pool_path, "show", "%s:tickets/1.json" % log.split()[0]))
+        text = old["feedback"][-1]
+        self.assertIn("did not fail on the code before the change", text)
+        self.assertIn(row, text)
+        roles = [(c["role"], c["round"]) for c in t["cost"]]
+        self.assertEqual(roles, [("worker", 1), ("verifier", 1), ("verifier", 2)])
+
+    def test_a3_skip_before_the_change_goes_back_to_the_verifier(self):
+        self._red_check_back("skip", "case_1.T1Acceptance.test_it (skip)")
+
+    def test_a3_xfail_before_the_change_goes_back_to_the_verifier(self):
+        self._red_check_back("xfail", "case_1.T1Acceptance.test_it (xfail)")
+
+    # ------------------------------------------------------------ A2 + A4: case runs, exactly pass
+    def _worker_side(self, marker):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.env["FAKE_WORKER_FILES"] = json.dumps({marker: "x"})
+        self.plan(worker={"1": ["write_files"]})
+        self.controller()
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "stuck")
+        events = [h["event"] for h in t["history"]]
+        self.assertNotIn("merged", events)
+        self.assertNotIn("landed", events)
+        self.assertFalse(self.main_has("impl_1.txt"))
+        return t["feedback"][-1]
+
+    def test_a4_skip_row_after_the_change_does_not_pass(self):
+        text = self._worker_side("cases/case_1.skip")
+        for words in ("verifier cases: ", "did not pass", "case_1.T1Acceptance.test_it (skip)"):
+            self.assertIn(words, text)
+
+    def test_a2_a4_xfail_row_is_measured_and_does_not_pass(self):
+        text = self._worker_side("cases/case_1.xfail")
+        for words in ("verifier cases: ", "did not pass", "case_1.T1Acceptance.test_it (xfail)"):
+            self.assertIn(words, text)
+
+    def test_a4_no_mark_row_after_the_change_does_not_pass(self):
+        text = self._worker_side("cases/case_1.unnamed")
+        self.assertIn("verifier cases: no acceptance case named T1Acceptance ran", text)
+
+    # ------------------------------------------------------------ A5: verifier prompt
+    def test_a5_verifier_step_one_keeps_helpers_inside_the_mark_class(self):
+        from core import agents
+        text = agents.render("verifier.md", {"case_mark": "T7Acceptance"})
+        step = text.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+        self.assertIn("Helpers that only this ticket's cases use go inside the T7Acceptance class", step)
+
+    # ------------------------------------------------------------ A6: case_definitions
+    SOURCE_A = ("import unittest\n\n\nclass T7Acceptance(unittest.TestCase):\n"
+                "    def test_a(self):\n        self.assertTrue(True)\n")
+
+    def _defs_repo(self):
+        import ticket_issuer
+        self.assertTrue(hasattr(ticket_issuer, "case_definitions"), "ticket_issuer.case_definitions is missing")
+        from core.gitx import Git
+        repo = os.path.join(self.tmp, "defs")
+        os.makedirs(os.path.join(repo, "tests"))
+        git(repo, "init", "-q")
+
+        def commit(files):
+            for rel, text in files.items():
+                with open(os.path.join(repo, rel), "w") as fh:
+                    fh.write(text)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "c")
+            return git(repo, "rev-parse", "HEAD")
+
+        def defs(sha, mark="T7Acceptance"):
+            return ticket_issuer.case_definitions(Git(repo), sha, mark)
+        return commit, defs
+
+    def _base(self):
+        import ast
+        commit, defs = self._defs_repo()
+        a = commit({"tests/test_x.py": self.SOURCE_A, "notes.txt": "T7Acceptance\n"})
+        want = {("tests/test_x.py", "T7Acceptance"): [ast.dump(ast.parse(self.SOURCE_A).body[1])]}
+        return commit, defs, a, want
+
+    def test_a6_definitions_at_a_commit(self):
+        commit, defs, a, want = self._base()
+        self.assertEqual(defs(a), want)
+        self.assertEqual(defs(a, "T9Acceptance"), {})
+
+    def test_a6_comments_and_blank_lines_leave_it_equal(self):
+        commit, defs, a, want = self._base()
+        b = commit({"tests/test_x.py": self.SOURCE_A.replace(
+            "\nclass T7", "\n# a comment\n\n\nclass T7")})
+        self.assertEqual(defs(b), defs(a))
+
+    def test_a6_a_changed_body_differs(self):
+        commit, defs, a, want = self._base()
+        b = commit({"tests/test_x.py": self.SOURCE_A.replace("assertTrue(True)", "assertTrue(1)")})
+        self.assertNotEqual(defs(b), defs(a))
+
+    def test_a6_an_added_decorator_differs(self):
+        commit, defs, a, want = self._base()
+        b = commit({"tests/test_x.py": self.SOURCE_A.replace(
+            "    def test_a", "    @unittest.expectedFailure\n    def test_a")})
+        self.assertNotEqual(defs(b), defs(a))
+
+    def test_a6_a_second_same_named_class_gives_two_entries(self):
+        commit, defs, a, want = self._base()
+        b = commit({"tests/test_x.py": self.SOURCE_A + "\n\nclass T7Acceptance(unittest.TestCase):\n"
+                    "    def test_a(self):\n        pass\n"})
+        self.assertEqual(len(defs(b)[("tests/test_x.py", "T7Acceptance")]), 2)
+
+    def test_a6_a_module_level_helper_with_the_mark_is_a_key(self):
+        commit, defs, a, want = self._base()
+        b = commit({"tests/test_x.py": self.SOURCE_A + "\n\ndef helper_T7Acceptance():\n    return 1\n"})
+        self.assertIn(("tests/test_x.py", "helper_T7Acceptance"), defs(b))
+
+    def test_a6_a_file_that_does_not_parse_gives_a_syntax_error_entry(self):
+        commit, defs, a, want = self._base()
+        b = commit({"tests/test_y.py": "class T7Acceptance(\n"})
+        got = defs(b)
+        self.assertIn(("tests/test_y.py", None), got)
+        self.assertEqual(len(got[("tests/test_y.py", None)]), 1)
+        self.assertTrue(got[("tests/test_y.py", None)][0].startswith("SyntaxError"), got[("tests/test_y.py", None)])
+
+    # ------------------------------------------------------------ A7: round-2 comparison
+    def _round_two_change(self, action):
+        self.config(max_rounds=2)
+        self.add(1)
+        self.plan(verifier={"1": ["py_cases"]}, worker={"1": ["wrong", action]})
+        self.controller()
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "stuck")
+        self.assertEqual(t["stuck"]["reason"], "rounds")
+        fed = [h for h in t["history"] if h["event"] == "feedback" and h.get("round") == 2]
+        self.assertTrue(fed, "no round 2 feedback event")
+        self.assertNotIn("free", fed[-1])
+        text = t["feedback"][-1]
+        self.assertTrue(text.startswith("round 2: "), text)
+        for words in ("changes the verifier's acceptance cases", "cases/test_case_1.py", "T1Acceptance"):
+            self.assertIn(words, text)
+        self.assertEqual(git(self.proj, "ls-tree", "--name-only", "main", "cases/test_case_1.py"), "")
+
+    def test_a7_a_round_two_edit_of_the_case_body_is_sent_back(self):
+        self._round_two_change("edit_cases")
+
+    def test_a7_a_round_two_second_same_named_class_is_sent_back(self):
+        self._round_two_change("dup_cases")
 
 
 class RebaseConflictUnits(LoopCase):

@@ -74,6 +74,10 @@ def case_row(i):
         status = "pass"
     if os.path.exists("cases/case_%s.error" % n):
         status = "error"
+    if os.path.exists("cases/case_%s.skip" % n):   # #166: a case row reported as skip
+        status = "skip"
+    if os.path.exists("cases/case_%s.xfail" % n):   # #166: a case row reported as xfail
+        status = "xfail"
     mark = "Unnamed" if os.path.exists("cases/case_%s.unnamed" % n) else "T%sAcceptance" % n
     return {"id": "%s.%s.test_it" % (i, mark), "status": status}
 
