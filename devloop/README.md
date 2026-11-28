@@ -308,6 +308,21 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   events as above, but no cost row: nothing ran) and then start the chain again; the opener ends at
   once with its out-of-quota page, the record's text and `until` standing for the message and the
   reset.
+- Expired login (machine-wide, D-102): a run that ends with no hand-in, not timed out and a
+  non-zero exit code, whose CLI error text (claude's result text, codex's error events; any other
+  CLI's log tail) holds one of `agents.LOGIN_SIGNS` ("not logged in", "please run /login",
+  "invalid api key", "oauth access token is invalid", "refresh token has expired", "no codex
+  credentials", …), is a login failure, checked before quota: never counted as out of quota. Its
+  program is written into the cooldown file as `{"state": "needs_login", "since", "text",
+  "project", "role"}` under the program's name alone (no `--model`, no `until`): every `--model`
+  of it is skipped by every chain start of every role and project on the machine (cost row and
+  `fell_back_from` outcome `needs login`), until `actl tickets login-ok <program>` removes it. The
+  failure that parks the program sends one env page `login-<program>` (through devloop.notify);
+  later failures and skips send none. A chain whose every command is parked waits like a cooling
+  one (re-reading the file every `poll_seconds`; with only login records, until
+  `quota_retry_seconds` at most, then it looks again) and starts again as soon as one command is
+  free; the opener does not wait: it ends with a decision page `request` telling you to log in and
+  run `actl tickets login-ok <program>`.
 - A ticket may carry `effort` (low … max); it replaces the worker command's `--effort`.
 - The verifier names every acceptance case `T<id>Acceptance`: the mark must appear in each case's id as the test interface reports it in
   result.json (Python unittest: a class of that name; other runners: the test or file name); the

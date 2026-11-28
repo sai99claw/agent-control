@@ -1687,7 +1687,7 @@ class CooldownUnits(LoopCase):
         hand = agents.run(self.cfg(chain), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30)
         self.assertLess(time.time() - began, 5)
         self.assertEqual((hand.result, hand.cost, hand.log), (None, None, None))
-        self.assertEqual(hand.cooling, {"until": int(until), "text": "cools", "command": "sh m1"})
+        self.assertEqual(hand.cooling, {"until": int(until), "text": "cools", "command": "sh m1", "state": "quota"})
         self.assertIn("sh m1", hand.problem())
         self.assertFalse(os.path.exists(ran))
 
@@ -2223,6 +2223,307 @@ class MissingProgramKeepsText(unittest.TestCase):
                 self.assertNotIsInstance(ctx.exception, osx.CwdMissing)
                 self.assertTrue(str(ctx.exception).startswith(
                     "cannot start no-such-program-132: not found ("), str(ctx.exception))
+
+
+class LoginUnits(LoopCase):
+    """#150 implementer's tests: agents.LOGIN_SIGNS and _says_login, cooldown.record_login and the
+    replace rules, the one env page, the parked wait and the opener's login page."""
+
+    LOGIN_TEXTS = (
+        "Invalid API key · Fix external API key",
+        "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+        "Not logged in · Please run /login",
+        "Login expired · Please run /login",
+        "OAuth token revoked · Please run /login",
+        "Login reached its time limit · Please run /login",
+        "Authentication required · Sign in again to continue",
+        "Invalid auth token · Fix external auth token",
+        "Not logged in. Run claude auth login to authenticate.",
+        "Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+        "Failed to authenticate: this login reached its time limit and cannot be renewed. "
+        "Run `claude auth login` to sign in again",
+        "Anthropic profile login expired · Re-authenticate your Anthropic profile",
+        "API Error: 401 Invalid API key · Please run /login",
+        'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired"}}',
+        "Your access token could not be refreshed because your refresh token has expired. "
+        "Please log out and sign in again.",
+        "Your access token could not be refreshed because your refresh token was already used. "
+        "Please log out and sign in again.",
+        "Your access token could not be refreshed because your refresh token was revoked. "
+        "Please log out and sign in again.",
+        "Your access token could not be refreshed. Please log out and sign in again.",
+        "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+        "no Codex credentials were found",
+        "Run codex login or provide an API key through a supported auth env var.",
+        "Codex account has no refresh token; sign in again",
+        "Not logged in",
+    )
+    OTHER_TEXTS = (
+        "You've hit your limit · resets 3pm",
+        "Claude AI usage limit reached|1900000000",
+        "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again in 2 days 3 hours",
+        'API Error: 429 {"type":"error","error":{"type":"usage_limit_reached","message":"x"}}',
+        "Authentication error · This may be a temporary network issue, please try again",
+    )
+    LOGIN_LINE = "Not logged in · Please run /login"
+    QUOTA_RESET = "Error: usage limit reached, resets in 2h"
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.file = os.environ["AC_COOLDOWN_FILE"]
+
+    cfg = CooldownUnits.cfg
+
+    def stamp(self, epoch):
+        return time.strftime(self.FMT, time.gmtime(epoch))
+
+    def write(self, commands):
+        osx.write_json(self.file, {"version": 1, "commands": commands})
+
+    def data(self):
+        with open(self.file) as fh:
+            return json.load(fh)
+
+    def log(self, text, claude=False):
+        path = os.path.join(self.tmp, "agent.log")
+        with open(path, "w") as fh:
+            if claude:
+                fh.write(json.dumps({"type": "result", "is_error": True, "result": text}) + "\n")
+            else:
+                fh.write("some work\n" + text + "\n")
+        return path
+
+    def program(self, name, script):
+        """An executable <tmp>/<dir>/<name> running `script` (stdin read first)."""
+        folder = os.path.join(self.tmp, "p%d" % len(os.listdir(self.tmp)))
+        os.makedirs(folder)
+        path = os.path.join(folder, name)
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\ncat >/dev/null\n%s\n" % script)
+        os.chmod(path, 0o755)
+        return path
+
+    def fixture(self, text):
+        path = os.path.join(self.tmp, "fixture-%d.txt" % len(os.listdir(self.tmp)))
+        with open(path, "w") as fh:
+            fh.write(text + "\n")
+        return path
+
+    DONE = ["sh", "-c", "cat >/dev/null; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\""]
+
+    def env_pages(self, ref):
+        return [r for r in self.snap().inbox.values() if (r.get("kind"), r.get("ref")) == ("env", ref)]
+
+    # ---------------------------------------------------------------- acceptance 1: the text table
+
+    def test_the_text_table(self):
+        from core import agents
+        for text in self.LOGIN_TEXTS:
+            for claude in (False, True):
+                with self.subTest(n=self.LOGIN_TEXTS.index(text), claude=claude):
+                    self.assertTrue(agents._says_login(self.log(text, claude), 1))
+                    self.assertFalse(agents._says_login(self.log(text, claude), 0))
+        for text in self.OTHER_TEXTS:
+            with self.subTest(other=self.OTHER_TEXTS.index(text)):
+                self.assertFalse(agents._says_login(self.log(text), 1))
+                self.assertFalse(agents._says_login(self.log(text, True), 1))
+        self.assertEqual(agents.login_line("a\n  %s  \nb" % self.LOGIN_LINE), self.LOGIN_LINE)
+        self.assertEqual(len(agents.login_line(self.LOGIN_LINE + "x" * 300)), 200)
+
+    def test_login_is_checked_before_quota_and_exit_0_is_neither(self):
+        from core import agents
+        both = self.fixture(self.LOGIN_LINE + " (rate limit headers missing)")
+        hand = agents.start(self.cfg([["sh", "-c", "cat >/dev/null; cat %s; exit 1" % both]]), "worker", "go",
+                            self.proj, os.path.join(self.tmp, "run"), 30).finish()
+        self.assertEqual(hand.cost["outcome"], "needs login")
+        self.assertEqual(self.data()["commands"]["sh"]["state"], "needs_login")
+        os.unlink(self.file)
+        hand = agents.start(self.cfg([["sh", "-c", "cat >/dev/null; cat %s; exit 0" % both]]), "worker", "go",
+                            self.proj, os.path.join(self.tmp, "run2"), 30).finish()
+        self.assertNotEqual(hand.cost["outcome"], "needs login")
+        self.assertNotEqual((agents.cooldown.records().get("sh") or {}).get("state"), "needs_login")
+
+    # ---------------------------------------------------------------- acceptance 2: replace rules
+
+    def test_record_login_replace_rules_and_model_variants(self):
+        from core import cooldown
+        now = time.time()
+        self.write({"claude": {"state": "quota", "until": self.stamp(now + 100), "text": "q"},
+                    "claude opus": {"state": "quota", "until": self.stamp(now + 100), "text": "q"}})
+        self.assertTrue(cooldown.record_login(["claude", "-p", "--model", "sonnet"], "t1", "proj", "worker"))
+        self.assertFalse(cooldown.record_login(["/x/claude"], "t2", "p2", "reviewer"))
+        rec = self.data()["commands"]["claude"]
+        self.assertEqual(rec, {"state": "needs_login", "since": rec["since"], "text": "t1", "project": "proj",
+                               "role": "worker"})
+        self.assertLessEqual(abs(calendar.timegm(time.strptime(rec["since"], self.FMT)) - now), 3)
+        cooldown.record_quota(["claude"], now + 500, "q2", "proj", "worker")
+        self.assertEqual(self.data()["commands"]["claude"]["state"], "needs_login")
+        for argv in (["claude"], ["claude", "--model", "opus"], ["/usr/bin/claude", "--model", "haiku"]):
+            self.assertEqual((cooldown.blocking(argv, now) or {}).get("state"), "needs_login", argv)
+        # a login record has no until and is kept by every later rewrite, however old
+        cooldown.record_quota(["codex"], now + 50, "q3", "proj", "worker")
+        self.assertEqual(sorted(self.data()["commands"]), ["claude", "claude opus", "codex"])
+        self.assertIsNone(cooldown.blocking(["claude"], now + 10 ** 6).get("until"))
+
+    # ---------------------------------------------------------------- acceptance 3-4: skip and page
+
+    def test_one_page_then_skipped_without_another(self):
+        from core import agents
+        count = os.path.join(self.tmp, "count")
+        fail = self.program("agy.sh", 'echo x >> %s\ncat %s\nexit 1' % (count, self.fixture(self.LOGIN_LINE)))
+        chain = [[fail, "--model", "m1"], self.DONE]
+        for n in (1, 2):
+            hand = agents.start(self.cfg(chain), "worker", "go", self.proj,
+                                os.path.join(self.tmp, "run%d" % n), 30).finish()
+            self.assertEqual(hand.kind, "done")
+            self.assertEqual(hand.cost["fell_back_from"],
+                             [{"command": fail, "model": "m1", "outcome": "needs login"}])
+        with open(count) as fh:
+            self.assertEqual(len(fh.read().split()), 1)
+        pages_ = self.env_pages("login-agy.sh")
+        self.assertEqual(len(pages_), 1)
+        self.assertEqual(pages_[0]["text"], "agy.sh needs a new login\n%s\ndevloop skips agy.sh in every project "
+                         "on this machine until you log in again and run `actl tickets login-ok agy.sh`"
+                         % self.LOGIN_LINE)
+        rec = self.data()["commands"]["agy.sh"]
+        self.assertEqual((rec["text"], rec["role"], "until" in rec), (self.LOGIN_LINE, "worker", False))
+
+    def test_a_page_that_cannot_be_written_prints_one_line_and_goes_on(self):
+        from core import agents
+        fail = self.program("agy.sh", "cat %s\nexit 1" % self.fixture(self.LOGIN_LINE))
+        err = io.StringIO()
+        with mock.patch("core.pool.Pool.report", side_effect=osx.OSFailure("no pool")), \
+                mock.patch("sys.stderr", err):
+            hand = agents.start(self.cfg([[fail], self.DONE]), "worker", "go", self.proj,
+                                os.path.join(self.tmp, "run"), 30).finish()
+        self.assertEqual(hand.kind, "done")
+        self.assertEqual(len(err.getvalue().strip().splitlines()), 1, err.getvalue())
+        self.assertEqual(self.data()["commands"]["agy.sh"]["state"], "needs_login")
+
+    def test_without_the_hook_a_login_parked_chain_returns_at_once(self):
+        from core import agents
+        self.write({"agy.sh": {"state": "needs_login", "since": self.stamp(time.time()), "text": "x"}})
+        ran = os.path.join(self.tmp, "ran")
+        hand = agents.run(self.cfg([[self.program("agy.sh", "touch %s" % ran)]]), "worker", "go", self.proj,
+                          os.path.join(self.tmp, "run"), 30)
+        self.assertEqual((hand.result, hand.cost), (None, None))
+        self.assertEqual((hand.cooling["state"], hand.cooling["command"], hand.cooling["text"]),
+                         ("needs_login", "agy.sh", "x"))
+        self.assertIn("agy.sh", hand.problem())
+        self.assertFalse(os.path.exists(ran))
+
+    # ---------------------------------------------------------------- acceptance 5: the parked wait
+
+    def test_a_mixed_park_waits_for_the_cooling_until_and_restarts(self):
+        import threading
+        from core import agents
+        now = time.time()
+        self.write({"agy.sh": {"state": "needs_login", "since": self.stamp(now), "text": "x"},
+                    "sh m1": {"state": "quota", "until": self.stamp(now + 3), "text": "cools"}})
+        ran = os.path.join(self.tmp, "ran")
+        chain = [[self.program("agy.sh", "exit 1")],
+                 ["sh", "-c", "cat >/dev/null; touch %s; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\"" % ran,
+                  "sh", "--model", "m1"]]
+        calls = []
+        p = agents.start(self.cfg(chain, quota_retry_seconds=600), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30,
+                         on_quota=lambda phase, row=None, until=None, text=None: calls.append((phase, row, until, text)))
+        box = []
+        t = threading.Thread(target=lambda: box.append(p.finish()))
+        t.start()
+        t.join(15)
+        self.assertFalse(t.is_alive())
+        self.assertEqual([c[0] for c in calls], ["wait", "over"])
+        self.assertEqual((calls[0][1], calls[0][3]), (None, "cools"))
+        self.assertLessEqual(abs(calls[0][2] - int(now + 3)), 1)
+        self.assertEqual(box[0].kind, "done")
+        self.assertEqual([h["outcome"] for h in box[0].cost["fell_back_from"]], ["needs login"])
+        self.assertGreater(p.waited, 1)
+
+    def test_a_login_run_at_the_chain_end_hands_its_row_to_the_wait(self):
+        import threading
+        from core import agents
+        count = os.path.join(self.tmp, "count")
+        once = self.program("agy.sh", 'n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s\n'
+                            'if [ "$n" -lt 1 ]; then cat %s; exit 1; fi\n'
+                            'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"'
+                            % (count, count, self.fixture(self.LOGIN_LINE)))
+        calls = []
+        seen = threading.Event()
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append((phase, row, until, text))
+            seen.set()
+        p = agents.start(self.cfg([[once]], quota_retry_seconds=600), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30, on_quota=hook)
+        box = []
+        t = threading.Thread(target=lambda: box.append(p.finish()))
+        t.start()
+        self.assertTrue(seen.wait(10))
+        self.assertEqual(calls[0][1]["outcome"], "needs login")
+        self.assertEqual(calls[0][3], "agy.sh needs a new login (actl tickets login-ok agy.sh)")
+        self.assertLessEqual(abs(calls[0][2] - (time.time() + 600)), 5)
+        self.assertIsNone(p.stop())
+        self.write({})
+        t.join(5)
+        self.assertFalse(t.is_alive())
+        self.assertEqual([c[0] for c in calls], ["wait", "over"])
+        self.assertEqual(box[0].kind, "done")
+
+    # ---------------------------------------------------------------- acceptance 6: the opener
+
+    def opener(self, chain, records):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.config(agents=dict({r: AGENT for r in ROLES}, creator=chain))
+        self.write(records)
+        return self.run_py("ticket_creator.py", "--request", "x", timeout=60)
+
+    def test_the_opener_with_a_login_parked_chain(self):
+        now = time.time()
+        res = self.opener([AGENT], {"python3": {"state": "needs_login", "since": self.stamp(now), "text": "x"}})
+        self.assertEqual(res.returncode, 1, res.stderr)
+        rows = [r for r in self.snap().inbox.values() if r.get("kind") == "decision"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["text"], "the opener could not run: python3 needs a new login; nothing was opened:\n"
+                         "x\nlog in again, run `actl tickets login-ok python3`, then send the request again "
+                         "with `actl new --request`")
+        self.assertEqual((rows[0]["ref"], rows[0]["cost"]), ("request", []))
+        self.assertEqual([o["action"] for o in rows[0]["options"]], ["ack"])
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+
+    def test_the_opener_with_a_mixed_park_gets_the_quota_page(self):
+        now = time.time()
+        res = self.opener([AGENT, ["sh", "-c", "exit 1", "sh", "--model", "m1"]],
+                          {"python3": {"state": "needs_login", "since": self.stamp(now), "text": "x"},
+                           "sh m1": {"state": "quota", "until": "2030-03-17T17:46:40Z", "text": "cools"}})
+        self.assertEqual(res.returncode, 1, res.stderr)
+        rows = [r for r in self.snap().inbox.values() if r.get("kind") == "decision"]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["text"].startswith("the opener is out of quota; nothing was opened:\ncools\n"),
+                        "not the out-of-quota page")
+        self.assertIn("2030-03-17T17:46:40Z", rows[0]["text"])
+
+    # ---------------------------------------------------------------- acceptance 7: README
+
+    def test_readme_bullet_follows_the_cooldown_bullet(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        sec = text.split("\n## Agents, models and tests (D-084)", 1)[1].split("\n## ", 1)[0]
+        bullets = sec.split("\n- ")
+        i = [n for n, b in enumerate(bullets) if b.startswith("Quota cooldown")][0]
+        nxt = bullets[i + 1]
+        for word in ("claude", "codex", "log tail", "needs_login", "until", "login-<program>",
+                     "`actl tickets login-ok <program>`", "waits"):
+            self.assertIn(word, nxt)
 
 
 class ChainStartUnits(LoopCase):

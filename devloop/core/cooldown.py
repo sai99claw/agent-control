@@ -8,6 +8,11 @@ The file is $AC_COOLDOWN_FILE, else ~/.agent-control/cooldown.json:
 A command's key is the program's basename plus its --model value ("claude opus"): one program and
 model share one record across roles, efforts and projects.
 
+A program whose login is missing or expired has the record {"state": "needs_login", "since",
+"text", "project", "role"} (no until) under its basename alone (one login per program, D-102): it
+parks every --model of that program until the record is removed (`actl tickets login-ok`). It
+replaces a quota record of the same key; a quota hit never replaces it.
+
 The lock is a separate file, <path>.lock (created when missing, never deleted or replaced): the
 data file is rewritten whole by replacing it (osx.write_json), and a flock on a replaced file would
 stop counting. LOCK_EX on it is held only while the data file is read and rewritten. A missing,
@@ -68,14 +73,24 @@ def _cooling(rec, now):
     return rec.get("state") == "quota" and when is not None and when > now
 
 
+def _kept(rec, now):
+    return _cooling(rec, now) or rec.get("state") == "needs_login"
+
+
 def blocking(argv, now):
-    """The record that keeps `argv` from starting at `now`, or None."""
-    rec = records().get(key(argv))
+    """The record that keeps `argv` from starting at `now` (its program's needs_login record, else
+    its own cooling record), or None."""
+    recs = records()
+    login = recs.get(os.path.basename(argv[0]))
+    if login is not None and login.get("state") == "needs_login":
+        return login
+    rec = recs.get(key(argv))
     return rec if rec is not None and _cooling(rec, now) else None
 
 
-def record_quota(argv, until, text, project, role):
-    """Set the record of argv's key (quota until epoch `until`), dropping expired records."""
+def _rewrite(name, change):
+    """Under the lock: change(commands, now) on the kept records (expired ones dropped); a True
+    return writes them back. Returns what change returned, or None when the file cannot be written."""
     target = path()
     try:
         osx.makedirs(os.path.dirname(target))
@@ -83,12 +98,42 @@ def record_quota(argv, until, text, project, role):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             now = time.time()
-            commands = {k: v for k, v in records().items() if _cooling(v, now)}
-            commands[key(argv)] = {"state": "quota", "until": time.strftime(FMT, time.gmtime(until)),
-                                   "since": time.strftime(FMT, time.gmtime(now)), "text": text[:200],
-                                   "project": project, "role": role}
-            osx.write_json(target, {"version": 1, "commands": commands})
+            commands = {k: v for k, v in records().items() if _kept(v, now)}
+            out = change(commands, now)
+            if out:
+                osx.write_json(target, {"version": 1, "commands": commands})
+            return out
         finally:
             os.close(fd)            # closing the only fd of the description drops the flock
     except (OSError, osx.OSFailure) as exc:
-        print("cooldown: cannot record %s in %s (%s)" % (key(argv), target, exc), file=sys.stderr)
+        print("cooldown: cannot record %s in %s (%s)" % (name, target, exc), file=sys.stderr)
+        return None
+
+
+def record_quota(argv, until, text, project, role):
+    """Set the record of argv's key (quota until epoch `until`), dropping expired records; a
+    needs_login record of that key stays as it is."""
+    def change(commands, now):
+        old = commands.get(key(argv))
+        if old is not None and old.get("state") == "needs_login":
+            return False
+        commands[key(argv)] = {"state": "quota", "until": time.strftime(FMT, time.gmtime(until)),
+                               "since": time.strftime(FMT, time.gmtime(now)), "text": text[:200],
+                               "project": project, "role": role}
+        return True
+    _rewrite(key(argv), change)
+
+
+def record_login(argv, text, project, role):
+    """Park argv's program (its basename) as needs_login. True when this call made the
+    transition (the program had no needs_login record before, read under the lock)."""
+    program = os.path.basename(argv[0])
+
+    def change(commands, now):
+        old = commands.get(program)
+        if old is not None and old.get("state") == "needs_login":
+            return False
+        commands[program] = {"state": "needs_login", "since": time.strftime(FMT, time.gmtime(now)),
+                             "text": text[:200], "project": project, "role": role}
+        return True
+    return bool(_rewrite(program, change))
