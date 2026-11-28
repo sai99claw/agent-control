@@ -29,7 +29,9 @@ Each tick, in this order:
                     is started only in its own open group, once its dependencies are in its
                     starting point (landed, or merged into the same integration branch) and,
                     with a landed one, the branch has main or does not exist yet (it is then
-                    made from main); up to devloop.max_parallel at a time
+                    made from main); up to devloop.max_parallel at a time.
+                    Ready tickets are taken by their group's place in the chain (core/chain.order;
+                    tickets of groups outside the chain last), then in DAG order inside a group
   4. memory       - one memory_keeper at a time for a memory file whose lessons are due
 
 While available memory (core/host.memory_available) is below devloop.min_free_memory_gib (#145),
@@ -1138,7 +1140,10 @@ class Controller:
         running = sum(1 for t in snap.tickets.values() if t.get("state") == "running")
         room = self.cfg.max_parallel - running
         started = 0
-        for ident in dagmod.topo(snap.dag):
+        rank = {gid: n for n, gid in enumerate(chain.order(snap))}
+        order = sorted(dagmod.topo(snap.dag),
+                       key=lambda i: rank.get((snap.tickets.get(i) or {}).get("group") or "", len(rank)))
+        for ident in order:
             if room <= 0:
                 break
             t = snap.tickets.get(ident)
