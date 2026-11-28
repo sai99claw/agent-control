@@ -3,5 +3,7 @@
   "ref": "169,170",
   "text": "opened #169 Pool.snapshot() cost on a 550-ticket pool is measured by a test and recorded in devloop/README.md; #170 scripts/status.py keeps only what testiface.py and adapter-unittest.py use; the config schema drops the keys only its removed code read",
   "at": "2026-11-28T10:19:50Z",
-  "acked": false
+  "acked": true,
+  "acked_by": "main-session",
+  "acked_at": "2026-11-28T11:51:34Z"
 }
