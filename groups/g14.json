@@ -1,7 +1,7 @@
 {
   "id": "g14",
   "branch": "int/g14",
-  "state": "pr",
+  "state": "verified",
   "members": [
     "148",
     "149",
@@ -35,9 +35,14 @@
     {
       "at": "2026-11-28T04:27:07Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-28T04:27:08Z",
+      "event": "regression green"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
   "main_tried": "35855fb65766fbe207d66914fa1a79c84bb3563d",
-  "last_regression": "green"
+  "last_regression": "green",
+  "verified_sha": "05908c6159142dc051d98052ba57995f13fd33c5"
 }
