@@ -1,0 +1,7 @@
+{
+  "layer": "role",
+  "name": "worker",
+  "text": "A unit test that builds agents.Pending directly must give it an env with its own DEVLOOP_RESULT and no inherited DEVLOOP_* keys; dict(os.environ) inside an agent's run makes the child write into the agent's own real hand-in path.",
+  "source": "#157 r1 worker",
+  "at": "2026-11-28T04:39:00Z"
+}
