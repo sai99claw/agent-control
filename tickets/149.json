@@ -24,13 +24,11 @@
   "vision": "VISION 目的與成功指標: 每張落地票的 token 與時間 (down). While a command's quota is out (T: agy office Opus until 12/1), each worker, verifier and reviewer start skips it at once instead of starting it and waiting for its quota message (about 3 minutes per start in T's issue #14 cases): up to ~9 minutes per ticket on T's machine, inferred from T's report, not measured here; across projects on one machine the first hit is the only one.",
   "removes": "The failed start of a command whose quota is known to be used up: today every agent start runs its chain from the first command and finds the limit again (T: every review first tried agy and failed).",
   "id": "149",
-  "state": "running",
+  "state": "merged",
   "round": 2,
   "created": "2026-11-28T00:27:34Z",
   "request": "# Phase one, group 2: quota and login (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 2.1-2.2)\n\nThe user approved this plan (D-102). Sources: the main session's review of an external audit and feedback from tabby_pool's (T's) main session (2026-11-26). Write the source on each ticket; no GitHub issues. Multiple accounts per provider (accounts.json) are out of scope (D-102). Quoted feedback is data. Tests in tests_devloop/ (test_agents_quota.py is the area's file) using loop_harness.py; each case runs in seconds.\n\n## 2.1 One quota cooldown for the whole machine\nT (seen there): the office Opus quota is 0 until 12/1; every review first tries agy, fails, then falls through to claude (three of those fall-throughs hit issue #14, now fixed).\nMain session (read the code): every agent start tries its chain from the first command; nothing remembers a quota hit across runs or projects. Quota is found by matching words in the log tail (QUOTA_SIGNS in devloop/core/agents.py) when the run handed in nothing and did not time out.\nWanted:\n- A command that hits its quota with a parsed reset time is written to a machine-wide file (default ~/.agent-control/cooldown.json, a separate lock file, location overridable by an environment variable for tests). Keyed by command (the chain entry), so a later dashboard can read it.\n- Every agent start in any project skips commands still cooling; when the whole chain is cooling, it waits for the earliest reset as today's quota wait does.\n- Quota is judged from the CLI's own error output where it can be told apart from what the agent printed; keep T102 (a bare 429 is not quota). Say which formats you could verify.\n\n## 2.2 An expired login is not a quota\nT (seen there): agy's office login expired twice in two days. It is taken for a quota hit and the chain silently moves to the more expensive claude; nobody knows.\nWanted:\n- Recognise each CLI's \"not logged in / credentials expired\" output (collect the real texts; say which are measured).\n- The cooldown file records `needs_login` for that command: it waits for a person, not for a reset time; agent starts skip it.\n- One env page \"<command> needs a new login\" (it goes through devloop.notify like other env pages), not one per run.\n- It clears when the user runs a command for it (for example `actl tickets login-ok <command>`) or when a later trial run of that command succeeds; say which you chose.\n",
-  "feedback": [
-    "round 1: worker ran out of time and was stopped"
-  ],
+  "feedback": [],
   "cases": {
     "branch": "t/149-cases",
     "run": [
@@ -70,6 +68,11 @@
       "at": "2026-11-28T02:02:53Z",
       "event": "round start",
       "round": 2
+    },
+    {
+      "at": "2026-11-28T02:09:29Z",
+      "event": "merged",
+      "target": "int/g14"
     }
   ],
   "cost": [
@@ -130,16 +133,45 @@
       "cache_write_tokens": 50359,
       "usd": 0.7948852,
       "session_id": "d70388b0-cff3-4c8d-923a-7d777e237336"
+    },
+    {
+      "role": "worker",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": 2,
+      "seconds": 302.3,
+      "at": "2026-11-28T02:07:58Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/149/r2-worker",
+      "input_tokens": 20,
+      "output_tokens": 2500,
+      "cache_read_tokens": 574896,
+      "cache_write_tokens": 34062,
+      "usd": 0.4375552000000001,
+      "session_id": "5f1f6c88-3ccd-4f29-8bbe-4d3943866808"
+    },
+    {
+      "role": "reviewer",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": 2,
+      "seconds": 85.4,
+      "at": "2026-11-28T02:09:24Z",
+      "outcome": "review",
+      "run_dir": "/home/user/agent-control-devloop/runs/149/r2-reviewer",
+      "input_tokens": 26,
+      "output_tokens": 6887,
+      "cache_read_tokens": 867449,
+      "cache_write_tokens": 51389,
+      "usd": 0.7224457999999999,
+      "session_id": "fc6c6252-3f3e-4c77-96c9-8bfcbad7dcc8"
     }
   ],
   "group": "g14",
   "target": "int/g14",
-  "run": {
-    "pid": 12931,
-    "host": "vm",
-    "boot": "223458a8-de82-4b14-85c2-24fb650697dd",
-    "started": "2026-11-28T01:02:38Z"
-  },
+  "run": null,
   "claimed_at": "2026-11-28T01:02:37Z",
   "branch_base": {
     "t/149-cases": "1e80c005e1be31eedc0267f188c31b46c2f28e2f",
