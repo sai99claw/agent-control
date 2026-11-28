@@ -1,7 +1,7 @@
 {
   "id": "g17",
   "branch": "int/g17",
-  "state": "pr",
+  "state": "verified",
   "members": [
     "159",
     "160",
@@ -46,9 +46,14 @@
     {
       "at": "2026-11-28T05:19:35Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-28T05:19:37Z",
+      "event": "regression green"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
   "main_tried": "67809e72adf70ca80cb387aebf3c04cc050fc31b",
-  "last_regression": "green"
+  "last_regression": "green",
+  "verified_sha": "6cb160ecbea636864472fd844306b3206024f8f6"
 }
