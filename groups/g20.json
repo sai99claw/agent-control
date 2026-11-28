@@ -59,6 +59,16 @@
     {
       "at": "2026-11-28T11:18:56Z",
       "event": "regression started"
+    },
+    {
+      "at": "2026-11-28T11:27:14Z",
+      "event": "flaky: test_release.T142Acceptance.test_item9_sigterm_stops_the_release_command_and_writes_the_signal passed when run again",
+      "flaky": [
+        {
+          "id": "test_release.T142Acceptance.test_item9_sigterm_stops_the_release_command_and_writes_the_signal",
+          "message": "AssertionError: not within 5 s: the release command's process was stopped"
+        }
+      ]
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
