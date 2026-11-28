@@ -16,6 +16,7 @@
   main 前進並發版。**不輪詢**:跑完的事變成頁,要等就在背景跑 `actl tickets wait --kind decision,env,idle,landed`(有新頁才結束並印出那頁;`--timeout S` 到時 exit 1),不寫輪詢迴圈;`actl tickets inbox` 讀全部未讀。
 - 頁的種類:`created`、`landed`、`decision`(要你決定)、`env`(環境壞了,修好再跑)、`idle`(沒有 `--forever` 的 run 停下時還有事沒做完,逐項寫它在等什麼)。回答 decision:
   `actl new --revise N --from user --decision revise|retry|cancel --reason "…"`,或 `actl tickets ready N` / `cancel N --why …`。
+  hard_block 停下的票另可用 `actl tickets approve N --page P --reason "…"` 核准:只核准頁上列的那個改動(指紋),之後改動變了要重新核准;沒有群組的票核准後還要 `actl dag move`;收件匣只印八行,完整命中清單在 `actl tickets show N` 的 `stuck.hard_block`;看板沒有核准按鈕(D-103)。
 - 主線可以讀票後用 `actl dag` 重排(只動依賴與群組,不動票的內容,D-096):「先跑 X 再跑 Y」就是 `actl dag dep Y --add X --reason "…"`;
   把票移到別的群組是 `actl dag move N --to gK|new --reason "…"`。
   把整組排到另一組後面是 `actl dag after gA --add gB --reason "…"`(票已合入的組也可以)。

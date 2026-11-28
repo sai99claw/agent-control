@@ -15,6 +15,7 @@
     python3 devloop/tickets.py lessons --layer role --name worker --file OLD.md   # old notes -> lessons
     python3 devloop/tickets.py release g1 [--again] [--by NAME] [--page P]  # re-run a landed group's failed release
     python3 devloop/tickets.py login-ok agy.sh [--by NAME]   # after a new login: clear its needs_login mark, ack its page
+    python3 devloop/tickets.py approve 203 --page P --reason "..." [--by NAME]   # let the change a hard_block page listed merge
 
 Opening tickets is ticket_creator.py; moving them is ticket_controller.py.
 """
@@ -351,6 +352,54 @@ def cmd_login_ok(pool, args):
     return 0
 
 
+def cmd_approve(pool, args):
+    """Record the user's approval of #N's hard_block stop as listed on page P and re-queue #N (the
+    transition `tickets ready N` makes); every check runs inside the one pool write."""
+    ident, page, by, reason = args.id, args.page, args.by, args.reason
+
+    def change(tx):
+        if not _is_ticket_id(ident):
+            raise osx.OSFailure("approve is for a ticket N, not for %s" % ident)
+        if not reason.strip():
+            raise osx.OSFailure("--reason is blank; say why the user approves")
+        t = tx.data.tickets.get(str(ident))
+        if t is None:
+            raise osx.OSFailure("no ticket %s in the pool" % ident)
+        stop = t.get("stuck") or {}
+        hb = stop.get("hard_block")
+        if t.get("state") != "stuck" or stop.get("reason") != "hard_block" or not isinstance(hb, dict):
+            raise osx.OSFailure("#%s is %s, not stuck on hard_block; approve is only for a hard_block stop"
+                                % (ident, shown_state(t.get("state"))))
+        row = tx.data.inbox.get(page)
+        if row is None:
+            raise osx.OSFailure("no page %s in the inbox" % page)
+        if str(row.get("ref")) != str(ident):
+            raise osx.OSFailure("page %s is about %s, not #%s" % (page, row.get("ref"), ident))
+        listed = row.get("hard_block")
+        if not isinstance(listed, dict):
+            raise osx.OSFailure("page %s lists no hard_block hits; ready #%s once so it stops again with a "
+                                "hit list" % (page, ident))
+        if listed.get("fingerprint") != hb.get("fingerprint"):
+            raise osx.OSFailure("page %s does not show #%s's current hard_block stop (fingerprints differ)"
+                                % (page, ident))
+        at = osx.now()
+        t["approval"] = {"by": by, "at": at, "reason": reason, "page": page, "fingerprint": hb.get("fingerprint"),
+                         "paths": hb.get("paths"), "lines": hb.get("lines")}
+        event(t, "hard_block approved", by=by, reason=reason, page=page, fingerprint=hb.get("fingerprint"))
+        t["state"] = "ready"
+        t["round"], t["stuck"], t["run"] = 0, None, None
+        leave_group(tx, t)
+        tx.put_ticket(t)
+        ack_in(tx, page, by)
+        close_pages(tx, ident, "tickets approve")
+        return t
+    t = pool.update(change, "#%s: hard_block approved (main)" % ident)
+    print("#%s approved: its change as page %s listed it may merge; it is ready" % (ident, page))
+    if not t.get("group"):
+        print("#%s has no group: place it with actl dag move %s --to gK|new" % (ident, ident))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -397,6 +446,11 @@ def main(argv=None):
     p = sub.add_parser("login-ok")
     p.add_argument("command")
     p.add_argument("--by", default=None)
+    p = sub.add_parser("approve")
+    p.add_argument("id")
+    p.add_argument("--page", required=True)
+    p.add_argument("--reason", required=True)
+    p.add_argument("--by", default="user")
     args = ap.parse_args(argv)
     try:
         cfg = Config()
@@ -424,6 +478,8 @@ def main(argv=None):
             return cmd_release(pool, cfg, args)
         if args.cmd == "login-ok":
             return cmd_login_ok(pool, args)
+        if args.cmd == "approve":
+            return cmd_approve(pool, args)
         if args.cmd == "wait":
             return cmd_wait(pool, args, cfg.poll_seconds)
         return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack, "lessons": cmd_lessons,

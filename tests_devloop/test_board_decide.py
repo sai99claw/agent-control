@@ -857,8 +857,21 @@ class BoardPageOptions(LoopCase):
         import board
         from core import pages
         self.assertEqual(set(board.ACT_LABELS), set(pages.ACTIONS))
-        self.assertEqual(set(board.ACTIONS), set(pages.ACTIONS))
+        self.assertEqual(set(board.ACTIONS), set(pages.ACTIONS) - {'approve'})
         self.assertEqual(board.ACT_LABELS["release"], "重跑發版")
+
+    def test_approve_option_is_text_only_and_not_a_post_action(self):
+        import board
+        c = {"subject": "5", "page": "p5", "question": "q", "recommendation": "r",
+             "options": [{"action": "revise", "note": "", "consequence": "c1"},
+                         {"action": "approve", "note": "", "consequence": "c2"}]}
+        for may in (True, False):
+            html = board.render_options(c, may)
+            div = html[html.index('<div class="option" data-action="approve">'):]
+            div = div[:div.index("</div>")]
+            self.assertIn("actl tickets approve 5 --page p5 --reason ", div)
+            self.assertNotIn("<button", div)
+        self.assertNotIn("approve", board.ACTIONS)
 
     def test_act_problem_option_and_release(self):
         import board

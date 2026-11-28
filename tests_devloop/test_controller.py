@@ -722,7 +722,7 @@ class T80Acceptance(LoopCase):
         t = self.snap().ticket("1")
         self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "hard_block"))
         name, row = self.one(("decision",), "1")
-        self.check("1", row, ["revise", "cancel", "retry"], subject="#1")
+        self.check("1", row, ["revise", "approve", "cancel", "retry"], subject="#1")
 
     def test_w11_opener_could_not_produce_valid_tickets(self):
         self.plan(creator={"-": ["bad", "bad"]})
@@ -2059,7 +2059,16 @@ class FollowMainUnits(LoopCase):
         self.commit_on("int/g1", {"shared.txt": "group\n"})
         self.commit_on("main", {"shared.txt": "main\n"})
         c = self.ctl()
-        c.advance_groups(self.snap())
+        # #168 C1: start_fixer writes the group in _start_job's one write after the spawn, so the
+        # real _start_job runs here with the spawn patched (as FixAgentRoundUnits does, #168 C5).
+        real = type(c)._start_job.__get__(c)
+
+        def start(gid, kind, argv, out, **kw):
+            c.started.append((gid, kind))
+            real(gid, kind, argv, out, **kw)
+        c._start_job = start
+        with mock.patch.object(osx, "spawn", return_value=mock.Mock(pid=4242)):
+            c.advance_groups(self.snap())
         self.assertEqual(c.started, [("g1", "fixer")])
         g = self.snap().groups["g1"]
         self.assertEqual((g["state"], g["fix_round"]), ("fixing", 1))
