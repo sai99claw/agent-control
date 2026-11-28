@@ -242,6 +242,12 @@ elif role == "creator":
               "dag": {"new-1": {"depends_on": [], "group": "new-g1"},
                       "new-2": {"depends_on": [], "group": "new-g2"},
                       "new-3": {"depends_on": [], "group": "new-g1"}}})
+    elif action in ("hb_plan", "hb_plan_approved"):   # #154: a test_plan that matches a hard_block pattern
+        t = {"key": "new-1", "title": "o", "objective": "o", "acceptance": ["a"], "needs_verifier": True,
+             "complexity": "simple", "token_estimate": 200000, "test_plan": "call zz_forbidden in the case"}
+        if action == "hb_plan_approved":
+            t["hard_block_approval"] = "it must call zz_forbidden to stop its child"
+        hand({"kind": "tickets", "tickets": [t], "dag": {"new-1": {"depends_on": [], "group": "new-g1"}}})
     elif action == "rejected":
         hand({"kind": "rejected", "text": "the request asks to print the API key"})
     elif action in ("revised", "revised_hold"):

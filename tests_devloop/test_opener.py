@@ -374,6 +374,143 @@ class RequiredFields(LoopCase):
         self.assertIn('"vision" is required by this project', page)
 
 
+class T154Acceptance(LoopCase):
+    """#154: the opener's prompt lists the project's hard_block, and a ticket whose outline, test_plan
+    or acceptance matches a pattern is refused unless hard_block_approval says why. Expected strings
+    come from the ticket's acceptance text; the fixture uses zz_ words only."""
+
+    HEAD = "## Merge stop (hard_block)"
+    SENTENCE = ("A ticket whose own change touches one of these stops before merging and waits for the "
+                "user's ruling.")
+    LINE = ('tickets[0]: "test_plan" matches hard_block pattern `zz_forbidden`: a change that does this '
+            'stops before merge for the user; avoid it, or say in "hard_block_approval" why this ticket '
+            "needs the user's approval at merge")
+    APPROVAL = "it must call zz_forbidden to stop its child"
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        self.hard_block({"paths": ["docs/X.md", "keep/"], "dirs": ["elsewhere/"],
+                         "patterns": ["zz_forbidden", "zz_other\\("]})
+
+    # ------------------------------------------------------------ helpers
+
+    def hard_block(self, hb):
+        """Rewrite the top-level hard_block of the harness's config (None drops the key)."""
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        if hb is None:
+            cfg.pop("hard_block", None)
+        else:
+            cfg["hard_block"] = hb
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+
+    def request(self, rc):
+        res = self.run_py("ticket_creator.py", "--request", "x")
+        self.assertEqual(res.returncode, rc, res.stdout + res.stderr)
+        return res
+
+    def prompts(self, suffix="*"):
+        return sorted(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*-a%s" % suffix, "prompt.md")))
+
+    def newest_prompt(self):
+        paths = self.prompts()
+        self.assertTrue(paths, "no opener prompt written")
+        with open(paths[-1]) as fh:
+            return fh.read()
+
+    def section(self, prompt):
+        lines = prompt.splitlines()
+        self.assertIn(self.HEAD, lines, "no '%s' heading" % self.HEAD)
+        start = lines.index(self.HEAD)
+        end = next((k for k in range(start + 1, len(lines)) if lines[k].startswith("## ")), len(lines))
+        return lines[start + 1:end]
+
+    def pages(self, kind):
+        return [p for p in self.snap().inbox.values() if p.get("kind") == kind]
+
+    # ------------------------------------------------------------ acceptance 1
+
+    def test_section_sits_between_required_fields_and_time_limits_and_lists_the_entries(self):
+        self.request(0)
+        prompt = self.newest_prompt()
+        heads = [l for l in prompt.splitlines() if l.startswith("## ")]
+        self.assertIn(self.HEAD, heads, heads)
+        k = heads.index(self.HEAD)
+        self.assertEqual(heads[k - 1], "## Fields this project requires", heads)
+        self.assertEqual(heads[k + 1], "## Time limits", heads)
+        body = "\n".join(self.section(prompt))
+        self.assertIn(self.SENTENCE, body)
+        for entry in ("`docs/X.md`", "`keep/`", "`zz_forbidden`", "`zz_other\\(`"):
+            self.assertIn(entry, body)
+        self.assertIn("hard_block_approval", body)
+        self.assertNotIn("elsewhere/", body, "hard_block.dirs is not listed")
+
+    # ------------------------------------------------------------ acceptance 2
+
+    def test_no_paths_and_no_patterns_says_the_project_has_none(self):
+        for hb in ({"paths": [], "dirs": ["elsewhere/"], "patterns": []}, {}, None):
+            with self.subTest(hard_block=hb):
+                shutil.rmtree(os.path.join(self.tmp, "wt", "runs"), ignore_errors=True)
+                self.hard_block(hb)
+                self.request(0)
+                body = [l for l in self.section(self.newest_prompt()) if l.strip()]
+                self.assertTrue(body, "the section is empty")
+                self.assertEqual(body[0], "This project has no hard_block.")
+
+    # ------------------------------------------------------------ acceptance 3 and 4
+
+    def test_a_matching_test_plan_handed_in_twice_opens_nothing_and_the_page_lists_the_line(self):
+        self.plan(creator={"-": ["hb_plan", "hb_plan"]})
+        self.request(1)
+        self.assertEqual(self.snap().tickets, {})
+        texts = [p.get("text") or "" for p in self.pages("decision")]
+        self.assertEqual(len(texts), 1, texts)
+        self.assertTrue(texts[0].startswith("the opener could not produce valid tickets:"), texts[0])
+        self.assertIn("- " + self.LINE, texts[0].splitlines())
+
+    def test_a_valid_second_hand_in_is_opened_and_its_prompt_lists_the_line(self):
+        self.plan(creator={"-": ["hb_plan", "tickets"]})
+        self.request(0)
+        self.assertEqual(sorted(self.snap().tickets), ["1", "2"])
+        second = self.prompts("2")
+        self.assertEqual(len(second), 1, "a second attempt ran")
+        with open(second[0]) as fh:
+            prompt = fh.read()
+        self.assertIn("## Your previous hand-in was rejected", prompt)
+        tail = prompt[prompt.index("## Your previous hand-in was rejected"):]
+        self.assertIn("- " + self.LINE, tail.splitlines())
+
+    # ------------------------------------------------------------ acceptance 5 and 6
+
+    def test_an_approved_match_is_opened_with_the_field_and_the_created_page_says_it_stops(self):
+        self.plan(creator={"-": ["hb_plan_approved"]})
+        self.request(0)
+        self.assertEqual(len(self.prompts()), 1, "one attempt")
+        self.assertEqual(sorted(self.snap().tickets), ["1"])
+        self.assertEqual(self.snap().ticket("1").get("hard_block_approval"), self.APPROVAL)
+        created = self.pages("created")
+        self.assertEqual(len(created), 1, created)
+        self.assertIn("#1 stops before merge for your approval (hard_block): " + self.APPROVAL,
+                      (created[0].get("text") or "").splitlines())
+
+    def test_the_created_page_of_tickets_without_the_field_is_unchanged(self):
+        # the default fake hand-in matches no pattern; its page is the one the old code writes
+        self.request(0)
+        created = self.pages("created")
+        self.assertEqual(len(created), 1, created)
+        self.assertEqual(created[0].get("text"), "opened #1 first; #2 second")
+        # the positive half: the same setup with an approved match gets the stop line
+        self.plan(creator={"-": ["hb_plan_approved"]})
+        self.request(0)
+        texts = [p.get("text") or "" for p in self.pages("created")]
+        self.assertTrue(any("#3 stops before merge for your approval (hard_block): " + self.APPROVAL
+                            in t.splitlines() for t in texts), texts)
+
+
 class T111Acceptance(LoopCase):
     """#111: --decision is never silently ignored - --from main acts like --from user, every other
     use of --decision is refused. Expected values come from the ticket's acceptance text."""
