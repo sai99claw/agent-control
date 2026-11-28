@@ -39,6 +39,11 @@
       "at": "2026-11-28T01:02:37Z",
       "event": "dispatched",
       "target": "int/g14"
+    },
+    {
+      "at": "2026-11-28T01:02:39Z",
+      "event": "issuer started",
+      "target": "int/g14"
     }
   ],
   "cost": [
@@ -68,6 +73,11 @@
   ],
   "group": "g14",
   "target": "int/g14",
-  "run": null,
+  "run": {
+    "pid": 12931,
+    "host": "vm",
+    "boot": "223458a8-de82-4b14-85c2-24fb650697dd",
+    "started": "2026-11-28T01:02:38Z"
+  },
   "claimed_at": "2026-11-28T01:02:37Z"
 }
