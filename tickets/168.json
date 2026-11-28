@@ -1,0 +1,58 @@
+{
+  "title": "A fix round's start writes the group once, after auto_fixer is spawned with --round",
+  "objective": "Starting a fix round writes the group record in one pool write after auto_fixer has been spawned, and auto_fixer takes its round from `--round` instead of reading it from the group.",
+  "outline": "devloop/ticket_controller.py `start_fixer()` (line ~536) and `_start_job()` (line ~547): build argv with `--round`, `str(rnd)`; spawn first; then one `self.pool.update` that applies state `fixing`, `fix_round`, `fix_report`, the drops (`fix_retry`, `paused`), the `job`, the event `fix round <rnd>` then the event `fixer started`, and `close_pages(tx, gid, \"superseded\")` - for example let `_start_job` take an optional first event, state, drop and fields that it writes in its existing `set_group` call, or give `set_group` a way to write one extra event before `why`. devloop/auto_fixer.py: `main()` adds `ap.add_argument(\"--round\", type=int)` and uses it for the inflight record; `fix(cfg, pool, gid, report, live=None, rnd=None)` uses `rnd` when given, else `int(group.get(\"fix_round\") or 0)`. Update auto_fixer's docstring usage line. Why `--round`: with the write after the spawn, auto_fixer can read the group before the controller's write lands and would see the previous round. Measured on HEAD 4797416 with `osx.spawn` mocked: two pool commits, argv `--group g1 --report /r.json`, last two events `fix round 1`, `fixer started`; a failed spawn leaves the group `fixing`, `fix_round` 1, no job; `auto_fixer.py ... --round 2` exits 2 with `unrecognized arguments`. Out of scope: a controller that stops between the spawn and the write (the fixer then runs with no job recorded; the same window exists today between the spawn and the job write).",
+  "test_plan": "Verifier writes cases for C1, C2 and C3; the implementer covers C4 and C5 (they hold today) and changes the old case of C5 in place if needed. Where: tests_devloop/test_regression_fixer.py, verifier class `T<id>Acceptance(LoopCase)` placed between `class T69Acceptance(LoopCase)` and `class FixerCasesChanged(LoopCase)`; implementer's units between `class FixGroupLine(LoopCase)` and `class FixAgentRoundUnits(LoopCase)`. setUp pops every DEVLOOP_* key from self.env and from os.environ (as FixAgentRoundUnits.setUp does). C1: put group `{\"id\": \"g1\", \"branch\": \"int/g1\", \"state\": \"pr\", \"members\": [], \"fix_round\": 0, \"fix_retry\": True, \"paused\": {\"reason\": \"fixer\", \"at\": \"t\", \"text\": \"\"}}` with `self.pool.update`; `ctl = ticket_controller.Controller(Config(self.proj), self.pool)`; count `git(self.pool_path, \"rev-list\", \"--count\", \"HEAD\")` before and after; patch `ticket_controller.osx.spawn` with a side effect that records argv and returns `mock.Mock(pid=4242)`; call `ctl.start_fixer(\"g1\", \"/r.json\", 1)`. Expect one more pool commit; `argv[-6:] == [\"--group\", \"g1\", \"--report\", \"/r.json\", \"--round\", \"1\"]` and `argv[1]` ends with `auto_fixer.py`; group state `fixing`, fix_round 1, fix_report `/r.json`, no fix_retry, no paused, job kind `fixer`, job out `/r.json`, job stamp pid 4242; the last two history events are `fix round 1`, `fixer started`. (The loop harness sets no min_free_memory_gib, so memory is never short.) C2: the same group without paused; the spawn side effect raises `osx.OSFailure(\"cannot start auto_fixer.py\")`; `assertRaises(osx.OSFailure)`; pool commit count unchanged; group state `pr`, fix_round 0, fix_retry True, no job. C3: the fixture T69Acceptance.setUp builds (`self.config(max_rounds=1)`, `self.add(1)`, plan worker `{\"1\": [\"red\"]}` fixer `{\"g1\": [\"nothing\"]}`, `self.controller()`; measured: g1 then has fix_round 1 and only `runs/fix/g1/r1`); write a red report as T69Acceptance does; `self.plan(worker={\"1\": [\"red\"]}, fixer={\"g1\": [\"nothing\", \"fix\"]})` (the fake counts calls, so the next one is `fix`); run `self.run_py(\"auto_fixer.py\", \"--group\", \"g1\", \"--report\", report, \"--round\", \"2\")`. Expect rc 0; the group's `fix_agent_round` == 2; its history holds `fixer agent started (round 2)`; the dir `os.path.join(self.tmp, \"wt\", \"runs\", \"fix\", \"g1\", \"r2\")` exists. Red today: rc 2 (measured). Each case takes a few seconds at most.",
+  "notes": "Source: improvement plan phase one, group 4 item 4.3 (D-100, D-102); external audit finding (P0-2/P0-3/P0-6/P1-6 cover group 4) confirmed by the main session reading the code; T main session agreed 2026-11-26. Group: new-g1, one new group with the other two tickets of group 4, as the request asks; the open groups g18 (dispatch) and g19 (hard_block approval) hold unrelated work. hard_block: the project stops a ticket before merge when any added line (code, tests, comments, docs) matches `os\\.kill`, `killpg`, `pkill` or `kill -`. Nothing here needs those words. #162 (g18) edits dispatch in ticket_controller.py, far from start_fixer and _start_job.",
+  "acceptance": [
+    "C1 `Controller.start_fixer(gid, report, rnd)`, when memory is not short, spawns auto_fixer with an argv whose items after `<LOOP>/auto_fixer.py` are exactly `--group <gid> --report <report> --round <rnd>`, then makes exactly one pool commit, after which the group has state `fixing`, `fix_round` = rnd, `fix_report` = report, no `fix_retry`, no `paused`, `job` = {\"kind\": \"fixer\", \"stamp\": {pid of the spawned process, host, boot, started}, \"out\": report}, its pages acked `superseded` (as today), and history ending with the two events `fix round <rnd>` then `fixer started` (today's texts and order). Today: two commits and no `--round` (measured).",
+    "C2 When the spawn raises `osx.OSFailure`, `start_fixer` makes no pool commit, the group record is unchanged (state, fix_round, fix_retry and job stay as they were), and the OSFailure propagates as today. Today the group is left `fixing` with `fix_round` = rnd and no job (measured).",
+    "C3 `auto_fixer.py` accepts `--round N` (an int, optional). Given, N is the round it uses everywhere it reads the group's `fix_round` today: the run dir `runs/fix/<gid>/r<N>`, `mark_agent_round` (`fix_agent_round` = N, event `fixer agent started (round N)`), the inflight record's `round`, and the round passed on to `bring_back`, `_record_cases`, `_record_tests` and `memory.collect`. Without `--round` it reads the group's `fix_round` as today (existing tests start it without the flag). Today `--round` is refused with rc 2, `unrecognized arguments` (measured).",
+    "C4 Unchanged: the memory-short branch of start_fixer (one write: state `pr`, `fix_retry`, `fix_report`, `fix_round` = rnd - 1, no spawn); `start_regression` (if `_start_job` gains parameters they default to today's behaviour); exactly one `fixer started` event per fix round (test_regression_fixer.py line ~357).",
+    "C5 Old case changed in place if the implementation stops calling `_start_job(gid, kind, argv, out)` with those four arguments: `FixAgentRoundUnits.test_start_fixer_stores_the_report_and_drops_retry_and_pause` (tests_devloop/test_regression_fixer.py) replaces its 4-argument `_start_job` lambda with a patch of `ticket_controller.osx.spawn` returning `mock.Mock(pid=...)` and keeps its assertions (state `fixing`, `fix_round` 1, `fix_report` `/r.json`, no `fix_retry`, no `paused`) plus `job.kind == \"fixer\"`. test_pages.py `test_regression_and_fixer_start_ack_the_groups_pages`, test_machine.py `test_fix_round_due_while_short_waits_as_fix_retry` and the memory-short case that calls `start_fixer(\"g1\", report, 1)` near test_machine.py line 1184 pass unchanged."
+  ],
+  "needs_verifier": true,
+  "complexity": "simple",
+  "token_estimate": 1800000,
+  "token_basis": "Calibrated on landed simple worker+verifier tickets (#146, #151, #159, #160: 1.0-2.0M, cache reads included). ~20 lines in ticket_controller.py and auto_fixer.py, 3 verifier cases, one old case changed in place -> 1.8M.",
+  "vision": "VISION 'one request from start to end' step 8 (a red test sends a new worker by script): a fix round that could not start no longer leaves its group `fixing` with the round counted but never run, so metric 'times each ticket needs me' loses the manual rerun after a failed spawn; also one pool commit fewer per fix round. Small.",
+  "removes": "the two-write path in start_fixer (the group set to fixing before the spawn, the job written after it)",
+  "id": "168",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-28T09:49:29Z",
+  "request": "Phase one, group 4 of the improvement plan: honest acceptance and reliability (D-100, D-102). Source: external audit\nP0-2, P0-3, P0-6, P1-6, each confirmed by the main session reading the code; T main session agreed (2026-11-26).\nKeep these as one group, three tickets.\n\n4.1 Acceptance results must be honest.\n- Problem (read in code): a skipped acceptance case (rc 0) counts as green; `red_check()` treats skip as red but\n  expectedFailure is recorded as `pass`; nothing checks whether the worker edited the `T<N>Acceptance` cases.\n- Layer 1: `run_cases()` requires each case to be exactly `pass`; `red_check()` requires exactly `fail`.\n  expectedFailure is recorded as `xfail` (not pass).\n- Layer 2: from round 2 on, a worker change that alters the `T<N>Acceptance` definitions is sent back. Compare by\n  AST (classes and functions), and check the count of same-named definitions. A round that went through `--revise`\n  (the ticket was rewritten) is not a violation. The verifier prompt gets one line: helpers specific to this ticket\n  go inside the class.\n\n4.2 Controller lock uses flock.\n- Problem (read in code): `PidLock` creates an empty file and then writes JSON; two `actl run` starting at once can\n  both take the lock.\n- Do: keep the lock file (do not delete it), use `fcntl.flock`, clear the stamp on release; `controller_alive()` and\n  existing tests keep passing.\n\n4.3 start_fixer writes once.\n- Do: `start_fixer()` writes the pool once, after the spawn, and passes `--round` to `auto_fixer.py`.\n\nvision: an acceptance result means what it says, and two controllers cannot both run.\nremoves: the two-write path in start_fixer; the create-then-write PidLock path.\n",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-28T09:49:29Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 422.43333333333334,
+      "at": "2026-11-28T09:49:26Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-28T092819Z-a1",
+      "input_tokens": 52,
+      "output_tokens": 42266,
+      "cache_read_tokens": 4248788,
+      "cache_write_tokens": 87328,
+      "usd": 2.3939283333333337,
+      "session_id": "b45b5d73-09aa-48cc-a751-9a6fcf969756",
+      "split_over": [
+        "166",
+        "167",
+        "168"
+      ]
+    }
+  ],
+  "group": "g20"
+}

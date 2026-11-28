@@ -1,0 +1,19 @@
+{
+  "id": "g20",
+  "branch": "int/g20",
+  "state": "open",
+  "members": [
+    "166",
+    "167",
+    "168"
+  ],
+  "fix_round": 0,
+  "job": null,
+  "created": "2026-11-28T09:49:29Z",
+  "history": [
+    {
+      "at": "2026-11-28T09:49:29Z",
+      "event": "opened by the opener for #166, #167, #168"
+    }
+  ]
+}

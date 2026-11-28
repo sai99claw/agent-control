@@ -1,0 +1,60 @@
+{
+  "title": "The controller lock is a kernel flock on a file that is never deleted",
+  "objective": "At most one process can hold `osx.PidLock` on a lock file, because holding it means holding an exclusive flock on that file, which stays in place (emptied) after release.",
+  "outline": "devloop/core/osx.py `class PidLock` (about 40 lines today): replace the `O_EXCL` create / JSON write / unlink body with the flock pattern of core/ticketlock.py `take()` (open `O_RDWR | O_CREAT`, `fcntl.flock(fd, LOCK_EX | LOCK_NB)`, `BlockingIOError` means held). On held: read the stamp with `read_json` for the message (an empty or broken file gives no stamp; then say the holder has not written its stamp yet), close the fd, raise. On taken: read the stamp; a live one (not `stamp_dead`) refuses per B5 (close the fd first); else `os.ftruncate(fd, 0)`, write `json.dumps(stamp())` at offset 0, `os.fsync(fd)`, keep the fd, `held = True`. `release()`: when held, `os.ftruncate(fd, 0)`, close the fd, `held = False`; idempotent. `import fcntl` at the top of osx.py. The one caller is ticket_controller.py `main()` (unchanged). devloop/board.py `controller_alive()` stays as it is (an empty file reads as no lock). devloop/README.md: one sentence next to the existing `controller.lock` sentence in the service section (T159Acceptance reads that section for `controller.lock` and `exit 0`; keep both and add no absolute home path). Measured on HEAD 4797416: an empty lock file is taken over, release deletes the file, a live stamp refuses with `already running (pid ...`. Out of scope: making controller_alive() test the flock; any other lock file.",
+  "test_plan": "Verifier writes cases for B1 (with B2 as its continuation) and B3; the implementer covers B4-B7 with its own unit tests (B5 and B6 hold today, so they cannot be verifier cases), among them: a PidLock held by a live child process (acquired with the new code, kept until the test closes the child's stdin) refuses the parent's acquire - this catches a stamp written through a replaced file. Where: tests_devloop/test_controller.py, verifier class `T<id>Acceptance(unittest.TestCase)` placed between `class Landing(LoopCase)` and `class T159Acceptance(unittest.TestCase)`; implementer's units between `class T29Acceptance(LoopCase)` and `class WorktreeSetup(LoopCase)`. Every case uses a fresh `tempfile.mkdtemp()` dir (addCleanup rmtree) and the path `<dir>/controller.lock`. B1+B2: create the file empty (`open(path, \"w\").close()`); start a holder child `subprocess.Popen([sys.executable, \"-c\", HOLDER, path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)` with HOLDER = `import fcntl, os, sys\\nfd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)\\nfcntl.flock(fd, fcntl.LOCK_EX)\\nprint(\"held\", flush=True)\\nsys.stdin.read()\\n`; read one line from its stdout and assert it is `held`; `with self.assertRaises(osx.OSFailure) as cm: osx.PidLock(path).acquire()`; assert `already running` and `path` are in `str(cm.exception)`, `os.path.exists(path)` and `os.path.getsize(path) == 0`. Then close the child's stdin and `proc.wait(timeout=10)` (reaped, so it is not a zombie that still looks alive); then `lock = osx.PidLock(path).acquire()`, assert `osx.read_json(path)[\"pid\"] == os.getpid()`, `lock.release()`. An addCleanup closes the child's stdin and waits for it whatever happens. Red today: the first acquire succeeds (measured). B3: `lock = osx.PidLock(path).acquire(); lock.release()`; assert `os.path.exists(path)`, `os.path.getsize(path) == 0`, and `board.controller_alive(SimpleNamespace(worktree_root=dir))` is False (`import board`; LOOP is on sys.path through loop_harness); a second `lock.release()` raises nothing. Red today: the file is gone after release (measured). No case starts a controller; each runs well under a second.",
+  "notes": "Source: improvement plan phase one, group 4 item 4.2 (D-100, D-102); external audit finding (P0-2/P0-3/P0-6/P1-6 cover group 4) confirmed by the main session reading the code; T main session agreed 2026-11-26. Group: new-g1, one new group with the other two tickets of group 4, as the request asks; the open groups g18 (dispatch) and g19 (hard_block approval) hold unrelated work. hard_block: the project stops a ticket before merge when any added line (code, tests, comments, docs) matches `os\\.kill`, `killpg`, `pkill` or `kill -`. This ticket is about holding processes, so those words are close: nothing here needs to end a process from outside - let holder children end by closing their stdin, and write none of those words anywhere, comments included (say 'stop' or 'end').",
+  "acceptance": [
+    "B1 While another process holds an exclusive `fcntl.flock` on the lock file, `osx.PidLock(path).acquire()` raises `osx.OSFailure` whose text contains `already running` and the lock path, and leaves the file untouched (same size and content, not deleted); this holds also when the file is empty, as it is between a holder's open and its stamp write. Today an empty lock file is taken over (measured 2026-11-28: acquire succeeds and writes its own stamp).",
+    "B2 Once that holder has exited (and been reaped), `acquire()` succeeds and the file then holds this process's stamp: `osx.read_json(path)[\"pid\"] == os.getpid()`.",
+    "B3 `release()` leaves the lock file in place with 0 bytes (the stamp cleared), so `board.controller_alive(cfg)` for a config whose `worktree_root` holds that `controller.lock` is False; a second `release()` raises nothing. Today release deletes the file (measured).",
+    "B4 How the lock is held (the rule of core/slots.py and core/ticketlock.py): `acquire` opens the path with `os.O_RDWR | os.O_CREAT`, takes `LOCK_EX | LOCK_NB` on that fd and keeps the fd open while held, and writes the stamp into the same file in place (truncate to 0, write the JSON, fsync) - never through `atomic_write`, `os.replace` or an unlink, because a lock on a replaced file stops counting. The fd is not inheritable (the `os.open` default), so issuers, regressions and fixers the controller starts never hold the lock. `release()` truncates the file to 0 bytes, then closes the fd (which drops the flock). An OSError other than 'held by another' becomes an `osx.OSFailure` naming the path.",
+    "B5 Kept: after the flock is taken, a stamp already in the file whose process is alive (a controller started before this change holds no flock) still refuses with the existing `already running (pid <pid> on <host> since <started>); lock <path>` text, and the flock is let go again; a stamp whose process is dead is taken over; a second `PidLock` on the same path in the same process while the first holds is refused (a separate open file description).",
+    "B6 `board.controller_alive()` is unchanged and its existing tests (test_board_dag.py `test_dep_satisfied_and_controller_alive`, `LiveIdleReasonUnits`, the lock fixtures in test_live.py) pass unchanged; `ticket_controller.main` still takes the lock with `osx.PidLock(...).acquire()` and releases it in its `finally`.",
+    "B7 The PidLock docstring and devloop/README.md (next to the sentence about stopping a manually started controller by the pid in `<worktrees>/controller.lock`) say that the file stays after the controller stops, emptied, and that the lock is a flock on it."
+  ],
+  "needs_verifier": true,
+  "complexity": "complex",
+  "token_estimate": 2500000,
+  "token_basis": "Calibrated on landed tickets #137-#161 (cache reads included): complex one-round tickets 2-4M. ~40 lines in osx.py, a README sentence, 2 verifier cases with a holder child, ~5 implementer units, review of a locking primitive -> 2.5M.",
+  "vision": "VISION 'one request from start to end' (scripts do the hand-offs, the main session does not watch): two controllers cannot both run. Metrics 'tokens and time per landed ticket' and 'how much waits for me': a second controller would dispatch a second issuer for a ticket (project memory: two issuers on one ticket remove each other's worktree and overwrite merged with stuck), costing a full ticket run and a page. No incident measured; this is prevention.",
+  "removes": "the create-then-write PidLock path (O_EXCL create, then the JSON write, and the unlink on release and on a stale holder)",
+  "id": "167",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-28T09:49:29Z",
+  "request": "Phase one, group 4 of the improvement plan: honest acceptance and reliability (D-100, D-102). Source: external audit\nP0-2, P0-3, P0-6, P1-6, each confirmed by the main session reading the code; T main session agreed (2026-11-26).\nKeep these as one group, three tickets.\n\n4.1 Acceptance results must be honest.\n- Problem (read in code): a skipped acceptance case (rc 0) counts as green; `red_check()` treats skip as red but\n  expectedFailure is recorded as `pass`; nothing checks whether the worker edited the `T<N>Acceptance` cases.\n- Layer 1: `run_cases()` requires each case to be exactly `pass`; `red_check()` requires exactly `fail`.\n  expectedFailure is recorded as `xfail` (not pass).\n- Layer 2: from round 2 on, a worker change that alters the `T<N>Acceptance` definitions is sent back. Compare by\n  AST (classes and functions), and check the count of same-named definitions. A round that went through `--revise`\n  (the ticket was rewritten) is not a violation. The verifier prompt gets one line: helpers specific to this ticket\n  go inside the class.\n\n4.2 Controller lock uses flock.\n- Problem (read in code): `PidLock` creates an empty file and then writes JSON; two `actl run` starting at once can\n  both take the lock.\n- Do: keep the lock file (do not delete it), use `fcntl.flock`, clear the stamp on release; `controller_alive()` and\n  existing tests keep passing.\n\n4.3 start_fixer writes once.\n- Do: `start_fixer()` writes the pool once, after the spawn, and passes `--round` to `auto_fixer.py`.\n\nvision: an acceptance result means what it says, and two controllers cannot both run.\nremoves: the two-write path in start_fixer; the create-then-write PidLock path.\n",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-28T09:49:29Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 422.43333333333334,
+      "at": "2026-11-28T09:49:26Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-28T092819Z-a1",
+      "input_tokens": 52,
+      "output_tokens": 42266,
+      "cache_read_tokens": 4248788,
+      "cache_write_tokens": 87328,
+      "usd": 2.3939283333333337,
+      "session_id": "b45b5d73-09aa-48cc-a751-9a6fcf969756",
+      "split_over": [
+        "166",
+        "167",
+        "168"
+      ]
+    }
+  ],
+  "group": "g20"
+}
