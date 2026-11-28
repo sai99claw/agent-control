@@ -190,13 +190,18 @@ class T156Acceptance(LoopCase):
     def cmd(model):
         return ["python3", AGENT[1], "--model", model]
 
+    OMIT = object()
+
     def agents(self, worker_simple=True):
+        """worker_simple: True -> [m-ws, m-w1]; OMIT -> key left out; anything else -> that value."""
         c = self.cmd
         out = {"creator": [c("m-creator")], "worker": [c("m-w1"), c("m-w2")],
                "verifier": [c("m-v")], "reviewer": [c("m-r")], "fixer": [c("m-f")],
                "consolidator": [c("m-c")], "consolidator_peer": [c("m-c")]}
-        if worker_simple:
+        if worker_simple is True:
             out["worker_simple"] = [c("m-ws"), c("m-w1")]
+        elif worker_simple is not self.OMIT:
+            out["worker_simple"] = worker_simple
         return out
 
     def queue(self, layer, name):
@@ -254,12 +259,21 @@ class T156Acceptance(LoopCase):
         for (layer, name), want in expect.items():
             with self.subTest(layer=layer, name=name):
                 self.assertEqual(list(memory.readers(cfg, layer, name)), want)
-        # worker_simple unset: cfg.agent_chain falls back to worker
-        self.config(agents=self.agents(worker_simple=False))
-        cfg = Config(self.proj)
-        self.assertEqual(list(memory.readers(cfg, "role", "worker")), ["m-w1", "m-w2"])
-        self.assertEqual(list(memory.readers(cfg, "project", "project")),
-                         ["m-creator", "m-w1", "m-w2", "m-v", "m-r", "m-f"])
+        # worker_simple configured [] or null: cfg.agent_chain falls back to the worker chain
+        for empty in ([], None):
+            with self.subTest(worker_simple=empty):
+                self.config(agents=self.agents(worker_simple=empty))
+                cfg = Config(self.proj)
+                self.assertEqual(list(memory.readers(cfg, "role", "worker")), ["m-w1", "m-w2"])
+                self.assertEqual(list(memory.readers(cfg, "project", "project")),
+                                 ["m-creator", "m-w1", "m-w2", "m-v", "m-r", "m-f"])
+        # worker_simple left out: Config fills the default sonnet command, a reader like any other
+        with self.subTest(worker_simple="left out"):
+            self.config(agents=self.agents(worker_simple=self.OMIT))
+            cfg = Config(self.proj)
+            self.assertEqual(list(memory.readers(cfg, "role", "worker")), ["m-w1", "m-w2", "sonnet"])
+            self.assertEqual(list(memory.readers(cfg, "project", "project")),
+                             ["m-creator", "m-w1", "m-w2", "sonnet", "m-v", "m-r", "m-f"])
 
     # ------------------------------------------------------------ item 2
 
