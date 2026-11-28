@@ -1,7 +1,7 @@
 {
   "id": "g14",
   "branch": "int/g14",
-  "state": "open",
+  "state": "pr",
   "members": [
     "148",
     "149",
@@ -19,6 +19,10 @@
     {
       "at": "2026-11-28T00:58:43Z",
       "event": "branch int/g14 made from main 5578f25e1adb"
+    },
+    {
+      "at": "2026-11-28T03:33:39Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6"
