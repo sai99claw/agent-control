@@ -23,7 +23,12 @@
     {
       "at": "2026-11-28T03:33:39Z",
       "event": "all tickets merged or stuck: PR ready"
+    },
+    {
+      "at": "2026-11-28T04:19:41Z",
+      "event": "main moved to 35855fb65766: merged it into int/g14"
     }
   ],
-  "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6"
+  "base": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
+  "main_tried": "35855fb65766fbe207d66914fa1a79c84bb3563d"
 }
