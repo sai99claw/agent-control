@@ -6,7 +6,16 @@
     "162"
   ],
   "fix_round": 0,
-  "job": null,
+  "job": {
+    "kind": "release",
+    "stamp": {
+      "pid": 7013,
+      "host": "vm",
+      "boot": "1af08401-bef6-4188-8e63-8b52c8360b1e",
+      "started": "2026-11-28T10:16:03Z"
+    },
+    "out": "/home/user/agent-control-devloop/runs/release-job/g18/result-1795860963.json"
+  },
   "created": "2026-11-28T09:05:11Z",
   "history": [
     {
@@ -40,6 +49,10 @@
     {
       "at": "2026-11-28T10:16:01Z",
       "event": "landed"
+    },
+    {
+      "at": "2026-11-28T10:16:03Z",
+      "event": "release started"
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
