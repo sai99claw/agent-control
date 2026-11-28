@@ -3,8 +3,9 @@
 
 Started only by ticket_controller. Per round (at most devloop.max_rounds rounds that were not
 free - a round that ended on a merge conflict with the group (at step 6, or replaying the
-ticket's own commits at round start in step 0), on a revision that threw out the verifier's cases, or on a blocked worker whose failing ids passed when devloop ran them is
-free - and at most 2 x max_rounds rounds in all; whole run at most
+ticket's own commits at round start in step 0), on a revision that changed the round's work (the
+ticket's brief or its cases, made while the round ran), or on a blocked worker whose failing ids
+passed when devloop ran them is free - and at most 2 x max_rounds rounds in all; whole run at most
 devloop.issuer_timeout_seconds (time waiting for a machine slot or for a usage limit to reset
 not counted)):
 
@@ -12,7 +13,10 @@ not counted)):
      commits (uncommitted tracked changes committed first; branch_base and 'rebased', D-098);
      a replay that conflicts ends the round before any agent: the branch restarts at its start
      point, its old head kept under refs/devloop/before-rebase/ ('rebase conflict')
-  1. worker (+ verifier while the ticket has no cases yet) work in their own worktrees
+  1. worker (+ verifier while the ticket has no cases yet) work in their own worktrees; while
+     the issuer waits for them (and for the reviewer in step 4) it reads the ticket every
+     devloop.poll_seconds, and a revision that changes the round's work stops the round's agents
+     and ends the round, free; the same check runs after the hand-ins and right before step 6
   2. the verifier's branch is merged into the ticket branch
   3. hard_block check on what the ticket changes
   4. reviewer, when the ticket asks for one
@@ -20,13 +24,19 @@ not counted)):
   6. the ticket branch takes in the latest target and moves the target forward (compare-and-swap;
      if another ticket moved it first, take it in again)
 
-A step that fails becomes feedback for the next round. A worker that thinks the ticket is wrong
-calls ticket_creator.py --revise itself (it is in the worker's prompt); a revision the opener
-handed in but nobody wrote into the pool (the worker was stopped meanwhile) is written in by the
+A step that fails becomes feedback for the next round. A worker or verifier that thinks the
+ticket is wrong hands in {"kind": "revise", "reason": R}; the issuer runs the opener's revision
+itself (ticket_creator.revise, source worker | verifier, in the issuer's own environment, charged
+to its deadline, no machine slot) - the worker's before the verifier is waited for, the
+verifier's only when the worker's did not revise or ended UNCHANGED. REVISED ends the round as a
+work-changing revision (free); UNCHANGED ends it unmerged and free with the opener's note as
+feedback; ESCALATED leaves the ticket stuck (decision; the opener's page is the page); a failed
+revision or a hand-in without "reason" is counted feedback. A revision the opener handed in but
+nobody wrote into the pool (its ticket_creator.py was stopped meanwhile) is written in by the
 issuer before the next round starts. Out of rounds, out of
 time, hard_block, environment, or a question only the user can answer -> the ticket is "stuck"
 and the main session gets one page. A worker's blocked hand-in gets one decision page, unless
-the worker's revise escalated in that round (its page is the page). When the blocked hand-in
+a revise escalated in that round (its page is the page). When the blocked hand-in
 names "failing" test ids, devloop runs them on the ticket branch first: when they pass, the block
 was the agent's own environment, the round is free (agent_env) and the worker runs again next
 round on the next command of its chain.
@@ -80,6 +90,23 @@ class Stuck(Exception):
 THROWN_OUT = ("the ticket was revised during this round and the revision threw out the "
               "verifier's cases (cases_wrong); the verifier writes them again next round and "
               "the worker works on the revised ticket")
+
+
+REVISED_MID_ROUND = ("the ticket was revised during this round; the round was stopped and does "
+                     "not count, and the next round works on the revised ticket")
+
+
+def brief_revised(t):
+    """True when a 'revised' event after the last 'round start' changed the round's work: its
+    'fields' name a brief field (what _brief gives agents, id aside) or it has cases_wrong."""
+    brief = set(BRIEF_KEYS) - {"id"}
+    changed = False
+    for h in t.get("history") or []:
+        if h.get("event") == "round start":
+            changed = False
+        elif h.get("event") == "revised" and (h.get("cases_wrong") or brief & set(h.get("fields") or [])):
+            changed = True
+    return changed
 
 
 def cases_thrown_out(t):
@@ -252,15 +279,29 @@ class Issuer:
             return "\n".join(conflicts), costs
         work = None if self.worker_ok else self.start("worker", "worker.md", t, r, self.wt)
         ver = self.start("verifier", "verifier.md", t, r, self.cwt) if need_cases else None
-        hands = []
+        whand = vh = None
+        problems = []
+        wkept = False     # the worker's revise hand-in ended UNCHANGED
         for p in [work, ver]:
             if p:
-                hands.append(p.finish())
-                costs.append(hands[-1].cost)
+                h = p.finish(self.revision_seen, self.cfg.poll_seconds)
+                costs.append(h.cost)
+                if h.stopped:
+                    return self.revised_mid_round([work, ver], costs), costs
+                memory.collect(self.pool, h, "#%s r%d %s" % (self.id, r, h.role))
+                if p is ver:
+                    vh = h
+                    continue
+                whand = h
+                # A worker's revise hand-in is handled before the verifier is waited for, so a
+                # revision or an escalation stops a verifier that still runs.
+                if h.kind == "revise" and not h.problem():
+                    end, text = self.revise_hand(h, "worker")
+                    if end == "revised":
+                        return self.revised_mid_round([work, ver], costs), costs
+                    wkept = end == "unchanged"
+                    problems.append(text)
         self.pending = []
-        for h in hands:
-            memory.collect(self.pool, h, "#%s r%d %s" % (self.id, r, h.role))
-        whand = hands[0] if work else None
         if whand and whand.kind == "blocked":
             escalated = False   # an 'escalated' event after the last 'round start': its page is the page
             for h in self.ticket().get("history") or []:
@@ -274,24 +315,29 @@ class Issuer:
             blocked = self.blocked_check(work, text, whand.result.get("failing"))
         else:
             blocked = None
-        if cases_thrown_out(self.ticket()):
-            # This round's verifier (if any) wrote against the old ticket: do not red-check or
-            # save its cases; the next round writes them again and restarts the worker.
-            self.save(lambda x: x.__setitem__("cases", None), "cases thrown out")
-            self._free = "revision"
-            return THROWN_OUT, costs
+        if brief_revised(self.ticket()):
+            # This round's agents worked on the old ticket: do not red-check or save the
+            # verifier's cases; the next round restarts the worker (and the verifier when the
+            # ticket has no cases).
+            return self.revised_mid_round([], costs), costs
 
-        problems = []
         if blocked:
             problems.append(blocked)
         elif whand and whand.problem():
             problems.append(whand.problem())
-        elif whand:
+        elif whand and whand.kind != "revise":
             self.worker_ok = True
         if ver:
-            vh = hands[-1]
             if vh.problem():
                 problems.append(vh.problem())
+            elif vh.kind == "revise" and whand is not None and whand.kind == "revise" and not wkept:
+                problems.append("the verifier's revise hand-in was not acted on: the worker's "
+                                "revise of this round came first and did not end unchanged")
+            elif vh.kind == "revise":
+                end, text = self.revise_hand(vh, "verifier")
+                if end == "revised":
+                    return self.revised_mid_round([], costs), costs
+                problems.append(text)
             elif vh.kind != "cases" or not vh.result.get("run"):
                 problems.append("verifier hand-in has no \"run\" list of case ids")
             elif self.repo.out("rev-list", "--count",
@@ -325,9 +371,12 @@ class Issuer:
         self.hard_block(g)
 
         if complexity(t) == "complex":
-            rh = self.start("reviewer", "reviewer.md", t, r, self.wt).finish()
+            rh = self.start("reviewer", "reviewer.md", t, r, self.wt).finish(
+                self.revision_seen, self.cfg.poll_seconds)
             costs.append(rh.cost)
             self.pending = []
+            if rh.stopped:
+                return self.revised_mid_round([], costs), costs
             memory.collect(self.pool, rh, "#%s r%d reviewer" % (self.id, r))
             if rh.problem():
                 return rh.problem(), costs
@@ -337,7 +386,69 @@ class Issuer:
         failed = self.run_cases(t)
         if failed:
             return failed, costs
-        return self.integrate(g, t), costs
+        return self.merge_unless_revised(g, t, costs), costs
+
+    def revise_hand(self, hand, role):
+        """A kind "revise" hand-in of `role` (worker | verifier): the issuer runs the opener's
+        revision itself (ticket_creator.revise, in this process and environment, its Pending in
+        self.pending so a signal stops it). Returns ("revised", None) or ("unchanged" | "failed",
+        feedback text); an UNCHANGED round is free ('revision'). An escalation -> Stuck decision
+        (ticket_creator wrote its page)."""
+        reason = hand.result.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return "failed", "the %s's revise hand-in has no \"reason\"" % role
+        self.check_time()
+        out = {}
+        ticket_creator.revise(self.cfg, self.pool, self.id, role, reason, cur=self.pending, outcome=out)
+        kind = out.get("kind")
+        if kind == "revised":
+            return "revised", None
+        if kind == "unchanged":
+            self._free = "revision"
+            return "unchanged", "the %s asked to revise the ticket; the opener kept it as written: %s" % (
+                role, out.get("note") or "(no note)")
+        if kind == "escalated":
+            raise Stuck("decision", "the %s asked to revise the ticket and the opener asked the main "
+                        "session: %s" % (role, out.get("note")), page=False)
+        return "failed", ("the %s asked to revise the ticket; the revision failed: %s; the ticket "
+                          "stands as written" % (role, out.get("why") or "the opener gave no outcome"))
+
+    def merge_unless_revised(self, g, t, costs):
+        """Right before the merge into the target: a work-changing revision ends the round
+        (its feedback), else integrate()."""
+        if brief_revised(self.ticket()):
+            return self.revised_mid_round([], costs)
+        return self.integrate(g, t)
+
+    def revision_seen(self):
+        """The watch finish() calls between slices: the ticket file in the local pool checkout
+        has a work-changing revision this round (a snapshot syncs, too heavy every poll). An
+        unreadable file counts as no revision yet."""
+        try:
+            t = osx.read_json(os.path.join(self.pool.path, "tickets", "%s.json" % self.id), None)
+        except osx.OSFailure:
+            return False
+        return isinstance(t, dict) and brief_revised(t)
+
+    def revised_mid_round(self, pendings, costs):
+        """End the round on a work-changing revision: every agent of `pendings` not collected yet
+        is collected when it already exited (its hand-in unused) and stopped when it still runs;
+        their rows go into costs. The round is free ('revision'); returns its feedback text."""
+        for p in pendings:
+            if p is None or p.hand is not None:
+                continue
+            if p.proc is not None and p.proc.poll() is not None:
+                costs.append(p.finish().cost)
+            else:
+                row = p.stop()
+                if row is not None:
+                    costs.append(row)
+        self.pending = []
+        self._free = "revision"
+        if cases_thrown_out(self.ticket()):
+            self.save(lambda x: x.__setitem__("cases", None), "cases thrown out")
+            return THROWN_OUT
+        return REVISED_MID_ROUND
 
     def rebase_round(self, t, r):
         """Before a round's agents (D-098): t/<N>-cases and t/<N> are put on the target's current
@@ -602,15 +713,13 @@ class Issuer:
         run_dir = self.cfg.runs_dir(self.id, "r%d-%s" % (r, role))
         simple = role == "worker" and complexity(t) == "simple"
         chain = "worker_simple" if simple else role
-        revise = "python3 %s --revise %s --from %s --reason '<why the ticket is wrong>'" % (
-            os.path.join(LOOP, "ticket_creator.py"), self.id, role)
         values = {
             "ticket_id": self.id, "ticket_json": json.dumps(_brief(t), indent=2, ensure_ascii=False),
             "round": r, "max_rounds": self.cfg.max_rounds, "branch": self.branch,
             "cases_branch": self.cases_branch, "target": self.target, "worktree": cwd,
             "cases_run": " ".join((t.get("cases") or {}).get("run") or []) or "(not written yet)",
             "feedback": "\n".join(t.get("feedback") or []) or "(first round)",
-            "revise_cmd": revise, "result_path": os.path.join(run_dir, "result.json"),
+            "result_path": os.path.join(run_dir, "result.json"),
             "test_cmd": "python3 %s <ids>" % os.path.join(LOOP, "run_tests.py"),
             "case_mark": case_mark(self.id),
             "base_cmd": ("python3 %s %s" % (os.path.join(LOOP, "run_tests.py"), " ".join(self.cfg.base_test_ids))
@@ -812,10 +921,12 @@ def case_mark(ident):
     return "T%sAcceptance" % ident
 
 
+BRIEF_KEYS = ("id", "title", "objective", "acceptance", "outline", "test_plan", "needs_verifier",
+              "complexity", "effort", "notes")
+
+
 def _brief(t):
-    keep = ("id", "title", "objective", "acceptance", "outline", "test_plan", "needs_verifier",
-            "complexity", "effort", "notes")
-    return {k: t[k] for k in keep if k in t}
+    return {k: t[k] for k in BRIEF_KEYS if k in t}
 
 
 def main(argv=None):

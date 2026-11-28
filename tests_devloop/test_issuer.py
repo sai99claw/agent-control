@@ -500,6 +500,181 @@ class T114Acceptance(LoopCase):
         self.assert_own_page(snap, "need the user")
 
 
+class T158Acceptance(LoopCase):
+    """Ticket #158: a worker or verifier that finds the ticket wrong hands in kind 'revise' with its
+    reason; the issuer runs the opener itself and starts the next round with the outcome."""
+
+    KEPT = "the %s asked to revise the ticket; the opener kept it as written: the ticket stands: item 2 is possible"
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+
+    # ------------------------------------------------------------ helpers
+
+    def runs_dir(self):
+        return os.path.join(self.tmp, "wt", "runs", "1")
+
+    def read_prompt(self, rnd, role):
+        path = os.path.join(self.runs_dir(), "r%d-%s" % (rnd, role), "prompt.md")
+        self.assertTrue(os.path.exists(path), "%s was not written" % path)
+        with open(path) as fh:
+            return fh.read()
+
+    def revise_dirs(self):
+        if not os.path.isdir(self.runs_dir()):
+            return []
+        return sorted(d for d in os.listdir(self.runs_dir()) if d.startswith("revise-"))
+
+    def revise_sources(self):
+        out = []
+        for d in self.revise_dirs():
+            meta = os.path.join(self.runs_dir(), d, "revise.json")
+            out.append(osx.read_json(meta).get("source") if os.path.exists(meta) else None)
+        return out
+
+    def run_loop(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap().ticket("1")
+
+    @staticmethod
+    def events(t, name):
+        return [h for h in t.get("history") or [] if h.get("event") == name]
+
+    def feedback_event(self, t, rnd):
+        found = [h for h in self.events(t, "feedback") if h.get("round") == rnd]
+        self.assertTrue(found, "no round-%d feedback event: %r" % (rnd, t.get("history")))
+        return found[0]
+
+    def first_seen_with_feedback(self, rnd):
+        """The ticket as the pool first stored it with a round-<rnd> feedback event (landing clears
+        'feedback', so read it from the pool's own git history)."""
+        shas = git(self.pool_path, "log", "--reverse", "--format=%H", "--", "tickets/1.json").split()
+        for sha in shas:
+            res = subprocess.run(["git", "show", "%s:tickets/1.json" % sha], cwd=self.pool_path,
+                                 capture_output=True, text=True)
+            if res.returncode != 0:
+                continue
+            t = json.loads(res.stdout)
+            if any(h.get("event") == "feedback" and h.get("round") == rnd for h in t.get("history") or []):
+                return t
+        self.fail("the pool never stored #1 with a round-%d feedback event" % rnd)
+
+    # ------------------------------------------------------------ acceptance 1 and 2: the templates
+
+    def test_1_2_the_prompt_templates_offer_the_revise_hand_in(self):
+        with open(os.path.join(LOOP, "prompts", "worker.md")) as fh:
+            worker = fh.read()
+        self.assertNotIn("{revise_cmd}", worker)
+        self.assertNotIn("ticket_creator.py", worker)
+        self.assertIn("## If you think the ticket (or the verifier's cases) is wrong", worker)
+        self.assertIn('"kind": "revise"', worker.split("## If you think the ticket (or the verifier's cases) is wrong")[1])
+        self.assertIn('"revise"', worker.split("## Hand-in")[-1])
+        with open(os.path.join(LOOP, "prompts", "verifier.md")) as fh:
+            verifier = fh.read()
+        self.assertIn("## If you think the ticket is wrong", verifier)
+        self.assertIn('"kind": "revise"', verifier.split("## If you think the ticket is wrong")[1])
+        self.assertIn('"revise"', verifier.split("## Hand-in")[-1])
+        self.assertIn("## Feedback from earlier rounds", verifier)
+        self.assertIn("{feedback}", verifier.split("## Feedback from earlier rounds")[1])
+
+    # ------------------------------------------------------------ C1: acceptance 1, 4, 5
+
+    def test_c1_a_worker_revise_hand_in_revised_ends_the_round_free(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_handin", "ok"]}, creator={"1": ["revised"]})
+        t = self.run_loop()
+        prompt = self.read_prompt(1, "worker")
+        self.assertIn('"kind": "revise"', prompt)
+        self.assertNotIn("ticket_creator.py", prompt)
+        self.assertEqual(len(self.revise_dirs()), 1, self.revise_dirs())
+        self.assertEqual(self.revise_sources(), ["worker"])
+        self.assertEqual(len(self.events(t, "revised")), 1, t.get("history"))
+        self.assertEqual(self.feedback_event(t, 1).get("free"), "revision")
+        self.assertIn("a possible thing", self.read_prompt(2, "worker"))
+        self.assertEqual(t["state"], "landed")
+
+    # ------------------------------------------------------------ C2: acceptance 6
+
+    def test_c2_a_worker_revise_hand_in_unchanged_ends_the_round_free_with_the_note(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_handin", "ok"]}, creator={"1": ["unchanged"]})
+        t = self.run_loop()
+        self.assertEqual(self.revise_sources(), ["worker"])
+        self.assertEqual(self.feedback_event(t, 1).get("free"), "revision")
+        seen = self.first_seen_with_feedback(1)
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + self.KEPT % "worker")
+        self.assertIn(self.KEPT % "worker", self.read_prompt(2, "worker"))
+        self.assertEqual(t["acceptance"], ["a"])
+        self.assertEqual(t["state"], "landed")
+
+    # ------------------------------------------------------------ C3: acceptance 7
+
+    def test_c3_a_worker_revise_hand_in_escalated_leaves_one_decision_page(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_handin"]}, creator={"1": ["question"]})
+        t = self.run_loop()
+        self.assertEqual(t["state"], "stuck")
+        self.assertEqual((t.get("stuck") or {}).get("reason"), "decision")
+        found = [row for row in self.snap().inbox.values()
+                 if row.get("kind") == "decision" and row.get("ref") == "1"]
+        self.assertEqual(len(found), 1, found)
+        self.assertTrue(found[0]["text"].startswith("#1 needs your decision (raised by the worker)"),
+                        found[0]["text"])
+        self.assertEqual(len(self.events(t, "escalated")), 1, t.get("history"))
+
+    # ------------------------------------------------------------ C4: acceptance 8
+
+    def test_c4_a_failed_revision_counts_and_the_ticket_stands(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_handin", "ok"]}, creator={"1": ["bad"]})
+        t = self.run_loop()
+        self.assertEqual(self.revise_sources()[:1], ["worker"])
+        ev = self.feedback_event(t, 1)
+        self.assertNotIn("free", ev)
+        seen = self.first_seen_with_feedback(1)
+        self.assertTrue(seen.get("feedback"), seen)
+        text = seen["feedback"][0]
+        self.assertTrue(text.startswith("round 1: the worker asked to revise the ticket; the revision failed: "), text)
+        self.assertTrue(text.endswith("; the ticket stands as written"), text)
+        self.assertEqual(t["acceptance"], ["a"])
+
+    # ------------------------------------------------------------ C5: acceptance 9
+
+    def test_c5_a_revise_hand_in_without_a_reason_runs_no_opener(self):
+        self.add(1)
+        self.plan(worker={"1": ["revise_noreason", "ok"]})
+        t = self.run_loop()
+        self.assertEqual(self.revise_dirs(), [])
+        ev = self.feedback_event(t, 1)
+        self.assertNotIn("free", ev)
+        seen = self.first_seen_with_feedback(1)
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: the worker's revise hand-in has no \"reason\"")
+
+    # ------------------------------------------------------------ C6: acceptance 2, 10
+
+    def test_c6_a_verifier_revise_hand_in_unchanged_reruns_the_verifier_with_the_answer(self):
+        self.add(1)
+        self.plan(worker={"1": ["ok"]}, verifier={"1": ["revise_handin", "ok"]}, creator={"1": ["unchanged"]})
+        t = self.run_loop()
+        prompt = self.read_prompt(1, "verifier")
+        self.assertIn('"kind": "revise"', prompt)
+        self.assertIn("## Feedback from earlier rounds", prompt)
+        self.assertEqual(self.revise_sources(), ["verifier"])
+        self.assertEqual(self.feedback_event(t, 1).get("free"), "revision")
+        seen = self.first_seen_with_feedback(1)
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + self.KEPT % "verifier")
+        self.assertIn(self.KEPT % "verifier", self.read_prompt(2, "verifier"))
+        self.assertFalse(os.path.exists(os.path.join(self.runs_dir(), "r2-worker")),
+                         "the worker's round-1 hand-in stood: round 2 runs only the verifier")
+        self.assertEqual(t["state"], "landed")
+
+
 class T138Acceptance(LoopCase):
     """Ticket #138 (D-098): a round-start replay that conflicts ends the round before any agent as a
     free merge round; the conflicting branch restarts at its start point and its old head is kept
@@ -709,6 +884,135 @@ class CasesThrownOut(LoopCase):
         from core.config import Config
         issuer.cfg, issuer.id, issuer.deadline = Config(self.proj), "1", time.time() + 60
         self.assertIsNone(issuer.run_cases({"needs_verifier": False, "cases": None}))
+
+
+class T157Acceptance(LoopCase):
+    """Ticket #157: a revision that changes a running round's work stops that round's agents, the
+    round ends free ('revision'), and the next round's worker and verifier work on the revised ticket."""
+
+    REVISED_MID_ROUND = ("the ticket was revised during this round; the round was stopped and does "
+                         "not count, and the next round works on the revised ticket")
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+        self.config(agent_timeout_seconds=30)
+
+    # ------------------------------------------------------------ helpers
+
+    def prompt(self, rnd, role):
+        return os.path.join(self.tmp, "wt", "runs", "1", "r%d-%s" % (rnd, role), "prompt.md")
+
+    def read_prompt(self, rnd, role):
+        with open(self.prompt(rnd, role)) as fh:
+            return fh.read()
+
+    def ticket_file(self):
+        try:
+            return osx.read_json(os.path.join(self.pool_path, "tickets", "1.json"))
+        except osx.OSFailure:
+            return None    # caught mid-write
+
+    @staticmethod
+    def feedback_event(t, rnd):
+        for h in (t or {}).get("history") or []:
+            if h.get("event") == "feedback" and h.get("round") == rnd:
+                return h
+        return None
+
+    def run_with_revision(self, rnd, role, fb_round):
+        """Run the controller in the background; once r<rnd>-<role>/prompt.md exists, revise #1 the
+        way a worker does. Returns (ticket at the end, seconds from the revise command's return to
+        the round's feedback event, ticket as first seen with that event)."""
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py")], cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        def end():
+            if proc.poll() is None:
+                proc.terminate()
+                proc.communicate(timeout=30)
+        self.addCleanup(end)
+        deadline = time.time() + 60
+        while not os.path.exists(self.prompt(rnd, role)):
+            if time.time() > deadline or proc.poll() is not None:
+                end()
+                self.fail("r%d-%s/prompt.md never appeared" % (rnd, role))
+            time.sleep(0.1)
+        res = self.run_py("ticket_creator.py", "--revise", "1", "--reason", "drop item 2")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        revised_at = time.time()
+        first_seen, delay = None, None
+        while proc.poll() is None:
+            t = self.ticket_file()
+            if self.feedback_event(t, fb_round):
+                first_seen, delay = t, time.time() - revised_at
+                break
+            time.sleep(0.2)
+        out, err = proc.communicate(timeout=240)
+        self.assertEqual(proc.returncode, 0, out + err)
+        t = self.snap().ticket("1")
+        if first_seen is None and self.feedback_event(t, fb_round):
+            first_seen, delay = t, time.time() - revised_at
+        return t, delay, first_seen
+
+    def assert_free_within(self, t, delay, rnd):
+        ev = self.feedback_event(t, rnd)
+        self.assertIsNotNone(ev, "no round-%d feedback event: %r" % (rnd, t.get("history")))
+        self.assertEqual(ev.get("free"), "revision", ev)
+        self.assertLess(delay, 20, "round %d's feedback came %.1f s after the revision" % (rnd, delay))
+
+    # ------------------------------------------------------------ cases
+
+    def test_c1_a_revision_keeping_the_cases_stops_the_worker_and_the_round_is_free(self):
+        self.add(1)
+        self.plan(worker={"1": ["sleep", "ok"]}, creator={"1": ["revised_kept_cases"]})
+        t, delay, seen = self.run_with_revision(1, "worker", 1)
+        self.assert_free_within(t, delay, 1)
+        # the merge clears 'feedback' on landing: read it from the ticket as first seen with the event
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + self.REVISED_MID_ROUND)
+        # the stopped worker's row is written with the round's feedback
+        rows = [(r.get("role"), r.get("round"), r.get("outcome")) for r in seen.get("cost") or []]
+        self.assertIn(("worker", 1, "interrupted"), rows)
+        # no cases were saved in the stopped round
+        hist = t["history"]
+        starts = [i for i, h in enumerate(hist) if h.get("event") == "round start" and h.get("round") == 1]
+        fed = [i for i, h in enumerate(hist) if h.get("event") == "feedback" and h.get("round") == 1]
+        self.assertFalse([h for h in hist[starts[0]:fed[0]] if h.get("event") == "cases ready"], hist)
+        self.assertIn("a possible thing", self.read_prompt(2, "worker"))
+        self.assertIn("a possible thing", self.read_prompt(2, "verifier"))
+        self.assertEqual(t["state"], "landed")
+
+    def test_c2_a_revision_during_a_verifier_only_round_reruns_the_worker(self):
+        self.add(1)
+        self.plan(worker={"1": ["ok"]}, verifier={"1": ["weak", "sleep", "ok"]},
+                  creator={"1": ["revised_kept_cases"]})
+        t, delay, _ = self.run_with_revision(2, "verifier", 2)
+        self.assertFalse(os.path.exists(self.prompt(2, "worker")), "round 2 was meant to run only the verifier")
+        ev = self.feedback_event(t, 2)
+        self.assertIsNotNone(ev, t.get("history"))
+        self.assertEqual(ev.get("free"), "revision", ev)
+        self.assertTrue(os.path.exists(self.prompt(3, "worker")), "round 3 did not start the worker")
+        self.assertIn("a possible thing", self.read_prompt(3, "worker"))
+        self.assertEqual(t["state"], "landed")
+
+    def test_c3_a_revision_while_the_reviewer_runs_stops_the_round(self):
+        self.add(1, complexity="complex")
+        self.plan(reviewer={"1": ["sleep", "pass"]}, creator={"1": ["revised_kept_cases"]})
+        t, delay, _ = self.run_with_revision(1, "reviewer", 1)
+        self.assert_free_within(t, delay, 1)
+        self.assertIn("a possible thing", self.read_prompt(2, "worker"))
+
+    def test_c4_a_cases_wrong_revision_stops_the_round_with_thrown_out(self):
+        import ticket_issuer
+        self.add(1)
+        self.plan(worker={"1": ["sleep", "ok"]}, creator={"1": ["revised"]})
+        t, delay, seen = self.run_with_revision(1, "worker", 1)
+        self.assert_free_within(t, delay, 1)
+        # the merge clears 'feedback' on landing: read it from the ticket as first seen with the event
+        self.assertTrue(seen.get("feedback"), seen)
+        self.assertEqual(seen["feedback"][0], "round 1: " + ticket_issuer.THROWN_OUT)
 
 
 class T137Acceptance(LoopCase):
@@ -963,6 +1267,207 @@ class ApplyUnapplied(LoopCase):
         self.assertEqual(ev[0]["run"], name)
 
 
+class ReviseHandIn(LoopCase):
+    """#158, implementer's own: a worker's or verifier's kind "revise" hand-in, run by the issuer."""
+
+    def setUp(self):
+        super().setUp()
+        import ticket_creator
+        import ticket_issuer
+        from core.config import Config
+        self.tc, self.ti = ticket_creator, ticket_issuer
+        self.cfg = Config(self.proj)
+        self.add(1)
+
+    def bare(self):
+        issuer = self.ti.Issuer.__new__(self.ti.Issuer)
+        issuer.cfg, issuer.pool, issuer.id = self.cfg, self.pool, "1"
+        issuer.pending, issuer.started_agents, issuer._free = [], [], None
+        issuer.deadline = time.time() + 600
+        return issuer
+
+    @staticmethod
+    def hand(role, result):
+        from core import agents
+        return agents.Hand(role, result, 0, False, None, {"role": role})
+
+    def outcome(self, out, role="worker", reason="item 2 is impossible"):
+        issuer = self.bare()
+        calls = []
+
+        def fake(cfg, pool, ident, source, why, cur=None, outcome=None):
+            calls.append((ident, source, why, cur is issuer.pending))
+            outcome.update(out)
+            return 0
+        with mock.patch.object(self.tc, "revise", fake):
+            res = issuer.revise_hand(self.hand(role, {"kind": "revise", "reason": reason}), role)
+        return issuer, res, calls
+
+    def test_unchanged_is_free_with_the_note(self):
+        issuer, res, calls = self.outcome({"kind": "unchanged", "note": "it is possible"})
+        self.assertEqual(res, ("unchanged", "the worker asked to revise the ticket; the opener kept "
+                                            "it as written: it is possible"))
+        self.assertEqual(issuer._free, "revision")
+        self.assertEqual(calls, [("1", "worker", "item 2 is impossible", True)])
+        _, res, _ = self.outcome({"kind": "unchanged", "note": ""}, role="verifier")
+        self.assertEqual(res[1], "the verifier asked to revise the ticket; the opener kept it as "
+                                 "written: (no note)")
+
+    def test_revised_and_failed(self):
+        issuer, res, _ = self.outcome({"kind": "revised", "note": "n"})
+        self.assertEqual(res, ("revised", None))
+        issuer, res, _ = self.outcome({"kind": "failed", "why": "boom"}, role="verifier")
+        self.assertEqual(res, ("failed", "the verifier asked to revise the ticket; the revision "
+                                         "failed: boom; the ticket stands as written"))
+        self.assertIsNone(issuer._free)
+
+    def test_escalated_is_stuck_decision_without_a_second_page(self):
+        with self.assertRaises(self.ti.Stuck) as ctx:
+            self.outcome({"kind": "escalated", "note": "B2B or B2C?"})
+        self.assertEqual((ctx.exception.reason, ctx.exception.page), ("decision", False))
+        self.assertIn("B2B or B2C?", ctx.exception.text)
+
+    def test_no_reason_runs_no_opener(self):
+        for reason in (None, "", "  ", 3):
+            issuer, res, calls = self.outcome({"kind": "revised"}, reason=reason)
+            self.assertEqual(res, ("failed", 'the worker\'s revise hand-in has no "reason"'))
+            self.assertEqual(calls, [])
+
+    def test_start_passes_no_revise_cmd(self):
+        import inspect
+        self.assertNotIn("revise_cmd", inspect.getsource(self.ti.Issuer.start))
+        with open(os.path.join(LOOP, "prompts", "worker.md")) as fh:
+            self.assertNotIn("{revise_cmd}", fh.read())
+
+    # ---- both agents in one round (_round with stubbed agents)
+
+    def round_with(self, whand, vhand, worker_end):
+        issuer = self.bare()
+        issuer.worker_ok, issuer.round_costs = False, []
+        issuer.target, issuer.cwt, issuer.wt, issuer.cases_branch = "int/g1", "/nowhere", "/nowhere", "t/1-cases"
+        issuer.repo = mock.Mock()
+        issuer.ticket = lambda: {"history": [{"event": "round start"}]}
+        issuer.rebase_round = lambda t, r: (t, [])
+        order = []
+
+        class P:
+            def __init__(self, h):
+                self.h, self.hand, self.proc, self.stopped = h, None, None, False
+
+            def finish(self, *a):
+                order.append("finish " + self.h.role)
+                self.hand = self.h
+                return self.h
+
+            def stop(self):
+                self.stopped = True
+                order.append("stop " + self.h.role)
+                return {"role": self.h.role, "outcome": "interrupted"}
+        ps = {"worker": P(whand), "verifier": P(vhand)}
+
+        def start(role, *a):
+            issuer.pending.append(ps[role])
+            return ps[role]
+        issuer.start = start
+
+        def revise_hand(hand, role):
+            order.append("revise " + role)
+            if role == "worker":
+                if worker_end == "revised":
+                    return "revised", None
+                if worker_end == "unchanged":
+                    issuer._free = "revision"
+                return worker_end, "W " + worker_end
+            return "unchanged", "V unchanged"
+        issuer.revise_hand = revise_hand
+        t = {"id": "1", "needs_verifier": True}
+        with mock.patch.object(self.ti.worktrees, "branch_tree"), \
+                mock.patch.object(self.ti.memory, "collect"):
+            feedback, _ = issuer._round(t, 1)
+        return issuer, feedback, order, ps
+
+    def test_both_revise_the_verifiers_runs_after_the_workers_unchanged(self):
+        rev = {"kind": "revise", "reason": "r"}
+        issuer, feedback, order, _ = self.round_with(self.hand("worker", rev), self.hand("verifier", rev),
+                                                     "unchanged")
+        self.assertEqual(order, ["finish worker", "revise worker", "finish verifier", "revise verifier"])
+        self.assertEqual(feedback, "W unchanged\nV unchanged")
+        self.assertEqual(issuer._free, "revision")
+        self.assertFalse(issuer.worker_ok)
+
+    def test_both_revise_the_verifiers_does_not_run_after_the_workers_failed(self):
+        rev = {"kind": "revise", "reason": "r"}
+        issuer, feedback, order, _ = self.round_with(self.hand("worker", rev), self.hand("verifier", rev),
+                                                     "failed")
+        self.assertEqual(order, ["finish worker", "revise worker", "finish verifier"])
+        self.assertTrue(feedback.startswith("W failed\nthe verifier's revise hand-in was not acted on"))
+        self.assertIsNone(issuer._free)
+
+    def test_a_workers_revised_stops_the_running_verifier_before_waiting_for_it(self):
+        issuer, feedback, order, ps = self.round_with(
+            self.hand("worker", {"kind": "revise", "reason": "r"}),
+            self.hand("verifier", {"kind": "cases", "run": ["x"]}), "revised")
+        self.assertEqual(order, ["finish worker", "revise worker", "stop verifier"])
+        self.assertEqual(feedback, self.ti.REVISED_MID_ROUND)
+        self.assertEqual(issuer._free, "revision")
+        self.assertEqual(issuer.pending, [])
+
+    def test_a_verifiers_revise_alone_runs_after_a_done_worker(self):
+        issuer, feedback, order, _ = self.round_with(
+            self.hand("worker", {"kind": "done"}), self.hand("verifier", {"kind": "revise", "reason": "r"}),
+            "unused")
+        self.assertEqual(order, ["finish worker", "finish verifier", "revise verifier"])
+        self.assertEqual(feedback, "V unchanged")
+        self.assertTrue(issuer.worker_ok)
+
+    # ---- item 11: the opener's Pending where stop_agents() reaches it
+
+    def test_the_openers_pending_sits_in_cur_while_it_runs_and_leaves_after(self):
+        from core import agents
+        cur = ["round agent"]
+        seen = []
+
+        class P:
+            hand = None
+
+            def __init__(self, interrupt):
+                self.interrupt = interrupt
+
+            def finish(self):
+                seen.append(list(cur))
+                if self.interrupt:
+                    raise agents.Interrupted("signal 15")
+                return agents.Hand("creator", {"kind": "unchanged", "note": "fine"}, 0, False, None, None)
+        p = P(False)
+        out = {}
+        with mock.patch.object(self.tc.agents, "start", return_value=p) as start:
+            rc = self.tc.revise(self.cfg, self.pool, "1", "worker", "why", cur=cur, outcome=out)
+        self.assertEqual(rc, 0)
+        self.assertEqual(start.call_args[0][1], "creator")
+        self.assertEqual(seen, [["round agent", p]])
+        self.assertEqual(cur, ["round agent"])
+        self.assertEqual(out, {"kind": "unchanged", "note": "fine"})
+        meta = glob.glob(os.path.join(self.tmp, "wt", "runs", "1", "revise-*", "revise.json"))
+        self.assertEqual([osx.read_json(m)["source"] for m in meta], ["worker"])
+        q = P(True)
+        with mock.patch.object(self.tc.agents, "start", return_value=q):
+            with self.assertRaises(agents.Interrupted):
+                self.tc.revise(self.cfg, self.pool, "1", "worker", "why", cur=cur, outcome={})
+        self.assertEqual(cur, ["round agent", q], "an interrupted opener is no longer stoppable")
+
+    def test_the_issuers_interrupt_stops_the_opener_and_keeps_its_row(self):
+        issuer = self.bare()
+        issuer.round_costs = []
+
+        class P:
+            hand = None
+
+            def stop(self):
+                return {"role": "creator", "outcome": "interrupted"}
+        issuer.pending.append(P())
+        self.assertEqual(issuer.interrupted_costs(), [{"role": "creator", "outcome": "interrupted"}])
+
+
 class FreeRounds(LoopCase):
     """Rounds that ended on a merge conflict with the group or a cases_wrong revision are free."""
 
@@ -1014,6 +1519,108 @@ class FreeRounds(LoopCase):
         self.assertEqual(ticket_issuer.rounds_text(t),
                          "4 rounds used and still not passing (1 real red, 3 free: 2 merge "
                          "conflict, 1 revision); last feedback:\nround 4: last")
+
+
+class RevisedMidRound(LoopCase):
+    """#157: a revision of the brief (or with cases_wrong) made while a round runs ends that round."""
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+
+    def test_brief_revised_needs_a_brief_field_or_cases_wrong_after_the_round_start(self):
+        import ticket_issuer
+        start = {"event": "round start"}
+        rev = lambda fields, wrong=False: {"event": "revised", "fields": fields, "cases_wrong": wrong}
+        self.assertTrue(ticket_issuer.brief_revised({"history": [start, rev(["acceptance"])]}))
+        self.assertTrue(ticket_issuer.brief_revised({"history": [start, rev(["effort", "vision"])]}))
+        self.assertTrue(ticket_issuer.brief_revised({"history": [start, rev([], True)]}))
+        for fields in (["token_estimate"], ["token_basis", "vision", "removes"], [], ["id"]):
+            self.assertFalse(ticket_issuer.brief_revised({"history": [start, rev(fields)]}), fields)
+        self.assertFalse(ticket_issuer.brief_revised({"history": [rev(["acceptance"], True), start]}))
+        self.assertFalse(ticket_issuer.brief_revised({}))
+
+    def pending(self, script):
+        from core import agents
+        run = os.path.join(self.tmp, "run")
+        os.makedirs(run)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        env["DEVLOOP_RESULT"] = os.path.join(run, "result.json")
+        p = agents.Pending("worker", [["sh", "-c", script]], "go", self.proj, env, run,
+                           env["DEVLOOP_RESULT"], 30, 1)
+        p.launch()
+        return p
+
+    def test_a_watch_that_turns_true_stops_the_run_between_slices(self):
+        p = self.pending("cat >/dev/null; sleep 30")
+        calls = []
+        began = time.time()
+        h = p.finish(lambda: calls.append(1) or len(calls) >= 3, 0.2)
+        self.assertLess(time.time() - began, 10)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(h.stopped)
+        self.assertEqual((h.cost["outcome"], h.cost["role"], h.cost["round"]), ("interrupted", "worker", 1))
+        self.assertIn("revised", h.problem())
+        self.assertIsNotNone(p.proc.poll())
+
+    def test_a_watch_that_stays_false_collects_the_hand_in_as_usual(self):
+        p = self.pending('cat >/dev/null; sleep 0.7; echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"')
+        calls = []
+        h = p.finish(lambda: calls.append(1) and False, 0.2)
+        self.assertFalse(h.stopped)
+        self.assertEqual((h.kind, h.cost["outcome"], h.problem()), ("done", "done", None))
+        self.assertGreaterEqual(len(calls), 2)
+
+    def test_the_runs_own_timeout_still_counts_with_a_watch(self):
+        p = self.pending("cat >/dev/null; sleep 30")
+        p.timeout = 1
+        h = p.finish(lambda: False, 0.2)
+        self.assertTrue(h.timed_out)
+        self.assertFalse(h.stopped)
+        self.assertEqual(h.cost["outcome"], "timeout")
+
+    def test_the_check_right_before_the_merge_ends_the_round_without_merging(self):
+        import ticket_issuer
+        issuer = ticket_issuer.Issuer.__new__(ticket_issuer.Issuer)
+        issuer.pending = []
+        revised = {"history": [{"event": "round start"}, {"event": "revised", "fields": ["objective"],
+                                                          "cases_wrong": False}]}
+        issuer.ticket = lambda: revised
+        issuer.integrate = mock.Mock(return_value=None)
+        self.assertEqual(issuer.merge_unless_revised(None, {}, []), ticket_issuer.REVISED_MID_ROUND)
+        self.assertEqual(issuer._free, "revision")
+        issuer.integrate.assert_not_called()
+        issuer.ticket = lambda: {"history": [{"event": "round start"}]}
+        self.assertIsNone(issuer.merge_unless_revised(None, {}, []))
+        issuer.integrate.assert_called_once()
+
+    def test_a_revision_of_no_brief_field_neither_stops_nor_ends_the_round(self):
+        self.add(1)
+        self.plan(worker={"1": ["slow"]}, creator={"1": ["revised_estimate"]})
+        prompt = os.path.join(self.tmp, "wt", "runs", "1", "r1-worker", "prompt.md")
+        ctl = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py")], cwd=self.proj,
+                               env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + 60
+            while not os.path.exists(prompt) and time.time() < deadline:
+                time.sleep(0.1)
+            self.assertTrue(os.path.exists(prompt))
+            rev = self.run_py("ticket_creator.py", "--revise", "1", "--reason", "estimate")
+            self.assertEqual(rev.returncode, 0, rev.stdout + rev.stderr)
+            out, err = ctl.communicate(timeout=240)
+        finally:
+            if ctl.poll() is None:
+                ctl.terminate()
+                ctl.communicate()
+        self.assertEqual(ctl.returncode, 0, out + err)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["token_estimate"]), ("landed", 123))
+        events = [h["event"] for h in t["history"]]
+        start = max(i for i, h in enumerate(t["history"]) if h["event"] == "round start" and h.get("round") == 1)
+        self.assertLess(start, events.index("revised"))
+        self.assertLess(events.index("revised"), events.index("merged"))
+        self.assertNotIn("feedback", events)
 
 
 class NotOwnedWrites(LoopCase):

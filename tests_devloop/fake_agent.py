@@ -77,6 +77,12 @@ if role == "worker":
         hand({"kind": "blocked", "text": "cannot reach 127.0.0.1 from this sandbox",
               "failing": json.loads(os.environ.get("FAKE_FAILING") or '["suite.base"]')})
         sys.exit(0)
+    if action == "revise_handin":   # #158: ask the issuer for a revision by hand-in, no commit
+        hand({"kind": "revise", "reason": "acceptance 2 is impossible"})
+        sys.exit(0)
+    if action == "revise_noreason":   # #158: a revise hand-in without a reason, no commit
+        hand({"kind": "revise"})
+        sys.exit(0)
     open("impl_%s.txt" % ticket, "w").write("bad" if action == "wrong" else "ok")
     if action == "red":
         open("red.txt", "w").write("x")
@@ -125,6 +131,9 @@ if role == "worker":
         done["lessons"].append({"layer": "nonsense", "text": "dropped"})
     hand(done)
 elif role == "verifier":
+    if action == "revise_handin":   # #158: the verifier asks the issuer for a revision by hand-in
+        hand({"kind": "revise", "reason": "acceptance 2 is impossible"})
+        sys.exit(0)
     if action != "nocommit":
         os.makedirs("cases", exist_ok=True)
         open("cases/case_%s.txt" % ticket, "w").write("case")
@@ -255,14 +264,22 @@ elif role == "creator":
               "note": "dropped item 2"})
         if action == "revised_hold":
             time.sleep(20)
+    elif action == "revised_kept_cases":   # #157: a revision that changes the brief and keeps the cases
+        hand({"kind": "revised", "ticket": {"acceptance": ["a possible thing"]}, "cases_wrong": False,
+              "note": "acceptance changed, cases kept"})
     elif action == "revised_dag":   # #127: a revised hand-in that also changes the DAG ($FAKE_REVISE_DAG)
         hand({"kind": "revised", "ticket": {"acceptance": ["a possible thing"]}, "cases_wrong": False,
               "note": "dag changed", "dag": json.loads(os.environ["FAKE_REVISE_DAG"])})
+    elif action == "unchanged":   # #158: the opener keeps the ticket as written
+        hand({"kind": "unchanged", "note": "the ticket stands: item 2 is possible"})
     elif action == "one_ticket":   # issue #1: exactly one ticket
         hand({"kind": "tickets",
               "tickets": [{"key": "new-1", "title": "fix", "objective": "o", "acceptance": ["a"],
                            "needs_verifier": True, "complexity": "simple", "token_estimate": 200000}],
               "dag": {"new-1": {"depends_on": [], "group": "new-g1"}}})
+    elif action == "revised_estimate":   # #157: a revision of no brief field (does not stop the round)
+        hand({"kind": "revised", "ticket": {"token_estimate": 123}, "cases_wrong": False,
+              "note": "estimate changed"})
     elif action == "bad":
         hand({"kind": "tickets", "tickets": [{"key": "new-1"}], "dag": {}})
     else:

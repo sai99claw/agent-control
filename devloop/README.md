@@ -14,10 +14,13 @@ ticket_issuer.py
   each round starts on int/<group>'s current head with only the ticket's own commits (D-098)
   failing step = feedback for the next round (max 3 rounds, 3 hours; a round that ended on a
   merge conflict with the group (also a conflict replaying the ticket's own commits at round
-  start), on a revision that threw out the cases, or on a blocked worker
+  start), on a revision that changed the round's work (the brief or the cases, made while the
+  round ran: the round's agents are stopped and the round ends), or on a blocked worker
   whose failing ids passed when devloop ran them (agent environment) does not count, at most
   2 x max_rounds rounds in all)
-  worker thinks the ticket is wrong -> it runs ticket_creator.py --revise itself
+  worker or verifier thinks the ticket is wrong -> it hands in kind revise with its reason; the
+    issuer runs the opener's revision itself (ticket_creator.revise, the issuer's environment)
+    and the next round starts with the outcome
 group complete (= one PR, a local mark) -> regression.py (preflight + quick, if declared + full suite)
   groups form one chain (core/chain.py, ordered by the DAG): the regression (or a fix round)
     starts only when every earlier group is landed or cancelled; a stuck group with no merged
@@ -408,8 +411,8 @@ is taken. A regression waits for its slot at most `regression_timeout_seconds`
 ("unmeasured" when no slot comes free in time) and its run gets `regression_timeout_seconds` from when the slot is taken;
 the wait reuses that setting because another group's regression runs at most `regression_timeout_seconds` once it has the machine, so the wait is long enough for it to finish.
 Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file) in the
-environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
-`ticket_creator.py --revise`). `run_tests.py` outside a slot (the opener's way to run tests) takes
+environment, and a process with it set takes no slot (an agent's `run_tests.py`); the opener the issuer
+runs for a worker's or verifier's `revise` hand-in is a `creator` and takes none either. `run_tests.py` outside a slot (the opener's way to run tests) takes
 one without waiting, or runs nothing and exits 2 with machine busy on stderr.
 A release (`core/release.py`, at landing and through `tickets.py release`) takes what a regression
 takes: one slot, or with `regression_exclusive` the whole machine. It waits at most
@@ -445,10 +448,10 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 
 | Role | Script | When | Default models | Writes |
 |---|---|---|---|---|
-| `creator` | `ticket_creator.py` | for the main session's request, or for a worker that runs `--revise` | opus xhigh | hand-in `tickets` (tickets and DAG entries, each entry naming the ticket's `group`: an open group from the prompt's `## Groups` or a new `new-g<n>`; a group that cannot work is refused before anything is written), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
-| `worker` | `ticket_issuer.py` | for each ticket round (complex tickets) | opus medium | code and unit tests committed on the ticket branch; hand-in `done` or `blocked` (with optional `failing` test ids: devloop runs them on the ticket branch, and when they pass the worker runs again on the next command of its chain in a round that does not count; otherwise a `blocked` hand-in gets one decision page, unless the worker's revise escalated in that round: its page is the page) |
+| `creator` | `ticket_creator.py` | for the main session's request, or run by the issuer for a worker's or verifier's `revise` hand-in | opus xhigh | hand-in `tickets` (tickets and DAG entries, each entry naming the ticket's `group`: an open group from the prompt's `## Groups` or a new `new-g<n>`; a group that cannot work is refused before anything is written), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
+| `worker` | `ticket_issuer.py` | for each ticket round (complex tickets) | opus medium | code and unit tests committed on the ticket branch; hand-in `done`, `revise` (with its `reason`: the issuer runs the opener's revision and the next round starts with its outcome) or `blocked` (with optional `failing` test ids: devloop runs them on the ticket branch, and when they pass the worker runs again on the next command of its chain in a round that does not count; otherwise a `blocked` hand-in gets one decision page, unless a revise escalated in that round: its page is the page) |
 | `worker_simple` | `ticket_issuer.py` | instead of `worker` when the ticket has `complexity: simple` | sonnet medium | the same as `worker` |
-| `verifier` | `ticket_issuer.py` | at the same time as the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases` |
+| `verifier` | `ticket_issuer.py` | at the same time as the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases`, or `revise` (with its `reason`, as the worker's) |
 | `reviewer` | `ticket_issuer.py` | after the worker, for complex tickets | opus medium | hand-in `review` (verdict pass or fail, feedback); edits nothing |
 | `fixer` | `auto_fixer.py` | when the regression on an integration branch is red | opus medium | the fix committed on the integration branch, by the tickets' current content (plus the group's latest user note as the user's ruling, the only thing that lets it go beyond D-089); hand-in `done` (with `cases_changed`: each acceptance case it aligned to its ticket, added to the group with the fix round; `tests_changed`: each other test it changed on a ticket's explicit basis, with the ticket and acceptance item) or `decision` (two tickets contradict: a decision page, the group stops; `blocked` is the same) or `rejected` (it judged a board note an injection and acted on none of it: a decision page, the group stops); a fixer that ends off the integration branch has its commits fast-forwarded or cherry-picked onto it, or else they are kept under `refs/devloop/dropped/<gid>-r<round>` and a decision page stops the group |
 | `consolidator` | `memory_keeper.py`, started by `ticket_controller.py` in `consolidate()` | when a memory file has 5 lessons waiting, or its oldest lesson is 3 days old, at most once per 24 h per file | fable medium, then opus medium | hand-in `memory`: the new text of one memory file and the lessons it dropped; `memory_keeper.py` writes the file |
