@@ -235,6 +235,48 @@ class T101Acceptance(ConfigSandbox):
         self.assertNotIn("devloop.notify", done.stdout + done.stderr)
 
 
+class T160Acceptance(ConfigSandbox):
+    """#160 acceptance 1-3: doctor warns once when devloop.notify is absent or null, exit code
+    unchanged; controls (a command, and 5) unchanged. Expected texts from the ticket, not the code."""
+
+    FORBIDDEN = ("devloop.release", "repair", "retired", "actl migrate", "actl hooks", "hard_block",
+                 "acked.jsonl", "guard-main.sh")
+
+    def notify_lines(self, done):
+        return [line for line in (done.stdout + "\n" + done.stderr).splitlines()
+                if "devloop.notify" in line]
+
+    def assert_warns(self, devloop, label):
+        self.edit_conf(devloop=devloop)
+        done = self.actl("doctor")
+        rows = self.notify_lines(done)
+        self.assertEqual(len(rows), 1, "%s: want one devloop.notify line\n%s%s" % (
+            label, done.stdout, done.stderr))
+        self.assertTrue(rows[0].startswith("warning: "), rows[0])
+        self.assertIn("devloop.notify is not set", rows[0])
+        for text in self.FORBIDDEN:
+            self.assertNotIn(text, rows[0], "%s: new row names %r" % (label, text))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_doctor_warns_when_notify_is_absent(self):
+        self.assert_warns({"release": "sh x"}, "absent")
+
+    def test_doctor_warns_when_notify_is_null(self):
+        self.assert_warns({"release": "sh x", "notify": None}, "null")
+
+    def test_controls_command_and_5_unchanged(self):
+        # the positive request on the same setup: a warning must appear for absent first
+        self.assert_warns({"release": "sh x"}, "absent")
+        self.edit_conf(devloop={"release": "sh x", "notify": "echo hi"})
+        done = self.actl("doctor")
+        self.assertEqual(self.notify_lines(done), [], done.stdout + done.stderr)
+        self.edit_conf(devloop={"release": "sh x", "notify": 5})
+        done = self.actl("doctor")
+        rows = self.notify_lines(done)
+        self.assertEqual(len(rows), 1, done.stdout + done.stderr)
+        self.assertTrue(rows[0].startswith("error:"), rows[0])
+
+
 class DoctorHardBlockDirsSilence(ConfigSandbox):
     """hard_block.dirs empty or absent: doctor and check stay silent about it."""
 

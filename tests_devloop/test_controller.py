@@ -562,6 +562,74 @@ class IdleEndPieces(LoopCase):
         self.assertIn("`idle`", kinds[0])
 
 
+class T160Acceptance(LoopCase):
+    """#160 acceptance 4-8: a controller started without devloop.notify writes one stderr warning
+    and changes nothing else; README names it. Expected texts from the ticket, not the code."""
+
+    WARN = "devloop.notify is not set"
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+
+    def warn_lines(self, err):
+        return [line for line in err.splitlines() if self.WARN in line]
+
+    def assert_one_warning(self, res, label):
+        self.assertEqual(res.returncode, 0, "%s:\n%s%s" % (label, res.stdout, res.stderr))
+        rows = self.warn_lines(res.stderr)
+        self.assertEqual(len(rows), 1, "%s: stderr:\n%s" % (label, res.stderr))
+        self.assertTrue(rows[0].startswith("ticket_controller: "), rows[0])
+        self.assertEqual([line for line in res.stdout.splitlines() if self.WARN in line], [],
+                         "%s: the warning belongs on stderr only" % label)
+
+    def test_controller_warns_once_when_notify_absent_or_null_and_not_when_set(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            self.assertNotIn("notify", json.load(fh)["devloop"])
+        commits = int(git(self.pool_path, "rev-list", "--count", "HEAD"))
+        inbox = dict(self.snap().inbox)
+        res = self.controller()
+        self.assert_one_warning(res, "absent")
+        # acceptance 7: nothing else changes on an empty pool
+        self.assertEqual(int(git(self.pool_path, "rev-list", "--count", "HEAD")), commits)
+        self.assertEqual(dict(self.snap().inbox), inbox)
+        self.config(notify=None)
+        self.assert_one_warning(self.controller(), "null")
+        # acceptance 6: a set notify gives no line about it
+        self.config(notify="true")
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual([line for line in res.stderr.splitlines() if "devloop.notify" in line], [],
+                         res.stderr)
+
+    def test_forever_controller_warns_exactly_once(self):
+        path = os.path.join(self.tmp, "forever.err")
+        err = open(path, "w")
+        self.addCleanup(err.close)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py"), "--forever"],
+                                cwd=self.proj, env=self.env, stdout=subprocess.DEVNULL, stderr=err)
+        self.addCleanup(lambda: proc.poll() is None and (proc.kill(), proc.wait(30)))
+        time.sleep(3)
+        self.assertIsNone(proc.poll(), "the --forever controller exited early")
+        proc.send_signal(signal.SIGTERM)
+        rc = proc.wait(30)
+        with open(path) as fh:
+            text = fh.read()
+        self.assertEqual(rc, 0, text[-3000:])
+        rows = self.warn_lines(text)
+        self.assertEqual(len(rows), 1, text[-3000:])
+        self.assertTrue(rows[0].startswith("ticket_controller: "), rows[0])
+
+    def test_readme_controller_row_names_the_warning(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            rows = [line for line in fh.read().splitlines()
+                    if line.startswith("| `python3 devloop/ticket_controller.py` |")]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertIn(self.WARN, rows[0])
+        self.assertIn("idle", rows[0])
+
+
 class T80Acceptance(LoopCase):
     """Ticket #80, end to end on the real scripts: the decision, env and idle pages written by W1,
     W2, W6, W7, W9, W10 (rounds, hard_block), W11 and W12 carry a valid question set whose option
