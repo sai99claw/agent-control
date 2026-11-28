@@ -91,13 +91,13 @@ def run(cfg, group, sha):
                 run_env[slots.MACHINE_ENV if cfg.regression_exclusive else slots.ENV] = hold.path
         worktrees.detached_tree(cfg, repo, tree, sha)
         proc = osx.spawn(["sh", "-c", cmd], cwd=tree, env=run_env, log_path=log)
-        inflight.put(cfg, live_name, {
-            "kind": "release", "group": gid, "sha": sha, "log": log, "result": None,
-            "stamp": {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(),
-                      "started": osx.now()}})
         try:
+            inflight.put(cfg, live_name, {
+                "kind": "release", "group": gid, "sha": sha, "log": log, "result": None,
+                "stamp": {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(),
+                          "started": osx.now()}})
             rc, timed_out = osx.wait(proc, cfg.release_timeout_seconds)
-        except BaseException:               # a signal (release_job.py) stops the command too
+        except BaseException:               # a signal or a failed live-record write stops the command too
             osx.kill_tree(proc.pid)
             raise
         text = _read(log).strip()[-2000:]
