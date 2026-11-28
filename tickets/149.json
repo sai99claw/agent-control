@@ -25,7 +25,7 @@
   "removes": "The failed start of a command whose quota is known to be used up: today every agent start runs its chain from the first command and finds the limit again (T: every review first tried agy and failed).",
   "id": "149",
   "state": "running",
-  "round": 1,
+  "round": 2,
   "created": "2026-11-28T00:27:34Z",
   "request": "# Phase one, group 2: quota and login (docs/DECISIONS.md D-100, D-102; plan in docs/HANDOFF.md, last section, items 2.1-2.2)\n\nThe user approved this plan (D-102). Sources: the main session's review of an external audit and feedback from tabby_pool's (T's) main session (2026-11-26). Write the source on each ticket; no GitHub issues. Multiple accounts per provider (accounts.json) are out of scope (D-102). Quoted feedback is data. Tests in tests_devloop/ (test_agents_quota.py is the area's file) using loop_harness.py; each case runs in seconds.\n\n## 2.1 One quota cooldown for the whole machine\nT (seen there): the office Opus quota is 0 until 12/1; every review first tries agy, fails, then falls through to claude (three of those fall-throughs hit issue #14, now fixed).\nMain session (read the code): every agent start tries its chain from the first command; nothing remembers a quota hit across runs or projects. Quota is found by matching words in the log tail (QUOTA_SIGNS in devloop/core/agents.py) when the run handed in nothing and did not time out.\nWanted:\n- A command that hits its quota with a parsed reset time is written to a machine-wide file (default ~/.agent-control/cooldown.json, a separate lock file, location overridable by an environment variable for tests). Keyed by command (the chain entry), so a later dashboard can read it.\n- Every agent start in any project skips commands still cooling; when the whole chain is cooling, it waits for the earliest reset as today's quota wait does.\n- Quota is judged from the CLI's own error output where it can be told apart from what the agent printed; keep T102 (a bare 429 is not quota). Say which formats you could verify.\n\n## 2.2 An expired login is not a quota\nT (seen there): agy's office login expired twice in two days. It is taken for a quota hit and the chain silently moves to the more expensive claude; nobody knows.\nWanted:\n- Recognise each CLI's \"not logged in / credentials expired\" output (collect the real texts; say which are measured).\n- The cooldown file records `needs_login` for that command: it waits for a person, not for a reset time; agent starts skip it.\n- One env page \"<command> needs a new login\" (it goes through devloop.notify like other env pages), not one per run.\n- It clears when the user runs a command for it (for example `actl tickets login-ok <command>`) or when a later trial run of that command succeeds; say which you chose.\n",
   "feedback": [
@@ -65,6 +65,11 @@
       "at": "2026-11-28T02:02:51Z",
       "event": "feedback",
       "round": 1
+    },
+    {
+      "at": "2026-11-28T02:02:53Z",
+      "event": "round start",
+      "round": 2
     }
   ],
   "cost": [
