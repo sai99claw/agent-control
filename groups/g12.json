@@ -65,10 +65,16 @@
     {
       "at": "2026-11-28T02:21:18Z",
       "event": "fixer started"
+    },
+    {
+      "at": "2026-11-28T02:21:21Z",
+      "event": "fixer agent started (round 1)"
     }
   ],
   "base": "26948b9ab503a2d09132ea6ef33fefda07d3e616",
   "main_tried": "5578f25e1adb6fdd0005b707fbc560e63f6428d6",
   "last_regression": "5 failing:\n- test_regression_fixer.T109Acceptance.test_b11_release_failed_page_names_flaky TimeoutExpired \n- test_regression_fixer.T109Acceptance.test_b9_flaky_group_lands_with_one_event_and_a_landed_line TimeoutExpired \n- test_regression_fixer.T113Acceptance.test_a1_a2_landing_with_flaky_opens_one_ticket_named_on_the_landed_page TimeoutExpired \n- test_regression_fixer.T113Acceptance.test_a4_only_ids_no_open_ticket_carries_go_to_the_opener TimeoutExpired \n- test_regression_fixer.T113Acceptance.test_a5_release_failed_page_names_the_fix_ticket TimeoutExpired ",
-  "fix_report": "/home/user/agent-control-devloop/runs/regression/g12/result-1795829886.json"
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g12/result-1795829886.json",
+  "fix_agent_round": 1,
+  "fix_start_sha": "9d831403a80581417e2b8d2e1573e61adec2d61f"
 }
