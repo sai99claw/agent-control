@@ -10,7 +10,16 @@
     "146"
   ],
   "fix_round": 2,
-  "job": null,
+  "job": {
+    "kind": "regression",
+    "stamp": {
+      "pid": 5334,
+      "host": "vm",
+      "boot": "68359d25-5a2b-4e1b-a079-9393c7340584",
+      "started": "2026-11-28T04:12:09Z"
+    },
+    "out": "/home/user/agent-control-devloop/runs/regression/g12/result-1795839129.json"
+  },
   "created": "2026-11-27T23:57:49Z",
   "history": [
     {
@@ -88,6 +97,10 @@
     {
       "at": "2026-11-28T04:12:07Z",
       "event": "fixer done (rc 0): verify again"
+    },
+    {
+      "at": "2026-11-28T04:12:10Z",
+      "event": "regression started"
     }
   ],
   "base": "26948b9ab503a2d09132ea6ef33fefda07d3e616",
