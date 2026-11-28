@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "worker",
-  "text": "A ticket's list of 'checked' old asserts that stay true covers only the asserts it searched for literally; a case that relies on the same state indirectly (a card shown because a page is unread) is missed. Run every suite the ticket names before handing in, and raise a revise for the unlisted red.",
-  "source": "#123 r1 worker",
-  "at": "2026-11-24T03:42:34Z"
-}

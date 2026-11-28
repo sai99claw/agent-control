@@ -1,7 +1,0 @@
-{
-  "layer": "role",
-  "name": "worker",
-  "text": "Put your own unit tests in an existing area file, not in the new file the verifier's test plan names: both sides creating the same new file is an add/add merge conflict.",
-  "source": "#119 r1 worker",
-  "at": "2026-11-23T05:21:55Z"
-}
