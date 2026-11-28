@@ -2525,6 +2525,18 @@ class LoginUnits(LoopCase):
                      "`actl tickets login-ok <program>`", "waits"):
             self.assertIn(word, nxt)
 
+    # ---------------------------------------------------------------- exit code kept
+
+    def test_alive_leaves_a_dead_child_for_its_own_wait(self):
+        """A live-record check (osx.alive) on a child that exited must not reap it: a run's
+        exit code decides login, and a reaped child reads exit code 0 in Popen.wait()."""
+        proc = subprocess.Popen(["sh", "-c", "exit 3"])
+        deadline = time.time() + 10
+        while time.time() < deadline and osx.alive(proc.pid):
+            time.sleep(0.02)
+        self.assertFalse(osx.alive(proc.pid))
+        self.assertEqual(proc.wait(timeout=10), 3)
+
 
 class ChainStartUnits(LoopCase):
     """agents.start(first=N) and Pending.index (implementer's tests of #115)."""

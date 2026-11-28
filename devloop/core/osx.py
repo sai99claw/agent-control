@@ -176,6 +176,13 @@ def alive(pid):
     except (OSError, ValueError):
         return False
     try:  # a zombie child we have not reaped is not "running"
+        if hasattr(os, "waitid"):
+            # WNOWAIT leaves the zombie to its own Popen: reaping it here makes that Popen's
+            # wait() read exit code 0 (ECHILD), whatever the child exited with
+            info = os.waitid(os.P_PID, int(pid), os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if info is not None and info.si_pid == int(pid):
+                return False
+            return True
         wpid, _ = os.waitpid(int(pid), os.WNOHANG)
         if wpid == int(pid):
             return False
