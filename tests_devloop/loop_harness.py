@@ -109,6 +109,7 @@ class LoopCase(GitIsolatedCase):
         # a test's loop has its own slots: when the suite itself runs under a machine slot (an
         # agent's run_tests.py), the inherited DEVLOOP_SLOT must not switch the test loop's slots off
         self.env.pop("DEVLOOP_SLOT", None)
+        self.env.pop("DEVLOOP_MACHINE", None)    # nor one inherited from an exclusive regression (#143)
 
     # ------------------------------------------------------------ helpers
 

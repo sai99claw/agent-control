@@ -57,6 +57,7 @@ class ExclusiveRegression(LoopCase):
         patch.start()
         self.addCleanup(patch.stop)
         os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
+        os.environ.pop("DEVLOOP_MACHINE", None)  # nor under the holder of the machine
         os.environ["AC_ROOT"] = self.proj
         self.slot_dir = os.path.join(self.tmp, "wt", "slots")
 
@@ -87,34 +88,38 @@ class ExclusiveRegression(LoopCase):
         self.assertIn("devloop.regression_exclusive", str(ctx.exception))
         self.assertIn("devloop.machine_slots", str(ctx.exception))
 
-    def test_the_machine_take_holds_every_slot_and_blocks_new_takers(self):
+    def test_the_machine_take_blocks_new_test_runs_but_not_agents(self):
         import time
         from core import slots
         self.config(machine_slots=2, regression_exclusive=True)
         cfg = self.cfg()
         machine = slots.take_machine(cfg, time.time() + 2)
         self.assertTrue(machine and machine.held)
-        self.assertEqual(sorted(os.path.basename(s.path) for s in machine.slots), ["slot-0", "slot-1"])
+        self.assertEqual(machine.path, os.path.join(self.slot_dir, "exclusive"))
         began = time.time()
-        self.assertIsNone(slots.take(cfg, time.time() + 0.6))     # gate shut: no slot although waiting
+        self.assertIsNone(slots.take_test_run(cfg, time.time() + 0.6))   # mark held: no test run
         self.assertGreaterEqual(time.time() - began, 0.5)
+        agent = slots.take(cfg, time.time() + 1)                         # an agent still gets its slot
+        self.assertTrue(agent and agent.held)
+        self.addCleanup(agent.release)
         machine.release()
-        machine.release()                                         # idempotent
-        slot = slots.take(cfg, time.time() + 1)
-        self.assertTrue(slot and slot.held)
-        slot.release()
-        self.assertEqual(sorted(os.listdir(self.slot_dir)), ["exclusive", "slot-0", "slot-1"])
+        machine.release()                                                # idempotent
+        run = slots.take_test_run(cfg, time.time() + 1)
+        self.assertTrue(run and run.held)
+        self.assertEqual(os.path.basename(run.path), "slot-1")
+        run.release()
+        self.assertEqual(sorted(os.listdir(self.slot_dir)), ["exclusive", "slot-0", "slot-1", "tests"])
 
-    def test_a_machine_take_waits_for_held_slots_and_gives_up_cleanly(self):
+    def test_a_machine_take_waits_for_test_runs_in_flight_and_gives_up_cleanly(self):
         import fcntl
         import time
         from core import slots
         self.config(machine_slots=2, regression_exclusive=True)
         cfg = self.cfg()
-        held = slots.take(cfg, time.time() + 1)
+        held = slots.take_test_run(cfg, time.time() + 1)
         self.assertEqual(os.path.basename(held.path), "slot-0")
         self.assertIsNone(slots.take_machine(cfg, time.time() + 0.6))
-        # nothing left behind: the gate and slot-1 can be locked exclusively again
+        # nothing left behind: the mark and slot-1 can be locked exclusively again
         for name in ("exclusive", "slot-1"):
             with open(os.path.join(self.slot_dir, name), "a") as fh:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -123,7 +128,7 @@ class ExclusiveRegression(LoopCase):
         self.assertTrue(machine and machine.held)
         machine.release()
 
-    def test_a_shut_gate_alone_keeps_takers_off_free_slots(self):
+    def test_a_shut_gate_alone_keeps_test_runs_off_free_slots(self):
         import fcntl
         import time
         from core import slots
@@ -133,10 +138,13 @@ class ExclusiveRegression(LoopCase):
         self.addCleanup(fh.close)
         fcntl.flock(fh, fcntl.LOCK_EX)
         began = time.time()
-        self.assertIsNone(slots.take(self.cfg(), time.time() + 0.6))
+        self.assertIsNone(slots.take_test_run(self.cfg(), time.time() + 0.6))
         self.assertGreaterEqual(time.time() - began, 0.5)
+        agent = slots.take(self.cfg(), time.time() + 1)     # an agent's slot is still taken
+        self.assertTrue(agent and agent.held)
+        agent.release()
         fcntl.flock(fh, fcntl.LOCK_UN)
-        slot = slots.take(self.cfg(), time.time() + 1)
+        slot = slots.take_test_run(self.cfg(), time.time() + 1)
         self.assertTrue(slot and slot.held)
         slot.release()
 
@@ -169,11 +177,11 @@ class ExclusiveRegression(LoopCase):
         self.addCleanup(child.kill)
         self.assertEqual(child.stdout.readline().strip(), "held")
         cfg = self.cfg()
-        self.assertIsNone(slots.take(cfg, time.time() + 0.6))
+        self.assertIsNone(slots.take_test_run(cfg, time.time() + 0.6))
         child.terminate()
         child.wait(timeout=10)
         began = time.time()
-        slot = slots.take(cfg, time.time() + 3)
+        slot = slots.take_test_run(cfg, time.time() + 3)
         self.assertTrue(slot and slot.held)
         self.assertLess(time.time() - began, 3.0)
         slot.release()
@@ -183,7 +191,7 @@ class ExclusiveRegression(LoopCase):
         import time
         from core import slots
         self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=2)
-        held = slots.take(self.cfg(), time.time() + 1)
+        held = slots.take_test_run(self.cfg(), time.time() + 1)     # a test run in flight
         self.addCleanup(held.release)
         out = os.path.join(self.tmp, "regression.json")
         began = time.time()
@@ -193,7 +201,8 @@ class ExclusiveRegression(LoopCase):
         with open(out) as fh:
             got = json.load(fh)
         self.assertEqual(got["status"], "unmeasured")
-        self.assertIn("machine slot", got["summary"])
+        self.assertIn("the whole machine (devloop.regression_exclusive: no other test run) did not come "
+                      "free within", got["summary"])
         for name in ("exclusive", "slot-1"):
             with open(os.path.join(self.slot_dir, name), "a") as fh:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -213,8 +222,9 @@ class T4Acceptance(LoopCase):
             rows = [line.split() for line in fh if line.strip()]
         return [(" ".join(r[:-2]), float(r[-2]), float(r[-1])) for r in rows]
 
-    def test_v1_no_regression_runs_beside_an_agent_or_an_issuer_test_run(self):
-        """Items 3-4: with the mark taken and every slot held, a regression overlaps nothing."""
+    def test_v1_no_regression_runs_beside_an_issuer_test_run(self):
+        """Items 3-4, as #143 left them: with the machine taken, a regression overlaps no test run
+        (agents may run beside it)."""
         self.config(machine_slots=2, regression_exclusive=True, max_parallel=2)
         self.log = os.path.join(self.tmp, "intervals.txt")
         self.env.update(FAKE_INTERVALS=self.log, FAKE_HOLD="1.5")
@@ -231,16 +241,17 @@ class T4Acceptance(LoopCase):
         self.assertIn("agent worker 2", names)
         self.assertIn("tests run", names)
         regressions = [r for r in runs if r[0] in ("tests preflight", "tests full")]
-        others = [r for r in runs if r[0].startswith("agent ") or r[0] == "tests run"]
+        others = [r for r in runs if r[0] == "tests run"]
         overlaps = [(g, o) for g in regressions for o in others if g[1] < o[2] and o[1] < g[2]]
         self.assertEqual(overlaps, [], runs)
 
-    def test_v2_a_held_mark_keeps_every_taker_waiting_until_it_is_released(self):
-        """Item 3 with D-091 item 6, with a worker since issue #7 (the opener takes no slot): while
-        another process holds LOCK_EX on slots/exclusive, a worker takes no slot; it waits past its
-        own timeout and runs once the mark is released."""
+    def test_v2_a_held_mark_keeps_a_test_run_waiting_but_not_a_worker(self):
+        """Item 3 as #143 reversed it: while another process holds LOCK_EX on slots/exclusive, a
+        worker still takes its slot and runs; a test run waits until the mark is released."""
         import fcntl
         import threading
+        from core import slots as slotmod
+        from core.config import Config
         slots = os.path.join(self.tmp, "wt", "slots")
         os.makedirs(slots, exist_ok=True)
         fh = open(os.path.join(slots, "exclusive"), "a")
@@ -251,10 +262,13 @@ class T4Acceptance(LoopCase):
         self.addCleanup(timer.cancel)
         self.config(machine_slots=2, regression_exclusive=True, agent_timeout_seconds=2)
         timer.start()
-        result = run_worker_in_process(self, 2)
-        self.assertTrue(released)
-        self.assertGreaterEqual(os.path.getmtime(result), released[0] - 0.05,
-                                "the worker ran while the exclusive mark was held")
+        result = run_worker_in_process(self, 2)     # also strips DEVLOOP_* from os.environ
+        self.assertEqual(released, [], "the worker waited for the exclusive mark")
+        self.assertTrue(os.path.exists(result))
+        run = slotmod.take_test_run(Config(self.proj), None)
+        self.addCleanup(run.release)
+        self.assertTrue(released, "the test run did not wait for the mark")
+        self.assertTrue(run.held)
 
     def test_v3_exclusive_without_machine_slots_stops_every_script(self):
         """Item 2: regression_exclusive true needs machine_slots."""
@@ -268,6 +282,226 @@ class T4Acceptance(LoopCase):
                 "absent" if absent else "null", res.stdout + res.stderr))
             self.assertIn("devloop.regression_exclusive", res.stderr)
             self.assertIn("devloop.machine_slots", res.stderr)
+
+
+class T143Acceptance(LoopCase):
+    """Ticket #143: while an exclusive regression holds the machine, agents keep running and only
+    test runs wait (core/slots.take_test_run, DEVLOOP_MACHINE)."""
+
+    BUSY = ("run_tests: machine busy (a full test run holds the machine or every machine slot is "
+            "taken); nothing was run")
+    RULE = ("Run tests only with that command, never with another test runner or the project's own "
+            "test scripts. When it prints machine busy it ran nothing: do not wait for it or retry it "
+            "in a loop; go on, and name in your hand-in the checks that were not measured (machine busy).")
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        os.environ["AC_ROOT"] = self.proj
+        self.slot_dir = os.path.join(self.tmp, "wt", "slots")
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def exclusive(self, **extra):
+        self.config(machine_slots=2, regression_exclusive=True, **extra)
+
+    def hold_mark(self, seconds):
+        """Another process (this test process) holds LOCK_EX on slots/exclusive for `seconds`;
+        returns the list the release time is appended to."""
+        import fcntl
+        import threading
+        os.makedirs(self.slot_dir, exist_ok=True)
+        fh = open(os.path.join(self.slot_dir, "exclusive"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        released = []
+        timer = threading.Timer(seconds, lambda: (released.append(time.time()), fh.close()))
+        self.addCleanup(timer.cancel)
+        timer.start()
+        return released
+
+    def set_tests(self, **commands):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["tests"].update(commands)
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+
+    def regression(self, timeout=120):
+        out = os.path.join(self.tmp, "regression.json")
+        began = time.time()
+        res = self.run_py("regression.py", "--branch", "main", "--out", out, timeout=timeout)
+        elapsed = time.time() - began
+        self.assertTrue(os.path.exists(out), res.stdout + res.stderr)
+        with open(out) as fh:
+            return res, json.load(fh), elapsed
+
+    def intervals(self):
+        path = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = path
+        return path
+
+    # ---- item 1
+    def test_item1_a_nested_run_tests_says_machine_busy_while_the_mark_is_held(self):
+        self.exclusive()
+        self.hold_mark(20)
+        log = self.intervals()
+        self.env["DEVLOOP_SLOT"] = os.path.join(self.slot_dir, "slot-0")
+        began = time.time()
+        res = self.run_py("run_tests.py", "case_1", timeout=60)
+        elapsed = time.time() - began
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertEqual(res.stdout, "")
+        self.assertEqual(res.stderr.strip(), self.BUSY)
+        self.assertLess(elapsed, 5)
+        if os.path.exists(log):
+            with open(log) as fh:
+                self.assertEqual(fh.read(), "", "a test command was started")
+
+    # ---- item 3
+    def test_item3_a_worker_hands_in_while_the_mark_is_held_and_takes_one_slot(self):
+        from core import agents
+        self.exclusive()
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        script = ("cat >/dev/null; echo \"{\\\"kind\\\": \\\"done\\\", \\\"slot\\\": \\\"$DEVLOOP_SLOT\\\"}\" "
+                  "> \"$DEVLOOP_RESULT\"")
+        self.config(machine_slots=2, regression_exclusive=True,
+                    agents=dict(agents_cfg, worker=["sh", "-c", script]))
+        released = self.hold_mark(8)
+        run_dir = os.path.join(self.tmp, "run-worker")
+        hand = agents.run(self.cfg(), "worker", "go", self.proj, run_dir, 30)
+        self.assertIsNone(hand.problem())
+        result = os.path.join(run_dir, "result.json")
+        self.assertTrue(released == [] or os.path.getmtime(result) < released[0],
+                        "the worker waited for the exclusive mark")
+        self.assertEqual(released, [], "the mark was released before the worker handed in")
+        self.assertIn(hand.result["slot"], [os.path.join(self.slot_dir, "slot-%d" % i) for i in range(2)])
+
+    # ---- item 4
+    def test_item4_an_exclusive_regression_does_not_wait_for_an_agent_slot(self):
+        import threading
+        from core import slots
+        self.exclusive(regression_timeout_seconds=10)
+        slot = slots.take(self.cfg(), time.time() + 2)
+        self.assertTrue(slot and slot.held)
+        self.assertTrue(os.path.exists(os.path.join(self.slot_dir, "slot-0")))
+        self.addCleanup(slot.release)
+        timer = threading.Timer(20, slot.release)
+        self.addCleanup(timer.cancel)
+        timer.start()
+        res, got, elapsed = self.regression()
+        self.assertEqual(got["status"], "green", got)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertLess(elapsed, 9, "the regression waited for the agent's slot")
+
+    # ---- item 5
+    def test_item5_take_machine_waits_for_a_test_run_in_flight(self):
+        from core import slots
+        self.exclusive()
+        marker = os.path.join(self.tmp, "started")
+        self.set_tests(run="touch %s; sleep 4; %s run" % (marker, TESTS))
+        env = dict(self.env, DEVLOOP_SLOT=os.path.join(self.slot_dir, "slot-1"))
+        child = subprocess.Popen(["python3", os.path.join(LOOP, "run_tests.py"), "case_1"], cwd=self.proj,
+                                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(child.wait)
+        self.addCleanup(lambda: child.poll() is None and child.terminate())
+        limit = time.time() + 10
+        while not os.path.exists(marker) and child.poll() is None and time.time() < limit:
+            time.sleep(0.05)
+        self.assertTrue(os.path.exists(marker), "the child's test command never started")
+        machine = slots.take_machine(self.cfg(), time.time() + 1)
+        if machine is not None:
+            machine.release()
+        self.assertIsNone(machine, "the machine was taken beside a test run in flight")
+        child.wait(timeout=30)
+        machine = slots.take_machine(self.cfg(), time.time() + 2)
+        self.assertTrue(machine is not None and machine.held, "the machine stayed busy after the run")
+        machine.release()
+
+    # ---- item 7
+    def test_item7_the_regression_gives_its_test_commands_devloop_machine(self):
+        self.exclusive()
+        seen = os.path.join(self.tmp, "machine-seen.txt")
+        self.set_tests(full='printf %%s "$DEVLOOP_MACHINE" > %s; %s full' % (seen, TESTS))
+        res, got, _ = self.regression()
+        self.assertEqual(got["status"], "green", got)
+        self.assertTrue(os.path.exists(seen), res.stdout + res.stderr)
+        with open(seen) as fh:
+            self.assertEqual(fh.read(), os.path.join(self.slot_dir, "exclusive"))
+
+    def test_item7_a_run_with_devloop_machine_is_a_free_pass(self):
+        self.exclusive()
+        self.hold_mark(20)
+        log = self.intervals()
+        self.env["DEVLOOP_MACHINE"] = os.path.join(self.slot_dir, "exclusive")
+        res = self.run_py("run_tests.py", "case_1", timeout=60)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertNotIn("machine busy", res.stderr)
+        self.assertTrue(os.path.exists(log), "no test command was started")
+
+    def test_item7_loop_case_drops_devloop_machine_from_its_env(self):
+        class Probe(LoopCase):
+            def runTest(self):
+                pass
+        os.environ["DEVLOOP_MACHINE"] = "/somewhere/slots/exclusive"
+        os.environ["DEVLOOP_SLOT"] = "/somewhere/slots/slot-0"
+        probe = Probe()
+        try:
+            probe.setUp()
+            self.assertFalse("DEVLOOP_SLOT" in probe.env, "LoopCase kept DEVLOOP_SLOT in self.env")
+            self.assertFalse("DEVLOOP_MACHINE" in probe.env, "LoopCase kept DEVLOOP_MACHINE in self.env")
+        finally:
+            probe.doCleanups()
+
+    # ---- item 9
+    def test_item9_agent_prompts_say_run_tests_only_with_the_command(self):
+        for name, line in (("worker.md", "Run them with: {test_cmd}"),
+                           ("verifier.md", "Run them with: {test_cmd}"),
+                           ("fixer.md", "Run the failing tests with: {test_cmd}")):
+            with self.subTest(prompt=name):
+                with open(os.path.join(LOOP, "prompts", name)) as fh:
+                    text = fh.read()
+                self.assertIn(line, text)
+                rest = " ".join(text.split(line, 1)[1].split())
+                self.assertTrue(rest.startswith(self.RULE), rest[:300])
+
+    # ---- item 10
+    def test_item10_slot_waits_no_longer_give_way_to_the_exclusive_regression(self):
+        import board
+        from core import inflight
+
+        def alive(started):
+            p = subprocess.Popen(["sleep", "60"])
+            self.addCleanup(p.wait)
+            self.addCleanup(p.terminate)
+            return {"pid": p.pid, "host": osx.host(), "boot": osx.boot_id(), "started": started}
+        self.exclusive()
+        inflight.put(self.cfg(), "agent-w", dict(
+            kind="agent", stamp=alive("2026-11-06T10:00:00Z"), parent=None, role="worker", ticket=None,
+            group="g1", round=1, run_dir=None, log=None, command="c", model=None, effort=None, state="slot",
+            since="2026-11-06T10:00:00Z", until=None, result=None))
+        inflight.put(self.cfg(), "regression-x", dict(
+            kind="regression", stamp=alive("2026-11-06T09:30:00Z"), group="g7", branch="b", sha="a" * 40,
+            exclusive=True, stage="full", since="2026-11-06T09:30:00Z", result=None))
+        rows = [r for r in board.live_rows(self.cfg(), self.snap()) if r["name"] == "agent-w"]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("等機器名額", rows[0]["text"])
+        self.assertNotIn("讓位", rows[0]["text"])
+        self.assertNotIn("data-yield", rows[0]["attrs"])
+        page = board.render(self.cfg(), self.snap(), query={"tab": "live"})
+        self.assertIn("等機器名額", page)
+        self.assertNotIn("讓位", page)
+        self.assertNotIn("data-yield", page)
 
 
 class TestHostSampler(LoopCase):
@@ -804,8 +1038,9 @@ class T121Acceptance(LoopCase):
         with open(path, "w") as fh:
             json.dump(cfg, fh)
 
-    def hold_slot_for(self, seconds):
-        """Another process holding slot-0, played by this test process, released after `seconds`."""
+    def hold_slot_for(self, seconds, test_run=False):
+        """Another process holding slot-0 (an agent's, or with `test_run` a test run in flight),
+        played by this test process, released after `seconds`."""
         import threading
         from core import slots
         from core.config import Config
@@ -813,8 +1048,10 @@ class T121Acceptance(LoopCase):
         patch.start()
         try:
             os.environ.pop("DEVLOOP_SLOT", None)
+            os.environ.pop("DEVLOOP_MACHINE", None)
             os.environ["AC_ROOT"] = self.proj
-            slot = slots.take(Config(self.proj), time.time() + 2)
+            take = slots.take_test_run if test_run else slots.take
+            slot = take(Config(self.proj), time.time() + 2)
         finally:
             patch.stop()
         self.assertTrue(slot and slot.held)
@@ -843,7 +1080,7 @@ class T121Acceptance(LoopCase):
     def test_a_regression_that_waited_for_the_whole_machine_gets_its_full_time(self):
         self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=10)
         self.set_tests(full="sleep 4; " + TESTS + " full")
-        self.hold_slot_for(7)
+        self.hold_slot_for(7, test_run=True)
         res, got = self.regression()
         self.assertEqual(got["status"], "green", got)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
@@ -869,6 +1106,7 @@ class T30Acceptance(LoopCase):
         patch.start()
         self.addCleanup(patch.stop)
         os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
+        os.environ.pop("DEVLOOP_MACHINE", None)
         os.environ["AC_ROOT"] = self.proj
 
     def cfg(self):
@@ -907,22 +1145,29 @@ class T30Acceptance(LoopCase):
         hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 2)
         self.assert_ran(hand, began)
 
-    def test_an_agent_waits_for_the_exclusive_mark_past_its_timeout_and_then_runs(self):
+    def test_an_issuer_test_run_waits_for_the_exclusive_mark_past_the_issuer_timeout(self):
+        """#143 reversed this case: an agent no longer waits for the mark, an issuer test run does."""
         import fcntl
         import threading
-        from core import agents
-        self.done_worker(machine_slots=2, regression_exclusive=True)
+        import ticket_issuer
+        self.config(machine_slots=2, regression_exclusive=True, issuer_timeout_seconds=2)
         slot_dir = os.path.join(self.tmp, "wt", "slots")
         os.makedirs(slot_dir, exist_ok=True)
         fh = open(os.path.join(slot_dir, "exclusive"), "a")
         self.addCleanup(fh.close)
         fcntl.flock(fh, fcntl.LOCK_EX)
-        timer = threading.Timer(3, fh.close)
+        released = []
+        timer = threading.Timer(3, lambda: (released.append(time.time()), fh.close()))
         timer.start()
         self.addCleanup(timer.cancel)
-        began = time.time()
-        hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 2)
-        self.assert_ran(hand, began)
+        issuer = ticket_issuer.Issuer(self.cfg(), self.pool, "1", "int/g1")
+        issuer.wt = self.proj           # the fake tests run here; case_1 fails (no impl_1.txt)
+        try:
+            out = issuer.run_cases({"cases": {"run": ["case_1"]}})
+        except ticket_issuer.Stuck as e:
+            self.fail("issuer stuck while waiting for the exclusive mark: %s %s" % (e.reason, e.text))
+        self.assertTrue(released, "the issuer's test run did not wait for the mark")
+        self.assertTrue(out.startswith("verifier cases:"), out)
 
     def test_an_issuer_test_run_waits_for_its_slot_past_the_issuer_timeout(self):
         import ticket_issuer
@@ -973,7 +1218,7 @@ class T116Acceptance(LoopCase):
     """Ticket #116 (issue #7): the opener and memory consolidation start without a machine slot;
     run_tests.py outside a slot never waits for one."""
 
-    BUSY = ("run_tests: machine busy (a regression holds the machine or every machine slot is "
+    BUSY = ("run_tests: machine busy (a full test run holds the machine or every machine slot is "
             "taken); nothing was run")
 
     def setUp(self):
@@ -1133,6 +1378,115 @@ class T116Acceptance(LoopCase):
                       "slots/exclusive", "needs `machine_slots`"):
             self.assertIn(words, flat)
         self.assertNotIn('"no slot"', flat)
+
+
+class TestRunTake(LoopCase):
+    """#143: core/slots.take_test_run (test runs) against take (agents) and take_machine."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        os.environ["AC_ROOT"] = self.proj
+        self.slot_dir = os.path.join(self.tmp, "wt", "slots")
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def hold(self, name):
+        import fcntl
+        os.makedirs(self.slot_dir, exist_ok=True)
+        fh = open(os.path.join(self.slot_dir, name), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        return fh
+
+    def test_no_slots_or_inside_the_machine_holder_is_a_free_pass(self):
+        from core import slots
+        self.config(machine_slots=None)
+        self.assertFalse(slots.take_test_run(self.cfg(), time.time()).held)
+        self.config(machine_slots=1, regression_exclusive=True)
+        self.hold("exclusive")
+        self.hold("slot-0")
+        os.environ[slots.MACHINE_ENV] = os.path.join(self.slot_dir, "exclusive")
+        run = slots.take_test_run(self.cfg(), time.time())
+        self.assertFalse(run.held)
+        self.assertIsNone(run.path)
+        self.assertEqual(sorted(os.listdir(self.slot_dir)), ["exclusive", "slot-0"])   # no tests file
+
+    def test_without_exclusive_it_is_the_agent_slot_and_nested_takes_nothing(self):
+        from core import slots
+        self.config(machine_slots=1)
+        run = slots.take_test_run(self.cfg(), time.time())
+        self.assertEqual(os.path.basename(run.path), "slot-0")
+        self.assertIsNone(slots.take_test_run(self.cfg(), time.time()))
+        self.assertIsNone(slots.take(self.cfg(), time.time()))
+        os.environ[slots.ENV] = run.path
+        self.assertFalse(slots.take_test_run(self.cfg(), time.time()).held)
+        run.release()
+        self.assertEqual(os.listdir(self.slot_dir), ["slot-0"])
+
+    def test_a_nested_run_takes_no_slot_but_counts_as_a_test_run(self):
+        from core import slots
+        self.config(machine_slots=1, regression_exclusive=True)
+        self.hold("slot-0")                                     # the agent's own slot
+        os.environ[slots.ENV] = os.path.join(self.slot_dir, "slot-0")
+        run = slots.take_test_run(self.cfg(), time.time())
+        self.assertTrue(run and run.held)
+        self.assertIsNone(run.path)
+        os.environ.pop(slots.ENV)
+        self.assertIsNone(slots.take_machine(self.cfg(), time.time() + 0.6))
+        run.release()
+        run.release()                                           # idempotent
+        machine = slots.take_machine(self.cfg(), time.time() + 1)
+        self.assertTrue(machine and machine.held)
+        os.environ[slots.ENV] = os.path.join(self.slot_dir, "slot-0")
+        self.assertIsNone(slots.take_test_run(self.cfg(), time.time()))   # nested, but the mark is held
+        self.assertFalse(slots.take(self.cfg(), time.time()).held)        # a nested agent take: nothing
+        machine.release()
+
+    def test_the_machine_holds_the_mark_while_it_waits_so_new_test_runs_cannot_starve_it(self):
+        import threading
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        first = slots.take_test_run(self.cfg(), time.time())
+        got = {}
+        th = threading.Thread(target=lambda: got.setdefault("m", slots.take_machine(self.cfg(), time.time() + 5)))
+        th.start()
+        try:
+            time.sleep(0.5)                                     # the machine waits with the mark held
+            self.assertIsNone(slots.take_test_run(self.cfg(), time.time()))
+            first.release()
+            th.join(5)
+            self.assertTrue(got["m"] and got["m"].held)
+            got["m"].release()
+        finally:
+            first.release()
+            th.join(5)
+        self.assertTrue(slots.take_test_run(self.cfg(), time.time()).held)
+
+    def test_run_tests_nested_runs_the_case_and_inside_the_holder_ignores_the_mark(self):
+        self.config(machine_slots=2, regression_exclusive=True)
+        self.env["DEVLOOP_SLOT"] = os.path.join(self.slot_dir, "slot-0")
+        res = self.run_py("run_tests.py", "case_1", timeout=60)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.hold("exclusive")
+        self.env["DEVLOOP_MACHINE"] = os.path.join(self.slot_dir, "exclusive")
+        res = self.run_py("run_tests.py", "case_1", timeout=60)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+
+    def test_the_busy_sentence_names_the_whole_machine(self):
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        self.assertEqual(slots.machine_busy(self.cfg(), 9.6),
+                         "the whole machine (devloop.regression_exclusive: no other test run) "
+                         "did not come free within 10 s")
 
 
 class MachineSlots(LoopCase):

@@ -5,9 +5,11 @@ Goes through the project's test interface like everything else, but keeps its ou
 agent's own run directory ($DEVLOOP_RUN_DIR), never in the project checkout. Prints a short
 summary. Exit: 0 green · 1 red · 86 environment not usable · 2 could not measure.
 
-Outside an agent's slot (DEVLOOP_SLOT unset, devloop.machine_slots set) it tries once to take a
-slot, without waiting; with none free it runs nothing, says "machine busy" on stderr and exits 2.
-The test run gets DEVLOOP_SLOT, so anything devloop-started inside it takes no slot of its own.
+It tries once, without waiting, to take a test run (core/slots.take_test_run: outside an agent's
+slot a machine slot; with devloop.regression_exclusive also, inside an agent too, no regression
+holding the machine); when it gets none it runs nothing, says "machine busy" on stderr and exits 2.
+The test run gets DEVLOOP_SLOT when it took a slot, so anything devloop-started inside it takes no
+slot of its own.
 """
 
 import os
@@ -31,12 +33,12 @@ def main(argv=None):
     slot = None
     try:
         cfg = Config()
-        if slots.needed(cfg):
-            slot = slots.take(cfg, time.time())
-            if slot is None:
-                print("run_tests: machine busy (a regression holds the machine or every machine "
-                      "slot is taken); nothing was run", file=sys.stderr)
-                return 2
+        slot = slots.take_test_run(cfg, time.time())
+        if slot is None:
+            print("run_tests: machine busy (a full test run holds the machine or every machine "
+                  "slot is taken); nothing was run", file=sys.stderr)
+            return 2
+        if slot.path:
             os.environ[slots.ENV] = slot.path
         base = os.environ.get("DEVLOOP_RUN_DIR") or tempfile.gettempdir()
         out = tempfile.mkdtemp(prefix="tests-", dir=osx.makedirs(base))
