@@ -89,6 +89,17 @@
     {
       "at": "2026-11-28T11:27:28Z",
       "event": "release started"
+    },
+    {
+      "at": "2026-11-28T11:39:50Z",
+      "event": "flaky fix: opened #171 for test_release.T142Acceptance.test_item9_sigterm_stops_the_release_command_and_writes_the_signal",
+      "opened": [
+        "171"
+      ],
+      "already_open": {},
+      "ids": [
+        "test_release.T142Acceptance.test_item9_sigterm_stops_the_release_command_and_writes_the_signal"
+      ]
     }
   ],
   "base": "47974162b1c9462c668e1b081e69e6c3cf52cf72",
